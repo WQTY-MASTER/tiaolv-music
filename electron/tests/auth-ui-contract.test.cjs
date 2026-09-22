@@ -1,0 +1,46 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const panel = fs.readFileSync(path.join(root, "src/renderer/src/components/AuthPanel.vue"), "utf8");
+const api = fs.readFileSync(path.join(root, "src/renderer/src/services/api.ts"), "utf8");
+const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
+const sidebar = fs.readFileSync(path.join(root, "src/renderer/src/components/SidebarNav.vue"), "utf8");
+
+assert.match(api, /\/auth\/current/);
+assert.match(api, /`\/auth\/\$\{encodeURIComponent\(provider\)\}\/qr\/start`/);
+assert.match(api, /`\/auth\/\$\{encodeURIComponent\(provider\)\}\/qr\/status\?sessionId=/);
+assert.match(api, /`\/auth\/\$\{encodeURIComponent\(provider\)\}\/logout`/);
+assert.match(api, /startQrLogin\(provider = "netease"\)/);
+assert.match(api, /pollQrLogin\(sessionId: string, provider = "netease"\)/);
+assert.match(api, /logoutProvider\(provider = "netease"\)/);
+assert.match(panel, /setInterval/);
+assert.match(panel, /clearInterval/);
+assert.match(panel, /3000/);
+assert.match(panel, /800|EXPIRED/);
+assert.match(panel, /801|WAITING/);
+assert.match(panel, /802|CONFIRMING/);
+assert.match(panel, /803|SUCCESS/);
+assert.match(panel, /二维码已过期/);
+assert.match(panel, /等待扫码/);
+assert.match(panel, /待确认/);
+assert.match(panel, /登录成功/);
+assert.match(app, /AuthPanel/);
+assert.match(app, /authPanelVisible/);
+assert.match(app, /loadCurrentAccount/);
+assert.match(app, /:account="account"/);
+assert.match(app, /@login="openAuthPanel"/);
+assert.match(app, /@authenticated="handleAuthenticated"/);
+assert.match(app, /async function handleAuthenticated/, "登录成功处理应等待主页导航和数据加载完成");
+assert.match(app, /await applyNavigation\(homeEntry\)/, "登录成功后应通过统一导航流程进入主页");
+assert.match(app, /await loadStreamingHomeData\(provider\)/, "登录成功后应自动等待当前平台主页数据加载");
+assert.match(app, /@logout="handleLogout"/);
+assert.doesNotMatch(sidebar, /登录网易云/, "新版流媒体侧边栏不再承载账号登录卡");
+assert.match(app, /登录网易云后查看[\s\S]*@click="openAuthPanel"/, "流媒体音乐库页面仍需保留网易云登录入口");
+assert.match(panel, /logout: \[\]/);
+assert.match(panel, /emit\((?:"logout"|'logout')\)/);
+assert.match(panel, /props\.account/);
+assert.doesNotMatch(panel, /localStorage/, "QQ Cookie 不应写入浏览器存储");
+
+console.log("认证界面契约通过");

@@ -1,0 +1,74 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+.electron-cache/
+
+# Build outputs
+electron/out/
+electron/src/renderer/dist/
+backend/target/
+dist/
+build/
+*.tsbuildinfo
+
+# Caches
+.vite-cache/
+**/.vite-cache/
+.eslintcache
+.cache/
+.test-tmp/
+.superpowers/
+.playwright-cli/
+**/.codegraph/
+
+# Nested third-party git metadata (tracked as normal files)
+music-api/api-enhanced/.git
+music-api/api-enhanced/.git.disabled
+
+# Env / secrets / runtime data
+.env
+.env.*
+!.env.prod.example
+*.log
+logs/
+anonymous_token
+xeapi_public_key
+credential.key
+credentials/
+*.db
+*.sqlite
+*.sqlite3
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Java
+*.class
+*.jar
+*.war
+.mvn/wrapper/maven-wrapper.jar
+
+# Electron / packaging
+*.asar
+out-verify/
+release/
+dist_electron/
+
+# Node
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local music outside the repo should not be added accidentally from repo root
+/*.mp3
+/*.flac
+/*.wav
+/*.m4a
+/*.ogg
+/*.aac
+/*.lrc

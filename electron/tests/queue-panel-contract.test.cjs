@@ -1,0 +1,42 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const root = path.resolve(__dirname, "..");
+const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
+const playerBar = fs.readFileSync(path.join(root, "src/renderer/src/components/PlayerBar.vue"), "utf8");
+
+assert.match(playerBar, /--player-bar-height:\s*68px[^}]*min-height:\s*var\(--player-bar-height\)/, "底部播放栏应使用参考图的 68px 通栏高度");
+assert.match(playerBar, /padding:\s*5px\s+15px/, "底部播放栏内边距应匹配参考图");
+assert.match(app, /<h2>播放列表<\/h2>/, "队列面板标题应改为播放列表");
+assert.match(app, /class="queue-count-badge"[\s\S]*playbackQueue\.length/, "标题右侧应显示队列数量标签");
+assert.match(app, /正在播放第\{\{ currentQueueDisplayIndex \}\}首·共\{\{ formatQueueTotalDuration\(playbackQueue\) \}\}/, "标题下方应显示当前第几首和总时长");
+assert.match(app, /class="queue-locate-button"[\s\S]*定位/, "右上角应提供定位按钮");
+assert.match(app, /class="queue-clear-button"[\s\S]*清空/, "右上角应提供清空按钮");
+assert.doesNotMatch(app, /class="queue-close"/, "播放列表面板不应保留关闭 X");
+assert.doesNotMatch(app, /class="queue-remove"/, "播放列表条目不应保留删除 X");
+assert.match(app, /v-for="\(\s*track,\s*index\s*\)\s+in playbackQueue"/, "播放列表条目需要拿到序号");
+assert.match(app, /class="queue-wave-indicator"/, "当前播放项左侧应显示播放动效指示器");
+assert.match(app, /'is-paused':\s*isCurrentQueueTrack\(track\) && !isPlaying/, "播放状态指示器应在暂停时进入静态状态");
+assert.match(app, /\.queue-track\.is-paused \.queue-wave-indicator i\s*\{[^}]*animation-play-state:\s*paused/, "暂停时波形动画应停止");
+assert.match(app, /class="queue-drag-handle"/, "当前播放项左侧应显示拖拽排序图标");
+assert.match(app, /draggable="true"[\s\S]*@dragstart\.stop="startQueueDrag\(track\)"/, "拖拽排序应从三条横线拖拽柄开始");
+assert.match(app, /@drop\.prevent="dropQueueTrack\(track\)"/, "播放列表应支持把歌曲拖放排序");
+assert.match(app, /class="queue-index"/, "普通待播放项左侧应显示序号");
+assert.match(app, /queue-current-actions[\s\S]*queue-card-next[\s\S]*queue-card-add[\s\S]*queue-card-more[\s\S]*queue-card-delete/, "当前播放项右侧应按切歌、添加、更多、删除排列");
+assert.match(app, /class="queue-card-next"[\s\S]*@click\.stop="nextTrack"/, "当前播放项切歌按钮应切到下一曲");
+assert.match(app, /class="queue-card-add"[\s\S]*@click\.stop="appendQueueTrackToEnd\(track\)"/, "当前播放项添加按钮应把歌曲追加到队尾");
+assert.match(app, /class="queue-card-delete"[\s\S]*@click\.stop="removeQueueTrack\(queueTrackKey\(track, index\)\)"/, "当前播放项删除按钮应按队列项移除当前歌曲");
+assert.match(app, /function appendQueueTrackToEnd\(track: Track\)[\s\S]*playbackQueue\.value\s*=\s*\[\.\.\.playbackQueue\.value,\s*createQueueTrack\(track\)\]/, "添加按钮应在播放列表末尾追加一条新的队列项");
+assert.match(app, /queueKey\?:\s*string/, "队列项需要独立 queueKey 支持重复歌曲");
+assert.match(app, /function isCurrentQueueTrack\(track: Track\)/, "当前播放行应使用队列项身份判断");
+assert.match(app, /:key="queueTrackKey\(track, index\)"/, "播放列表渲染 key 应使用队列项唯一键");
+assert.match(app, /\.queue-track\.active\s*\{[^}]*background:\s*#eef5ff/, "当前播放项应使用浅蓝色高亮背景");
+assert.match(app, /\.queue-track\.active \.queue-track-copy strong\s*\{[^}]*color:\s*#1f6cff/, "当前播放项歌名应变蓝");
+assert.match(app, /\.queue-track\s*\{[^}]*border-radius:\s*14px/, "播放列表每行应为独立圆角卡片");
+assert.match(app, /\.queue-list\s*\{[^}]*gap:\s*8px/, "播放列表行与行之间应有间距");
+assert.match(app, /\.queue-current-actions button\s*\{[^}]*border-radius:\s*50%/, "当前播放项操作按钮应为圆形");
+assert.match(app, /\.queue-drag-handle,\s*\.queue-current-actions\s*\{[^}]*opacity:\s*0/, "拖拽柄和当前行操作按钮默认应隐藏");
+assert.match(app, /\.queue-track:hover \.queue-drag-handle[\s\S]*\.queue-track:hover \.queue-current-actions[\s\S]*opacity:\s*1/, "鼠标悬停歌曲行时才显示拖拽柄和操作按钮");
+
+console.log("播放列表面板契约通过");

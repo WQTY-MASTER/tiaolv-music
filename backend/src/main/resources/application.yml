@@ -1,0 +1,11 @@
+server:
+  port: 17890
+
+listenmusic:
+  catalog:
+    provider: netease
+  providers:
+    netease:
+      base-url: http://127.0.0.1:3000
+    qq:
+      base-url: http://127.0.0.1:3300
