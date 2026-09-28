@@ -1,8 +1,28 @@
 const { spawn } = require("node:child_process");
+const { existsSync } = require("node:fs");
 const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
-const isWindows = process.platform === "win32";
+
+function resolveElectronPath() {
+  let electronPath;
+
+  try {
+    electronPath = require("electron");
+  } catch {
+    throw new Error(
+      "Electron 运行文件尚未安装。请在项目根目录运行 `pnpm install`，然后重新执行 `npm run dev`。"
+    );
+  }
+
+  if (typeof electronPath !== "string" || !existsSync(electronPath)) {
+    throw new Error(
+      "Electron 运行文件尚未安装。请在项目根目录运行 `pnpm install`，然后重新执行 `npm run dev`。"
+    );
+  }
+
+  return electronPath;
+}
 
 function run(command, args) {
   return new Promise((resolve, reject) => {
@@ -46,43 +66,16 @@ async function main() {
   await server.listen();
   server.printUrls();
 
-  const electronPath = path.join(root, "node_modules", "electron", "dist", isWindows ? "electron.exe" : "electron");
-  const electron = isWindows
-    ? spawn(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-Command",
-          [
-            `$env:ELECTRON_RENDERER_URL=${JSON.stringify(rendererUrl)}`,
-            `$env:NODE_ENV_ELECTRON_VITE="development"`,
-            `$process = Start-Process -FilePath ${JSON.stringify(electronPath)} -ArgumentList "." -WorkingDirectory ${JSON.stringify(root)} -PassThru`,
-            "Wait-Process -Id $process.Id",
-            "exit $process.ExitCode"
-          ].join("; ")
-        ],
-        {
-          cwd: root,
-          stdio: "inherit",
-          shell: false,
-          env: {
-            ...process.env,
-            ELECTRON_RENDERER_URL: rendererUrl,
-            NODE_ENV_ELECTRON_VITE: "development"
-          }
-        }
-      )
-    : spawn(electronPath, ["."], {
-        cwd: root,
-        stdio: "inherit",
-        env: {
-          ...process.env,
-          ELECTRON_RENDERER_URL: rendererUrl,
-          NODE_ENV_ELECTRON_VITE: "development"
-        }
-      });
+  const electronPath = resolveElectronPath();
+  const electron = spawn(electronPath, ["."], {
+    cwd: root,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      ELECTRON_RENDERER_URL: rendererUrl,
+      NODE_ENV_ELECTRON_VITE: "development"
+    }
+  });
 
   let shuttingDown = false;
   async function shutdown(code = 0) {
