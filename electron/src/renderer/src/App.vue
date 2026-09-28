@@ -140,6 +140,12 @@ import {
   isPreviewPlayback
 } from "./services/playbackClock";
 import {
+  DEFAULT_FADE_DURATION_MS,
+  boundFadeDurationMs,
+  interpolateFadeVolume,
+  normalizeFadeDurationMs
+} from "./services/playbackFade";
+import {
   normalizeLyricCredits,
   parseLyricCredits,
   type LyricCredit
@@ -276,6 +282,11 @@ interface Track {
   createdAt?: string;
   updatedAt?: string;
   queueKey?: string;
+}
+
+interface PlayTrackOptions {
+  fadeIn?: boolean;
+  transitionToken?: number;
 }
 
 interface LocalDuplicateGroup {
@@ -446,6 +457,8 @@ const STORED_SETTING_NAMES = [
   "startup-home",
   "taskbar-thumbnail-buttons",
   "system-tray-enabled",
+  "playback-fade-enabled",
+  "playback-fade-duration-ms",
   "aggregate-playlists"
 ] as const;
 
@@ -474,6 +487,8 @@ const DUPLICATE_RECOGNITION_MODE_STORAGE_KEY = `${STORAGE_PREFIX}duplicate-recog
 const STARTUP_HOME_STORAGE_KEY = `${STORAGE_PREFIX}startup-home`;
 const TASKBAR_THUMBNAIL_BUTTONS_STORAGE_KEY = `${STORAGE_PREFIX}taskbar-thumbnail-buttons`;
 const SYSTEM_TRAY_ENABLED_STORAGE_KEY = `${STORAGE_PREFIX}system-tray-enabled`;
+const PLAYBACK_FADE_ENABLED_STORAGE_KEY = `${STORAGE_PREFIX}playback-fade-enabled`;
+const PLAYBACK_FADE_DURATION_STORAGE_KEY = `${STORAGE_PREFIX}playback-fade-duration-ms`;
 
 function readStreamingSource(): AccountProvider {
   return window.localStorage.getItem(STREAMING_SOURCE_STORAGE_KEY) === "qq" ? "qq" : "netease";
@@ -519,6 +534,15 @@ function readTaskbarThumbnailButtonsEnabled() {
 
 function readSystemTrayEnabled() {
   return window.localStorage.getItem(SYSTEM_TRAY_ENABLED_STORAGE_KEY) !== "false";
+}
+
+function readPlaybackFadeEnabled() {
+  return window.localStorage.getItem(PLAYBACK_FADE_ENABLED_STORAGE_KEY) !== "false";
+}
+
+function readPlaybackFadeDurationMs() {
+  const storedValue = window.localStorage.getItem(PLAYBACK_FADE_DURATION_STORAGE_KEY);
+  return storedValue === null ? DEFAULT_FADE_DURATION_MS : normalizeFadeDurationMs(Number(storedValue));
 }
 
 function trackFromPersisted(track: PersistedTrack, index: number): Track {
@@ -751,6 +775,8 @@ const taskbarThumbnailButtonsSupported = window.listenMusic?.isWindows === true;
 const isPlaybackStarting = ref(false);
 const progress = ref(0);
 const volume = ref(72);
+const playbackFadeEnabled = ref(readPlaybackFadeEnabled());
+const playbackFadeDurationMs = ref(readPlaybackFadeDurationMs());
 const currentTrack = ref<Track>(defaultTrack);
 const remoteTracks = ref<Track[]>([]);
 const remotePlaylists = ref<Playlist[]>([]);
@@ -4635,6 +4661,8 @@ function getPlaylistTrackFolder(track: Track) {
 }
 
 let trackAssetRequestId = 0;
+let playbackFadeToken = 0;
+let activePlaybackFade: "in" | "out" | null = null;
 
 function getPlaybackQueue() {
   return playbackQueue.value;
@@ -5015,9 +5043,59 @@ async function refreshAccountsAfterPlaybackFailure(track: Track) {
   return false;
 }
 
-async function playTrack(track: Track) {
-  const requestId = ++trackAssetRequestId;
+function getRemainingPlaybackSeconds(audio: HTMLAudioElement) {
+  const duration = Number.isFinite(audio.duration) && audio.duration > 0
+    ? audio.duration
+    : currentTrack.value.duration;
+  return Math.max(0, duration - audio.currentTime);
+}
+
+async function fadeAudioVolume(
+  audio: HTMLAudioElement,
+  targetVolume: () => number,
+  durationMs: number,
+  transitionToken: number,
+  direction: "in" | "out"
+) {
+  const startVolume = audio.volume;
+  const startTime = performance.now();
+  activePlaybackFade = direction;
+
+  if (durationMs <= 0) {
+    audio.volume = targetVolume();
+    if (transitionToken === playbackFadeToken) {
+      activePlaybackFade = null;
+    }
+    return transitionToken === playbackFadeToken;
+  }
+
+  while (transitionToken === playbackFadeToken) {
+    const progress = Math.min(1, (performance.now() - startTime) / durationMs);
+    audio.volume = interpolateFadeVolume(startVolume, targetVolume(), progress);
+    if (progress >= 1) {
+      activePlaybackFade = null;
+      return true;
+    }
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+
+  if (transitionToken === playbackFadeToken) {
+    activePlaybackFade = null;
+  }
+  return false;
+}
+
+async function playTrack(track: Track, options: PlayTrackOptions = {}) {
   isPlaybackStarting.value = true;
+  const transitionToken = options.transitionToken;
+  if (transitionToken === undefined) {
+    playbackFadeToken += 1;
+    activePlaybackFade = null;
+  } else if (transitionToken !== playbackFadeToken) {
+    isPlaybackStarting.value = false;
+    return;
+  }
+  const requestId = ++trackAssetRequestId;
   stopPlaybackClock();
   isPlaying.value = false;
   scanError.value = "";
@@ -5052,6 +5130,9 @@ async function playTrack(track: Track) {
   }
 
   void nextTick(async () => {
+    if (transitionToken !== undefined && transitionToken !== playbackFadeToken) {
+      return;
+    }
     const audio = audioElement.value;
     if (!audio || !playbackTrack.audioUrl) {
       isPlaybackStarting.value = false;
@@ -5062,6 +5143,8 @@ async function playTrack(track: Track) {
       return;
     }
     prepareAudioSource(playbackTrack);
+    const shouldFadeIn = Boolean(options.fadeIn && playbackFadeEnabled.value && transitionToken !== undefined);
+    audio.volume = shouldFadeIn ? 0 : volume.value / 100;
     try {
       await audio.play();
       playbackClock.reset(audio, performance.now());
@@ -5073,7 +5156,16 @@ async function playTrack(track: Track) {
       recordCurrentTrackPlayStart(playbackTrack);
       void recordPlayedTrack(playbackTrack);
       void persistPlaybackState();
+      if (shouldFadeIn && transitionToken !== undefined) {
+        const availableSeconds = Number.isFinite(audio.duration) && audio.duration > 0
+          ? audio.duration
+          : playbackTrack.duration;
+        const fadeDuration = boundFadeDurationMs(playbackFadeDurationMs.value, availableSeconds);
+        void fadeAudioVolume(audio, () => volume.value / 100, fadeDuration, transitionToken, "in");
+      }
     } catch {
+      audio.volume = volume.value / 100;
+      activePlaybackFade = null;
       isPlaybackStarting.value = false;
       isPlaying.value = false;
       const loginExpired = await refreshAccountsAfterPlaybackFailure(playbackTrack);
@@ -5146,6 +5238,22 @@ function togglePlayback() {
   }
 }
 
+async function transitionToTrack(track: Track) {
+  const transitionToken = ++playbackFadeToken;
+  const audio = audioElement.value;
+  if (playbackFadeEnabled.value && audio && !audio.paused && !audio.ended) {
+    const fadeDuration = boundFadeDurationMs(
+      playbackFadeDurationMs.value,
+      getRemainingPlaybackSeconds(audio)
+    );
+    const completed = await fadeAudioVolume(audio, () => 0, fadeDuration, transitionToken, "out");
+    if (!completed || transitionToken !== playbackFadeToken) {
+      return;
+    }
+  }
+  await playTrack(track, { fadeIn: true, transitionToken });
+}
+
 function previousTrack() {
   const tracks = getPlaybackQueue();
   if (!tracks.length) {
@@ -5165,7 +5273,7 @@ function previousTrack() {
     : (index - 1 + tracks.length) % tracks.length;
   const previous = tracks[previousIndex];
   if (previous) {
-    void playTrack(previous);
+    void transitionToTrack(previous);
   }
 }
 
@@ -5188,7 +5296,7 @@ function nextTrack() {
     : (index + 1) % tracks.length;
   const next = tracks[nextIndex];
   if (next) {
-    void playTrack(next);
+    void transitionToTrack(next);
   }
 }
 
@@ -5663,7 +5771,7 @@ async function toggleTrackLiked(track: Track) {
 
 function updateVolume(value: number) {
   volume.value = value;
-  if (audioElement.value) {
+  if (audioElement.value && activePlaybackFade === null) {
     audioElement.value.volume = value / 100;
   }
   schedulePlaybackStateSave();
@@ -5966,6 +6074,19 @@ watch(duplicateRecognitionMode, (mode) => {
 
 watch(startupHome, (home) => {
   window.localStorage.setItem(STARTUP_HOME_STORAGE_KEY, home);
+});
+
+watch(playbackFadeEnabled, (enabled) => {
+  window.localStorage.setItem(PLAYBACK_FADE_ENABLED_STORAGE_KEY, String(enabled));
+});
+
+watch(playbackFadeDurationMs, (durationMs) => {
+  const normalizedDuration = normalizeFadeDurationMs(durationMs);
+  if (normalizedDuration !== durationMs) {
+    playbackFadeDurationMs.value = normalizedDuration;
+    return;
+  }
+  window.localStorage.setItem(PLAYBACK_FADE_DURATION_STORAGE_KEY, String(normalizedDuration));
 });
 
 watch(taskbarThumbnailButtonsEnabled, (enabled) => {
@@ -7059,6 +7180,8 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => {
+  playbackFadeToken += 1;
+  activePlaybackFade = null;
   window.removeEventListener("keydown", handleGlobalNavigationShortcut);
   document.removeEventListener("pointerdown", handleLocalToolMenuPointerDown);
   removeTaskbarMediaActionListener?.();
@@ -7661,6 +7784,34 @@ onBeforeUnmount(() => {
                 <div>
                   <h2>播放控制</h2>
                   <p>管理系统播放入口与播放器交互。</p>
+                </div>
+              </div>
+
+              <div class="settings-toggle-field settings-fade-field">
+                <div class="settings-fade-copy">
+                  <strong>音乐渐进渐出</strong>
+                  <span>切换上一首或下一首时平滑淡出淡入，暂停、播放和拖动进度不触发。</span>
+                </div>
+                <div class="settings-fade-controls">
+                  <label class="settings-fade-duration">
+                    <span>过渡时长（毫秒）</span>
+                    <input
+                      v-model.number="playbackFadeDurationMs"
+                      class="settings-fade-slider"
+                      type="range"
+                      min="10"
+                      max="2000"
+                      step="10"
+                      :disabled="!playbackFadeEnabled"
+                      aria-label="渐进渐出过渡时长"
+                    />
+                    <output>{{ playbackFadeDurationMs }} ms</output>
+                  </label>
+                  <label class="settings-switch">
+                    <input v-model="playbackFadeEnabled" type="checkbox" />
+                    <i aria-hidden="true"></i>
+                    <span>{{ playbackFadeEnabled ? "已开启" : "已关闭" }}</span>
+                  </label>
                 </div>
               </div>
 
@@ -10335,6 +10486,60 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   padding-top: 0;
 }
 
+.settings-fade-field {
+  gap: 28px;
+  border-top: 0;
+  border-left: 3px solid #8fb4ff;
+  border-radius: 9px;
+  padding: 16px 14px;
+  background: #f1f3f7;
+}
+
+.settings-fade-copy {
+  min-width: 220px;
+  flex: 1 1 auto;
+}
+
+.settings-fade-controls {
+  display: flex !important;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 18px !important;
+}
+
+.settings-fade-duration {
+  display: grid;
+  grid-template-columns: auto 150px 68px;
+  align-items: center;
+  gap: 10px;
+  color: #687386;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.settings-fade-slider {
+  width: 150px;
+  accent-color: #1769ff;
+  cursor: pointer;
+}
+
+.settings-fade-slider:disabled {
+  opacity: .38;
+  cursor: not-allowed;
+}
+
+.settings-fade-duration output {
+  min-width: 68px;
+  border: 1px solid #e0e5ec;
+  border-radius: 8px;
+  padding: 8px 7px;
+  background: #fff;
+  color: #263247;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
 .settings-segmented-control {
   display: inline-flex;
   flex: 0 0 auto;
@@ -10494,6 +10699,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   .duplicate-finder-footer { align-items: stretch; flex-direction: column; }
   .duplicate-finder-footer > div { justify-content: flex-end; }
   .settings-toggle-field { align-items: stretch; flex-direction: column; }
+  .settings-fade-controls { align-items: stretch; flex-direction: column; }
+  .settings-fade-duration { grid-template-columns: auto minmax(80px, 1fr) 68px; }
+  .settings-fade-slider { width: 100%; }
+  .settings-fade-controls .settings-switch { align-self: flex-end; }
   .settings-select-control { width: 100%; }
   .settings-segmented-control { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-segmented-control button { min-width: 0; padding-inline: 8px; white-space: normal; }
