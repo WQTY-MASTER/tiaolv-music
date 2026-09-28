@@ -7,10 +7,13 @@ const playbackClockPath = path.resolve(__dirname, "../src/renderer/src/services/
 async function run() {
   const {
     findCharacterCountAtTime,
+    getLyricCharacterProgress,
     getLyricHighlightState,
     getPrefaceCharacterCount,
     getPrefaceHighlightState,
-    getPrefaceLineStartTime
+    getPrefaceLineStartTime,
+    getPreludeEndTime,
+    stabilizeLyricCharacterProgress
   } = await import(pathToFileUrl(sourcePath));
   const {
     createPlaybackClock,
@@ -28,12 +31,51 @@ async function run() {
 
   assert.deepEqual(
     getLyricHighlightState(11, lines),
-    { activeIndex: 0, characterCount: 1 },
-    "普通 LRC 应根据当前句到下一句的时间计算已唱字符数"
+    { activeIndex: 0, characterCount: 0 },
+    "普通 LRC 只有整行时间戳，不应伪造逐字进度"
+  );
+  assert.equal(
+    getLyricCharacterProgress(11, lines),
+    0,
+    "普通 LRC 应只高亮当前行"
+  );
+  assert.equal(
+    getLyricCharacterProgress(10.5, lines),
+    0,
+    "普通 LRC 不应按句间时长平均分配到每个字"
+  );
+  const exactTimedLines = [
+    {
+      time: 16.21,
+      text: "还没",
+      characters: [
+        { text: "还", start: 16.21, duration: 0.67 },
+        { text: "没", start: 16.88, duration: 0.42 }
+      ]
+    }
+  ];
+  assert.ok(
+    Math.abs(getLyricCharacterProgress(16.545, exactTimedLines) - 0.5) < 0.000001,
+    "QRC/YRC 应按真实字时长连续填充当前字"
+  );
+  const qqQrcLine = [{
+    time: 12.739,
+    text: "心事谁知晓",
+    characters: [
+      { text: "心", start: 12.739, duration: 0.958 },
+      { text: "事", start: 13.697, duration: 1.095 },
+      { text: "谁", start: 14.792, duration: 2.025 },
+      { text: "知", start: 16.817, duration: 0.922 },
+      { text: "晓", start: 17.739, duration: 3.005 }
+    ]
+  }];
+  assert.ok(
+    Math.abs(getLyricCharacterProgress(15.8045, qqQrcLine) - 2.5) < 0.000001,
+    "QQ QRC 应在唱到谁字中段时只完成前两字，并把当前字填充到一半"
   );
   assert.deepEqual(
     getLyricHighlightState(14.5, lines),
-    { activeIndex: 1, characterCount: 1 },
+    { activeIndex: 1, characterCount: 0 },
     "切换到下一句时，上一句不应继续作为高亮状态"
   );
   assert.deepEqual(
@@ -117,6 +159,31 @@ async function run() {
     "不存在的前奏行不应返回可播放时间"
   );
   assert.equal(
+    getPreludeEndTime(8.5, 214, true),
+    8.5,
+    "第一句歌词晚于两秒时应生成覆盖完整前奏的歌曲信息条目"
+  );
+  assert.equal(
+    getPreludeEndTime(1.8, 214, true),
+    0,
+    "第一句歌词在两秒内开始时不应生成一闪而过的前奏条目"
+  );
+  assert.equal(
+    getPreludeEndTime(0, 214, false),
+    214,
+    "纯伴奏或无歌词歌曲应让歌曲信息覆盖完整播放时长"
+  );
+  assert.equal(
+    stabilizeLyricCharacterProgress(3.75, 3.2),
+    3.75,
+    "正常播放时较旧时间样本不得让已经唱过的字符重新变淡"
+  );
+  assert.equal(
+    stabilizeLyricCharacterProgress(3.75, 1.2, true),
+    1.2,
+    "用户主动跳转进度时应允许逐字高亮回退"
+  );
+  assert.equal(
     getPlaybackDuration(280, 40.824),
     280,
     "试听歌曲的进度时间轴应保留歌曲完整时长"
@@ -145,11 +212,28 @@ async function run() {
     "播放时钟应在浏览器暂时没有刷新媒体 currentTime 时平滑估算当前时间"
   );
 
+  const staleTimeupdateAudio = {
+    currentTime: 10.42,
+    paused: false,
+    ended: false,
+    seeking: false,
+    playbackRate: 1
+  };
+  assert.equal(
+    playbackClock.synchronize(staleTimeupdateAudio, 1500),
+    10.5,
+    "正常播放的 timeupdate 携带较旧媒体时间时，歌词时钟不得向后跳"
+  );
+  assert.ok(
+    Math.abs(playbackClock.read(staleTimeupdateAudio, 1600) - 10.6) < 0.000001,
+    "忽略较旧媒体时间后，歌词时钟应继续平滑前进"
+  );
+
   const seekedAudio = { currentTime: 2, paused: false, ended: false, seeking: true, playbackRate: 1 };
   assert.equal(
-    playbackClock.read(seekedAudio, 1500),
+    playbackClock.synchronize(seekedAudio, 1500),
     2,
-    "检测到拖动进度或音频跳变时应立即重新锚定媒体时间"
+    "检测到拖动进度时仍应允许歌词时钟回退到用户选择的位置"
   );
 
   const pausedAudio = { currentTime: 2.25, paused: true, ended: false, playbackRate: 1 };

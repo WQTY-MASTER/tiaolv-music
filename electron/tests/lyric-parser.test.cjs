@@ -7,25 +7,64 @@ const syncPath = path.resolve(__dirname, "../src/renderer/src/services/lyricSync
 async function run() {
   const {
     parseKaraokeTokens,
+    parseQrcContent,
+    parseQrcTokens,
     parseLyricContent,
+    parseYrcTokens,
     splitLyricCharacters
   } = await import(pathToFileUrl(sourcePath));
   const { getLyricHighlightState } = await import(pathToFileUrl(syncPath));
 
   assert.deepEqual(
-    parseKaraokeTokens("(1000,700,0)你(1700,800,0)好"),
+    parseYrcTokens("(1000,700,0)你(1700,800,0)好"),
     [
       { text: "你", start: 1, duration: 0.7 },
       { text: "好", start: 1.7, duration: 0.8 }
     ],
     "网易云逐字歌词应解析每个 token 的开始时间和持续时间"
   );
+  assert.deepEqual(
+    parseQrcTokens("密(1000,500)文(1500,500)"),
+    [
+      { text: "密", start: 1, duration: 0.5 },
+      { text: "文", start: 1.5, duration: 0.5 }
+    ],
+    "QQ 音乐 QRC 应解析每个字后面的开始时间和持续时间"
+  );
+  assert.deepEqual(
+    parseKaraokeTokens("密(1000,500)文(1500,500)"),
+    parseQrcTokens("密(1000,500)文(1500,500)"),
+    "兼容入口应把 QQ 后置时间语法交给独立 QRC 解析器"
+  );
+
+  const qrcLines = parseQrcContent(
+    [
+      "[126,15]歌曲名 - 歌手(126,15)",
+      "[1000,1500]你(1000,400)，(1400,200) A(1600,900)"
+    ].join("\n")
+  );
+  assert.equal(qrcLines.length, 1, "QRC 的标题和制作信息不应进入演唱歌词列表");
+  assert.equal(qrcLines[0].text, "你， A", "QRC 不应丢失标点、英文或内部空格");
+  assert.deepEqual(
+    qrcLines[0].characters.map(({ text, start, duration }) => ({
+      text,
+      start: Number(start.toFixed(3)),
+      duration: Number(duration.toFixed(3))
+    })),
+    [
+      { text: "你", start: 1, duration: 0.4 },
+      { text: "，", start: 1.4, duration: 0.2 },
+      { text: " ", start: 1.6, duration: 0.45 },
+      { text: "A", start: 2.05, duration: 0.45 }
+    ],
+    "QRC 多字符 token 应保留原字符并在 token 时长内分配时间"
+  );
 
   const yrc = [
     '{"t":0,"c":[{"tx":"作曲: "},{"tx":"测试作者"}]}',
     "[1000,2200](1000,700,0)你(1700,800,0)好(2500,700,0)呀"
   ].join("\n");
-  const yrcLines = parseLyricContent(yrc, "[00:01.00]Hello");
+  const yrcLines = parseLyricContent(yrc, "[00:01.00]Hello", "YRC");
 
   assert.equal(yrcLines.length, 1, "YRC 元数据行不应被当成歌词行");
   assert.equal(yrcLines[0].text, "你好呀", "YRC 应保留歌词正文");
@@ -72,11 +111,7 @@ async function run() {
 
   const lrcLines = parseLyricContent("[00:10.00]<00:10.00>你<00:10.50>好\n[00:12.00]下一句");
   assert.equal(lrcLines[0].text, "你好", "普通本地 LRC 应去除行内时间标记");
-  assert.deepEqual(
-    lrcLines[0].characterTimes,
-    [10, 10.5],
-    "增强 LRC 应保留逐字开始时间"
-  );
+  assert.equal(lrcLines[0].characterTimes, undefined, "LRC 应保持整行时间，不冒充 QRC/YRC 逐字歌词");
 
   assert.deepEqual(
     splitLyricCharacters("A🙂́"),

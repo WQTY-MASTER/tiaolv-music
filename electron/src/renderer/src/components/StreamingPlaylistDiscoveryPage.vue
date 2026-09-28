@@ -15,6 +15,7 @@ interface DiscoveryPlaylist {
 }
 
 const props = defineProps<{
+  provider: "netease" | "qq";
   mode: "all" | "highquality";
   order: "hot" | "new";
   category: string;
@@ -43,6 +44,7 @@ const filtersOpen = ref(false);
 const visibleTags = computed(() => props.mode === "highquality"
   ? props.highQualityTags.slice(0, 11)
   : props.hotTags.slice(0, 11));
+const totalPages = computed(() => Math.max(1, Math.ceil(props.total / 30)));
 
 function formatPlayCount(value = 0) {
   if (value >= 100_000_000) return `${(value / 100_000_000).toFixed(value >= 1_000_000_000 ? 0 : 1)} 亿`;
@@ -75,7 +77,7 @@ function nextPage() {
       <div>
         <p class="playlist-discovery-kicker"><i></i>发现歌单 · PLAYLIST DISCOVERY</p>
         <h2>{{ mode === "highquality" ? "精品歌单" : "全部歌单" }}</h2>
-        <p>{{ mode === "highquality" ? "网易云音乐精选" : `共 ${total} 张歌单 · ${order === 'hot' ? '按最热排列' : '按最新排列'}` }}</p>
+        <p>{{ mode === "highquality" ? "网易云音乐精选" : `共 ${total} 张${provider === 'qq' ? 'QQ 音乐' : '网易云音乐'}歌单 · ${order === 'hot' ? '按最热排列' : '按最新排列'}` }}</p>
       </div>
     </header>
 
@@ -89,7 +91,7 @@ function nextPage() {
             <button type="button" :class="{ active: order === 'hot' }" @click="emit('changeOrder', 'hot')">最热</button>
             <button type="button" :class="{ active: order === 'new' }" @click="emit('changeOrder', 'new')">最新</button>
           </div>
-          <button class="playlist-discovery-quality" type="button" :class="{ active: mode === 'highquality' }" @click="emit('changeMode', 'highquality')">
+          <button v-if="provider === 'netease'" class="playlist-discovery-quality" type="button" :class="{ active: mode === 'highquality' }" @click="emit('changeMode', 'highquality')">
             <Crown :size="15" aria-hidden="true" />精品
           </button>
         </div>
@@ -139,15 +141,15 @@ function nextPage() {
     </div>
 
     <nav v-if="playlists.length > 0" class="playlist-discovery-pagination" aria-label="歌单分页">
-      <button type="button" :disabled="page <= 1 || loading" @click="previousPage">
-        <ChevronLeft :size="16" aria-hidden="true" />上一页
+      <button type="button" aria-label="上一页" title="上一页" :disabled="page <= 1 || loading" @click="previousPage">
+        <ChevronLeft :size="18" aria-hidden="true" />
       </button>
       <span class="playlist-discovery-current-page" aria-current="page">
         <LoaderCircle v-if="loading" :size="17" class="spin" aria-label="正在加载" />
-        <template v-else>{{ page }}</template>
+        <template v-else>第 {{ page }} 页 · 共 {{ totalPages }} 页</template>
       </span>
-      <button type="button" :disabled="!hasMore || loading" @click="nextPage">
-        下一页<ChevronRight :size="16" aria-hidden="true" />
+      <button type="button" aria-label="下一页" title="下一页" :disabled="!hasMore || loading" @click="nextPage">
+        <ChevronRight :size="18" aria-hidden="true" />
       </button>
     </nav>
     <button class="playlist-discovery-to-top" type="button" title="回到顶部" aria-label="回到顶部" @click="scrollToTop"><ArrowUp :size="19" /></button>
@@ -160,4 +162,8 @@ function nextPage() {
 .playlist-discovery-head,.playlist-discovery-tags,.playlist-discovery-filter-shell,.playlist-discovery-list{width:100%;margin-inline:0;padding-inline:0}
 .playlist-discovery-grid{display:grid;width:100%;margin-inline:0;padding-inline:0;grid-template-columns:repeat(5,minmax(0,1fr))}
 @media(max-width:1200px){.playlist-discovery-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.playlist-discovery-tags{grid-template-columns:1fr}.playlist-discovery-actions{justify-content:space-between}.playlist-discovery-modes{flex-shrink:0}}@media(max-width:720px){.playlist-discovery-head h2{font-size:31px}.playlist-discovery-actions{align-items:stretch;flex-direction:column}.playlist-discovery-modes{max-width:100%;justify-content:space-between}.playlist-discovery-all-tags{width:fit-content}.playlist-discovery-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:20px 12px}.playlist-discovery-card.featured{grid-column:span 2;grid-row:span 1}.playlist-discovery-card.featured .playlist-discovery-cover{height:auto;aspect-ratio:16/9}.playlist-discovery-filter-row{grid-template-columns:1fr}.playlist-discovery-pagination button{min-width:82px}.playlist-discovery-to-top{right:12px}}
+.playlist-discovery-pagination{gap:22px}
+.playlist-discovery-pagination button{display:grid;width:38px;min-width:38px;height:38px;flex:0 0 38px;place-items:center;border-radius:50%;padding:0}
+.playlist-discovery-current-page{min-width:128px;width:auto;height:38px;border-radius:0;background:transparent;color:#526178;white-space:nowrap}
+@media(max-width:720px){.playlist-discovery-pagination{gap:14px}.playlist-discovery-pagination button{width:38px;min-width:38px}}
 </style>

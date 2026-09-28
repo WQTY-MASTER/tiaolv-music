@@ -25,6 +25,9 @@ build/
 music-api/api-enhanced/.git
 music-api/api-enhanced/.git.disabled
 
+# Optional QQ Music API checkout is maintained as its own repository
+music-api/qq-music-api/
+
 # Env / secrets / runtime data
 .env
 .env.*

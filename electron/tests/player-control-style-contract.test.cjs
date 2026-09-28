@@ -20,7 +20,7 @@ assert.match(playerBar, /<PlayerControlButton kind="queue"\s+compact/, "底部�
 assert.match(playerBar, /\.transport-controls button\s*\{[^}]*width:\s*30px[^}]*height:\s*30px[^}]*flex:\s*0\s+0\s+30px/, "播放传输按钮应保留 30px 紧凑规格");
 assert.match(playerBar, /\.player-tools\s*\{[^}]*--player-tool-button-size:\s*36px[^}]*--player-tool-icon-size:\s*18px/, "右侧操作区应统一声明 36px 热区和 18px 图标规格");
 assert.match(playerBar, /\.player-tools\s+:deep\(\.player-tool-button\)\s*\{[^}]*width:\s*var\(--player-tool-button-size\)[^}]*height:\s*var\(--player-tool-button-size\)[^}]*flex:\s*0\s+0\s+var\(--player-tool-button-size\)[^}]*border-radius:\s*50%[^}]*padding:\s*0[^}]*line-height:\s*1[^}]*text-align:\s*center/, "右侧所有按钮应使用相同的 36px 点击热区和排版参数");
-assert.match(playerBar, /\.player-tools\s+:deep\(\.player-tool-button:hover\)\s*\{[^}]*background:\s*#f3f1f8[^}]*color:\s*#68369a[^}]*transform:\s*translateY\(-1px\)/, "右侧按钮应使用统一悬浮反馈");
+assert.match(playerBar, /\.player-tools\s+:deep\(\.player-tool-button:hover\)\s*\{[^}]*background:\s*#f3f1f8[^}]*color:\s*var\(--player-accent[^}]*transform:\s*translateY\(-1px\)/, "右侧按钮悬浮时应统一使用当前封面主色");
 assert.match(playerBar, /\.player-tools\s+:deep\(\.player-tool-button:active\)\s*\{[^}]*background:\s*#e9e4f1[^}]*transform:\s*translateY\(0\)\s+scale\(\.96\)/, "右侧按钮应使用统一按下反馈");
 assert.match(playerBar, /\.transport-controls \.player-control-button\.play-button\.compact\s*\{[^}]*width:\s*44px[^}]*height:\s*44px[^}]*border-radius:\s*50%/, "播放栏主按钮应覆盖共享样式并使用 44px 圆形规格");
 assert.match(playerBar, /grid-template-columns:\s*minmax\(150px,\.85fr\)\s+minmax\(320px,1\.5fr\)\s+minmax\(230px,\.85fr\)/, "播放栏应按参考图分配三段区域并兼容 1024px 窗口");

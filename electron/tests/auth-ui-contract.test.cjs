@@ -26,6 +26,10 @@ assert.match(panel, /二维码已过期/);
 assert.match(panel, /等待扫码/);
 assert.match(panel, /待确认/);
 assert.match(panel, /登录成功/);
+assert.match(panel, /请使用手机 QQ 扫码/);
+assert.match(panel, /:alt="`\$\{providerName\}登录二维码`"/);
+assert.doesNotMatch(panel, /QQ 音乐 Cookie/);
+assert.doesNotMatch(panel, /qq-cookie/);
 assert.match(app, /AuthPanel/);
 assert.match(app, /authPanelVisible/);
 assert.match(app, /loadCurrentAccount/);
@@ -38,6 +42,7 @@ assert.match(app, /await loadStreamingHomeData\(provider\)/, "登录成功后应
 assert.match(app, /@logout="handleLogout"/);
 assert.doesNotMatch(sidebar, /登录网易云/, "新版流媒体侧边栏不再承载账号登录卡");
 assert.match(app, /登录网易云后查看[\s\S]*@click="openAuthPanel"/, "流媒体音乐库页面仍需保留网易云登录入口");
+assert.match(app, /shouldHidePlayerBar\s*=\s*computed\([\s\S]*appMode\.value\s*===\s*"streaming"[\s\S]*streamingSource\.value\s*===\s*"netease"[\s\S]*!account\.value/, "网易云流媒体模式未登录时应隐藏底部播放栏");
 assert.match(panel, /logout: \[\]/);
 assert.match(panel, /emit\((?:"logout"|'logout')\)/);
 assert.match(panel, /props\.account/);

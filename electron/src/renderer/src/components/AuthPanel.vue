@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  loginQqWithCookie,
   pollQrLogin,
   startQrLogin,
   type AccountView,
@@ -29,7 +28,6 @@ const qrImage = ref("");
 const qrUrl = ref("");
 const sessionId = ref("");
 const secondsLeft = ref(0);
-const qqCookie = ref("");
 let pollTimer: number | undefined;
 let requestVersion = 0;
 
@@ -59,7 +57,6 @@ function resetPanel() {
   qrImage.value = "";
   qrUrl.value = "";
   secondsLeft.value = 0;
-  qqCookie.value = "";
   errorMessage.value = "";
   state.value = "idle";
 }
@@ -112,11 +109,6 @@ async function startLogin() {
     errorMessage.value = "";
     return;
   }
-  if (isQq.value) {
-    state.value = "idle";
-    errorMessage.value = "";
-    return;
-  }
   state.value = "loading";
   errorMessage.value = "";
   qrImage.value = "";
@@ -146,33 +138,9 @@ async function startLogin() {
       return;
     }
     state.value = "error";
-    errorMessage.value = error instanceof Error ? error.message : "二维码加载失败，请确认 Java 后端和网易云 API 已启动";
-  }
-}
-
-async function submitQqLogin() {
-  if (!qqCookie.value.trim()) {
-    state.value = "error";
-    errorMessage.value = "请输入 QQ 音乐 Cookie";
-    return;
-  }
-  const version = ++requestVersion;
-  state.value = "loading";
-  errorMessage.value = "";
-  try {
-    const nextAccount = await loginQqWithCookie(qqCookie.value);
-    if (version !== requestVersion || !props.visible) {
-      return;
-    }
-    state.value = "SUCCESS";
-    qqCookie.value = "";
-    emit("authenticated", nextAccount);
-  } catch (error) {
-    if (version !== requestVersion) {
-      return;
-    }
-    state.value = "error";
-    errorMessage.value = error instanceof Error ? error.message : "QQ 音乐登录失败";
+    errorMessage.value = error instanceof Error
+      ? error.message
+      : `二维码加载失败，请确认 Java 后端和${providerName.value} API 已启动`;
   }
 }
 
@@ -217,10 +185,10 @@ onBeforeUnmount(() => {
       <article class="auth-card">
         <button class="auth-close" type="button" title="关闭登录" aria-label="关闭登录" @click="close">×</button>
         <div class="auth-brand-mark" aria-hidden="true">听</div>
-        <p class="auth-kicker">倾听音乐账号</p>
+        <p class="auth-kicker">调律音乐账号</p>
         <h2>登录{{ providerName }}</h2>
         <p class="auth-description">
-          {{ isQq ? "Cookie 仅加密保存在本机后端，不会写入浏览器存储。" : "扫码登录后，可以查看你的收藏、歌单和每日推荐。" }}
+          {{ isQq ? "请使用手机 QQ 扫码，登录凭据仅加密保存在本机。" : "扫码登录后，可以查看你喜欢的歌曲、歌单和每日推荐。" }}
         </p>
 
         <div v-if="props.account" class="auth-account">
@@ -230,30 +198,11 @@ onBeforeUnmount(() => {
           <button class="auth-logout" type="button" @click="emit('logout')">退出登录</button>
         </div>
 
-        <form v-else-if="isQq" class="qq-login-content" @submit.prevent="submitQqLogin">
-          <label for="qq-cookie">QQ 音乐 Cookie</label>
-          <input
-            id="qq-cookie"
-            v-model="qqCookie"
-            type="password"
-            name="qq-cookie"
-            autocomplete="off"
-            spellcheck="false"
-            placeholder="uin=...; qm_keyst=...; qqmusic_key=..."
-            :disabled="state === 'loading'"
-          />
-          <p>请从已登录的 y.qq.com 获取 Cookie。登录成功后，输入内容会立即从界面清除。</p>
-          <p v-if="errorMessage" class="auth-error">{{ errorMessage }}</p>
-          <button class="qq-login-button" type="submit" :disabled="state === 'loading'">
-            {{ state === "loading" ? "正在验证..." : "登录 QQ 音乐" }}
-          </button>
-        </form>
-
         <div v-else class="qr-login-content">
           <div class="qr-frame">
-            <img v-if="qrImage" :src="qrImage" alt="网易云登录二维码" />
+            <img v-if="qrImage" :src="qrImage" :alt="`${providerName}登录二维码`" />
             <div v-else-if="qrUrl" class="qr-url-fallback">
-              <strong>请使用网易云音乐扫码</strong>
+              <strong>请使用{{ providerName }}扫码</strong>
               <span>{{ qrUrl }}</span>
             </div>
             <div v-else class="qr-loading" :class="{ error: state === 'error' }">
@@ -297,14 +246,5 @@ onBeforeUnmount(() => {
 .auth-avatar-image { display: block; object-fit: cover; }
 .auth-account-copy { display: grid; min-width: 0; flex: 1; gap: 4px; }.auth-account strong { color: #344541; font-size: 13px; }.auth-account span { color: #9aa7a2; font-size: 10px; }
 .auth-logout { flex: 0 0 auto; border: 1px solid #e1e9e6; border-radius: 7px; padding: 7px 9px; background: #fff; color: #778b87; cursor: pointer; font-size: 10px; }.auth-logout:hover { border-color: #df8585; color: #c86f72; }
-.qq-login-content { display: grid; width: 100%; gap: 10px; text-align: left; }
-.qq-login-content label { color: #344541; font-size: 12px; font-weight: 800; }
-.qq-login-content input { width: 100%; height: 42px; border: 1px solid #dce4e2; border-radius: 8px; padding: 0 12px; outline: 0; background: #f8faf9; color: #25302e; font-size: 11px; }
-.qq-login-content input:focus { border-color: #20b876; box-shadow: 0 0 0 3px rgba(32,184,118,.1); }
-.qq-login-content p { margin: 0; color: #899692; font-size: 10px; line-height: 1.55; }
-.qq-login-content .auth-error { color: #c66b72; }
-.qq-login-button { height: 39px; border: 0; border-radius: 8px; background: #202a2e; color: #fff; cursor: pointer; font-size: 11px; font-weight: 700; transition: background 160ms ease, opacity 160ms ease; }
-.qq-login-button:hover { background: #14945f; }
-.qq-login-button:disabled { cursor: wait; opacity: .58; }
 .auth-panel-enter-active,.auth-panel-leave-active { transition: opacity 180ms ease; }.auth-panel-enter-from,.auth-panel-leave-to { opacity: 0; }
 </style>

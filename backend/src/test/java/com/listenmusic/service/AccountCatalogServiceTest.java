@@ -10,6 +10,8 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.Optional;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
@@ -77,6 +79,44 @@ class AccountCatalogServiceTest {
     }
 
     @Test
+    void updatesPlaylistSubscriptionThroughTheActiveProviderAccount() {
+        AccountRepository repository = mock(AccountRepository.class);
+        CredentialStore credentials = mock(CredentialStore.class);
+        MusicProvider provider = mock(MusicProvider.class);
+        ProviderAccount account = new ProviderAccount(
+            "qq", "200", "QQ用户", null, "credential-qq", true,
+            "2026-09-18T10:00:00Z", "2026-09-18T10:00:00Z"
+        );
+        when(repository.findActive("qq")).thenReturn(Optional.of(account));
+        when(credentials.get("credential-qq")).thenReturn(Optional.of("uin=o200; qm_keyst=secret"));
+        when(provider.id()).thenReturn("qq");
+        AccountCatalogService service = new AccountCatalogService(repository, credentials, List.of(provider));
+
+        assertTrue(service.setPlaylistSubscribed("qq", "qq:778899", true));
+
+        verify(provider).setPlaylistSubscription("200", "qq:778899", true, "uin=o200; qm_keyst=secret");
+    }
+
+    @Test
+    void reportsPlaylistSubscriptionAsUnsyncedWhenTheProviderRejectsIt() {
+        AccountRepository repository = mock(AccountRepository.class);
+        CredentialStore credentials = mock(CredentialStore.class);
+        MusicProvider provider = mock(MusicProvider.class);
+        ProviderAccount account = new ProviderAccount(
+            "qq", "200", "QQ用户", null, "credential-qq", true,
+            "2026-09-18T10:00:00Z", "2026-09-18T10:00:00Z"
+        );
+        when(repository.findActive("qq")).thenReturn(Optional.of(account));
+        when(credentials.get("credential-qq")).thenReturn(Optional.of("uin=o200; qm_keyst=secret"));
+        when(provider.id()).thenReturn("qq");
+        org.mockito.Mockito.doThrow(new IllegalStateException("invalid request"))
+            .when(provider).setPlaylistSubscription("200", "qq:778899", true, "uin=o200; qm_keyst=secret");
+        AccountCatalogService service = new AccountCatalogService(repository, credentials, List.of(provider));
+
+        assertFalse(service.setPlaylistSubscribed("qq", "qq:778899", true));
+    }
+
+    @Test
     void refusesLegacyUnknownNeteaseUidBeforeCallingPrivateApis() {
         AccountRepository repository = mock(AccountRepository.class);
         CredentialStore credentials = mock(CredentialStore.class);
@@ -90,5 +130,17 @@ class AccountCatalogServiceTest {
         AccountCatalogService service = new AccountCatalogService(repository, credentials, List.of(provider));
 
         assertThrows(AccountLoginRequiredException.class, () -> service.loadFavorites("netease"));
+    }
+
+    @Test
+    void refusesToScrobbleATrackFromAnotherSource() {
+        AccountCatalogService service = new AccountCatalogService(
+            mock(AccountRepository.class), mock(CredentialStore.class), List.of(mock(MusicProvider.class))
+        );
+
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> service.scrobble("netease", "local:123", "本地歌曲", "本地歌手", 30, 180)
+        );
     }
 }

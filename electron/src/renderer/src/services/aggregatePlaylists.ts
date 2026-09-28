@@ -1,4 +1,4 @@
-export const AGGREGATE_PLAYLIST_STORAGE_KEY = "listen-music-aggregate-playlists";
+export const AGGREGATE_PLAYLIST_STORAGE_KEY = "tiaolv-music-aggregate-playlists";
 
 export interface AggregateTrackSource {
   id: string;

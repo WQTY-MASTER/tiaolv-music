@@ -12,6 +12,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 @Service
@@ -21,16 +22,33 @@ public class MusicScanService {
     );
 
     private final FlacMetadataParser flacMetadataParser;
+    private final LocalFilenameMetadataParser filenameMetadataParser;
 
     public MusicScanService() {
-        this(new FlacMetadataParser());
+        this(new FlacMetadataParser(), new LocalFilenameMetadataParser());
     }
 
     public MusicScanService(FlacMetadataParser flacMetadataParser) {
+        this(flacMetadataParser, new LocalFilenameMetadataParser());
+    }
+
+    public MusicScanService(
+        FlacMetadataParser flacMetadataParser,
+        LocalFilenameMetadataParser filenameMetadataParser
+    ) {
         this.flacMetadataParser = flacMetadataParser;
+        this.filenameMetadataParser = filenameMetadataParser;
     }
 
     public List<ScannedTrack> scan(Path directory) {
+        return scan(directory, true);
+    }
+
+    public List<ScannedTrack> scan(Path directory, boolean useFilenameMetadata) {
+        return scanFiles(findAudioFiles(directory), useFilenameMetadata);
+    }
+
+    public List<Path> findAudioFiles(Path directory) {
         if (directory == null || !Files.isDirectory(directory)) {
             throw new IllegalArgumentException("音乐目录不存在: " + directory);
         }
@@ -40,18 +58,32 @@ public class MusicScanService {
                 .filter(Files::isRegularFile)
                 .filter(this::isSupportedAudio)
                 .sorted(Comparator.comparing(path -> path.getFileName().toString(), String.CASE_INSENSITIVE_ORDER))
-                .map(this::scanFile)
+                .map(path -> path.toAbsolutePath().normalize())
                 .toList();
         } catch (IOException ex) {
             throw new UncheckedIOException("扫描音乐目录失败: " + directory, ex);
         }
     }
 
-    private ScannedTrack scanFile(Path file) {
+    public List<ScannedTrack> scanFiles(List<Path> files) {
+        return scanFiles(files, true);
+    }
+
+    public List<ScannedTrack> scanFiles(List<Path> files, boolean useFilenameMetadata) {
+        if (files == null || files.isEmpty()) {
+            return List.of();
+        }
+        return files.stream().map(file -> scanFile(file, useFilenameMetadata)).toList();
+    }
+
+    private ScannedTrack scanFile(Path file, boolean useFilenameMetadata) {
         String fallbackTitle = stripExtension(file.getFileName().toString());
         String title = fallbackTitle;
         String artist = "未知歌手";
         String album = "本地音乐";
+        String metaSource = null;
+        boolean embeddedTitleValid = false;
+        boolean embeddedArtistValid = false;
         long durationSeconds = 0;
         String embeddedLyrics = null;
         byte[] embeddedCover = null;
@@ -59,19 +91,44 @@ public class MusicScanService {
 
         if (extension(file).equals(".flac")) {
             FlacMetadata metadata = flacMetadataParser.parse(file);
-            title = valueOr(metadata.title(), fallbackTitle);
-            artist = valueOr(metadata.artist(), artist);
+            embeddedTitleValid = isValidMetadata(metadata.title(), "title");
+            embeddedArtistValid = isValidMetadata(metadata.artist(), "artist");
+            title = embeddedTitleValid ? metadata.title().trim() : fallbackTitle;
+            artist = embeddedArtistValid ? metadata.artist().trim() : artist;
             album = valueOr(metadata.album(), album);
+            metaSource = embeddedTitleValid || embeddedArtistValid ? "embedded" : null;
             durationSeconds = metadata.durationSeconds();
             embeddedLyrics = metadata.lyrics();
             embeddedCover = metadata.cover();
             embeddedCoverMimeType = metadata.coverMimeType();
         }
 
-        Path lyricsFile = sibling(file, ".lrc");
+        if (useFilenameMetadata) {
+            Optional<LocalFilenameMetadataParser.ParsedMetadata> parsed = filenameMetadataParser
+                .parse(file.getFileName().toString());
+            if (parsed.isPresent()) {
+                boolean replaced = false;
+                if (!embeddedTitleValid) {
+                    title = parsed.get().title();
+                    replaced = true;
+                }
+                if (!embeddedArtistValid) {
+                    artist = parsed.get().artist();
+                    replaced = true;
+                }
+                if (replaced) {
+                    metaSource = "filename";
+                }
+            }
+        }
+
+        Path lyricsFile = findSidecarLyrics(file);
         String sidecarLyrics = embeddedLyrics == null || embeddedLyrics.isBlank()
             ? readTextIfExists(lyricsFile)
             : null;
+        String lyricsFormat = embeddedLyrics != null && !embeddedLyrics.isBlank()
+            ? detectLyricsFormat(embeddedLyrics)
+            : lyricsFormatFromPath(lyricsFile);
         Path coverPath = findSidecarCover(file);
         byte[] sidecarCover = embeddedCover == null || embeddedCover.length == 0
             ? readBytesIfExists(coverPath)
@@ -88,8 +145,10 @@ public class MusicScanService {
             embeddedCover,
             embeddedCoverMimeType,
             sidecarLyrics,
+            lyricsFormat,
             sidecarCover,
-            coverPath
+            coverPath,
+            metaSource
         );
     }
 
@@ -159,6 +218,40 @@ public class MusicScanService {
         return null;
     }
 
+    private static Path findSidecarLyrics(Path file) {
+        for (String extension : List.of(".qrc", ".yrc", ".lrc")) {
+            Path candidate = sibling(file, extension);
+            if (Files.isRegularFile(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    private static String lyricsFormatFromPath(Path file) {
+        if (file == null) {
+            return null;
+        }
+        return switch (extension(file)) {
+            case ".qrc" -> "QRC";
+            case ".yrc" -> "YRC";
+            default -> "LRC";
+        };
+    }
+
+    private static String detectLyricsFormat(String lyrics) {
+        if (lyrics == null || lyrics.isBlank()) {
+            return null;
+        }
+        if (lyrics.matches("(?s).*\\[\\d+,\\d+]\\(\\d+,\\d+,\\d+\\).*")) {
+            return "YRC";
+        }
+        if (lyrics.matches("(?s).*\\[\\d+,\\d+].*\\(\\d+,\\d+\\).*")) {
+            return "QRC";
+        }
+        return "LRC";
+    }
+
     private static String readTextIfExists(Path file) {
         if (file == null || !Files.isRegularFile(file)) {
             return null;
@@ -183,6 +276,17 @@ public class MusicScanService {
 
     private static String valueOr(String value, String fallback) {
         return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static boolean isValidMetadata(String value, String kind) {
+        if (value == null || value.isBlank() || value.indexOf('\uFFFD') >= 0) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if ("artist".equals(kind)) {
+            return !List.of("未知歌手", "未知艺术家", "unknown artist", "unknown").contains(normalized);
+        }
+        return !List.of("未知歌曲", "未知标题", "unknown title", "unknown").contains(normalized);
     }
 
     private static String stableId(Path file) {

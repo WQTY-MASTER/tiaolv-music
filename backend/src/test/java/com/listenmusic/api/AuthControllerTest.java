@@ -50,6 +50,20 @@ class AuthControllerTest {
     }
 
     @Test
+    void startsQqQrLoginThroughTheProviderRoute() throws Exception {
+        given(accountAuthService.startQqQrLogin()).willReturn(new QrLoginStartResponse(
+            "qq-session", "qq", "WAITING", "data:image/png;base64,qq", null, 180
+        ));
+
+        mockMvc.perform(get("/auth/qq/qr/start"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.provider").value("qq"))
+            .andExpect(jsonPath("$.qrimg").value("data:image/png;base64,qq"))
+            .andExpect(jsonPath("$.qrsig").doesNotExist())
+            .andExpect(jsonPath("$.ptqrtoken").doesNotExist());
+    }
+
+    @Test
     void exposesQrStateAndOnlyPublicAccountFieldsOnSuccess() throws Exception {
         given(authService.checkQrLogin("session-1")).willReturn(new QrLoginStatusResponse(
             "session-1", "netease", "SUCCESS", "100", "测试用户", "https://img.test/avatar.jpg", ""
@@ -59,6 +73,20 @@ class AuthControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("SUCCESS"))
             .andExpect(jsonPath("$.nickname").value("测试用户"))
+            .andExpect(jsonPath("$.cookie").doesNotExist());
+    }
+
+    @Test
+    void exposesQqQrSuccessWithoutReturningTheCookie() throws Exception {
+        given(accountAuthService.checkQqQrLogin("qq-session")).willReturn(new QrLoginStatusResponse(
+            "qq-session", "qq", "SUCCESS", "200", "QQ用户", "https://img.test/qq.jpg", "登录成功"
+        ));
+
+        mockMvc.perform(get("/auth/qq/qr/status").param("sessionId", "qq-session"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.status").value("SUCCESS"))
+            .andExpect(jsonPath("$.provider").value("qq"))
+            .andExpect(jsonPath("$.nickname").value("QQ用户"))
             .andExpect(jsonPath("$.cookie").doesNotExist());
     }
 

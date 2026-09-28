@@ -8,6 +8,9 @@ import com.listenmusic.provider.HomepagePlaylist;
 import com.listenmusic.provider.MusicProvider;
 import com.listenmusic.provider.AccountProfile;
 import com.listenmusic.provider.AccountSocialUser;
+import com.listenmusic.provider.CloudTrack;
+import com.listenmusic.provider.CloudUpload;
+import com.listenmusic.provider.LyricData;
 import com.listenmusic.provider.ProviderLoginRequiredException;
 import com.listenmusic.repository.AccountRepository;
 import org.springframework.stereotype.Service;
@@ -107,10 +110,87 @@ public class AccountCatalogService {
         ));
     }
 
+    public List<CloudTrack> loadCloudTracks(String provider) {
+        AccountContext context = accountContext(provider);
+        return accountCall(() -> context.provider().loadAccountCloudTracks(
+            context.account().providerUserId(), context.credential()
+        ));
+    }
+
+    public CloudTrack uploadCloudTrack(String provider, CloudUpload upload) {
+        if (upload == null || upload.bytes() == null || upload.bytes().length == 0) {
+            throw new IllegalArgumentException("请选择非空音频文件");
+        }
+        AccountContext context = accountContext(provider);
+        return accountCall(() -> context.provider().uploadAccountCloudTrack(
+            context.account().providerUserId(), context.credential(), upload
+        ));
+    }
+
+    public Optional<LyricData> loadCloudLyrics(String provider, String trackId) {
+        if (trackId == null || trackId.isBlank()) {
+            throw new IllegalArgumentException("云盘歌曲 ID 不能为空");
+        }
+        AccountContext context = accountContext(provider);
+        return accountCall(() -> context.provider().loadAccountCloudLyrics(
+            context.account().providerUserId(), trackId, context.credential()
+        ));
+    }
+
+    public void scrobble(
+        String provider,
+        String trackId,
+        String title,
+        String artist,
+        long listenedSeconds,
+        long totalSeconds
+    ) {
+        if (trackId == null || trackId.isBlank()) {
+            throw new IllegalArgumentException("歌曲 ID 不能为空");
+        }
+        String providerKey = provider == null ? "" : provider.trim().toLowerCase();
+        if (providerKey.isBlank() || !trackId.startsWith(providerKey + ":")) {
+            throw new IllegalArgumentException("歌曲来源与账号音乐源不一致");
+        }
+        if (listenedSeconds < 30) {
+            throw new IllegalArgumentException("有效播放时长不能少于 30 秒");
+        }
+        if (totalSeconds <= 0) {
+            throw new IllegalArgumentException("歌曲总时长必须大于 0");
+        }
+        AccountContext context = accountContext(provider);
+        accountCall(() -> {
+            context.provider().scrobble(
+                context.account().providerUserId(),
+                trackId,
+                title,
+                artist,
+                listenedSeconds,
+                totalSeconds,
+                context.credential()
+            );
+            return null;
+        });
+    }
+
     public List<HomepagePlaylist> loadPlaylists(String provider) {
         AccountContext context = accountContext(provider);
         return accountCall(() -> context.provider().loadAccountPlaylists(
             context.account().providerUserId(), context.credential()
+        ));
+    }
+
+    public HomepagePlaylist createPlaylist(String provider, String name) {
+        String normalizedName = name == null ? "" : name.trim();
+        if (normalizedName.isBlank()) {
+            throw new IllegalArgumentException("歌单名不能为空");
+        }
+        if (normalizedName.length() > 40) {
+            throw new IllegalArgumentException("歌单名不能超过 40 个字符");
+        }
+        AccountContext context = accountContext(provider);
+        return accountCall(() -> context.provider().createAccountPlaylist(
+            context.account().providerUserId(), normalizedName, context.credential()
         ));
     }
 
@@ -155,6 +235,47 @@ public class AccountCatalogService {
             );
             return null;
         });
+    }
+
+    public boolean isArtistSubscribed(String provider, String artistId) {
+        if (artistId == null || artistId.isBlank()) {
+            throw new IllegalArgumentException("歌手 ID 不能为空");
+        }
+        AccountContext context = accountContext(provider);
+        return accountCall(() -> context.provider().isArtistSubscribed(
+            context.account().providerUserId(), artistId, context.credential()
+        ));
+    }
+
+    public void setArtistSubscribed(String provider, String artistId, boolean subscribed) {
+        if (artistId == null || artistId.isBlank()) {
+            throw new IllegalArgumentException("歌手 ID 不能为空");
+        }
+        AccountContext context = accountContext(provider);
+        accountCall(() -> {
+            context.provider().setArtistSubscription(
+                context.account().providerUserId(), artistId, subscribed, context.credential()
+            );
+            return null;
+        });
+    }
+
+    public boolean setPlaylistSubscribed(String provider, String playlistId, boolean subscribed) {
+        if (playlistId == null || playlistId.isBlank()) {
+            throw new IllegalArgumentException("歌单 ID 不能为空");
+        }
+        AccountContext context = accountContext(provider);
+        try {
+            accountCall(() -> {
+                context.provider().setPlaylistSubscription(
+                    context.account().providerUserId(), playlistId, subscribed, context.credential()
+                );
+                return null;
+            });
+            return true;
+        } catch (IllegalStateException ex) {
+            return false;
+        }
     }
 
     private AccountContext accountContext(String providerId) {

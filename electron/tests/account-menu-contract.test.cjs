@@ -30,12 +30,13 @@ assert.match(accountMenu, /account-menu-backdrop/);
 
 assert.match(api, /export function loadCurrentAccounts/);
 assert.match(api, /\/auth\/accounts/);
-assert.match(api, /export function loginQqWithCookie/);
-assert.match(api, /\/auth\/qq\/cookie/);
+assert.match(api, /export function startQrLogin/);
+assert.match(api, /export function pollQrLogin/);
 assert.match(authPanel, /provider: "netease" \| "qq"/);
-assert.match(authPanel, /QQ 音乐 Cookie/);
-assert.match(authPanel, /type="password"/);
-assert.match(authPanel, /loginQqWithCookie/);
+assert.match(authPanel, /请使用手机 QQ 扫码/);
+assert.match(authPanel, /startQrLogin/);
+assert.match(authPanel, /pollQrLogin/);
+assert.doesNotMatch(authPanel, /QQ 音乐 Cookie/);
 assert.doesNotMatch(authPanel, /localStorage/);
 
 assert.match(app, /\.shell-control-button:hover/);

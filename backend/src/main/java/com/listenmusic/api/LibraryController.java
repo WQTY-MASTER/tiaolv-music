@@ -3,12 +3,17 @@ package com.listenmusic.api;
 import com.listenmusic.domain.Playlist;
 import com.listenmusic.domain.Track;
 import com.listenmusic.service.LibraryService;
+import com.listenmusic.service.LibraryMetadataReparseResult;
+import com.listenmusic.service.LibraryScanResult;
+import com.listenmusic.service.LocalLyricsMatchResult;
+import com.listenmusic.service.LocalLyricsMatchService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -32,14 +37,26 @@ import java.util.Map;
 @RequestMapping("/library")
 public class LibraryController {
     private final LibraryService libraryService;
+    private final LocalLyricsMatchService localLyricsMatchService;
 
-    public LibraryController(LibraryService libraryService) {
+    public LibraryController(LibraryService libraryService, LocalLyricsMatchService localLyricsMatchService) {
         this.libraryService = libraryService;
+        this.localLyricsMatchService = localLyricsMatchService;
     }
 
     @GetMapping("/tracks")
     public List<Track> tracks() {
         return libraryService.listTracks();
+    }
+
+    @GetMapping("/roots")
+    public List<String> roots() {
+        return libraryService.listLibraryRoots();
+    }
+
+    @GetMapping("/ignored")
+    public List<String> ignoredFiles() {
+        return libraryService.listIgnoredLocalFiles();
     }
 
     @DeleteMapping("/tracks")
@@ -89,12 +106,50 @@ public class LibraryController {
     }
 
     @PostMapping("/scan")
-    public List<Track> scan(@RequestBody Map<String, String> body) {
-        String directory = body.get("directory");
-        if (directory == null || directory.isBlank()) {
-            throw new IllegalArgumentException("directory 不能为空");
+    public List<Track> scan(@RequestBody Map<String, Object> body) {
+        return libraryService.scanDirectory(
+            requireDirectory(body),
+            useFilenameMetadata(body)
+        );
+    }
+
+    @PostMapping("/scan/incremental")
+    public LibraryScanResult incrementalScan(@RequestBody Map<String, Object> body) {
+        return libraryService.incrementalScanDirectory(
+            requireDirectory(body),
+            useFilenameMetadata(body)
+        );
+    }
+
+    @PostMapping("/scan/all/incremental")
+    public LibraryScanResult incrementalScanAll(@RequestBody Map<String, Object> body) {
+        return libraryService.incrementalScanAllDirectories(useFilenameMetadata(body));
+    }
+
+    @PostMapping("/tracks/ignore")
+    public List<Track> ignoreTracks(@RequestBody Map<String, Object> body) {
+        Object value = body.get("trackIds");
+        if (!(value instanceof List<?> values)) {
+            throw new IllegalArgumentException("trackIds 必须是数组");
         }
-        return libraryService.scanDirectory(directory);
+        List<String> trackIds = values.stream()
+            .map(Object::toString)
+            .filter(id -> !id.isBlank())
+            .toList();
+        return libraryService.ignoreLocalTracks(trackIds);
+    }
+
+    @DeleteMapping("/ignored")
+    public Map<String, Object> restoreIgnoredFiles() {
+        return Map.of("restored", libraryService.restoreIgnoredLocalFiles());
+    }
+
+    @PostMapping("/metadata/reparse")
+    public LibraryMetadataReparseResult reparseMetadata(@RequestBody Map<String, Object> body) {
+        return libraryService.reparseAllMetadata(
+            requireDirectory(body),
+            useFilenameMetadata(body)
+        );
     }
 
     @GetMapping("/tracks/{id}/audio")
@@ -144,5 +199,27 @@ public class LibraryController {
         return ResponseEntity.ok()
             .contentType(MediaType.parseMediaType("text/plain;charset=UTF-8"))
             .body(track.lyrics());
+    }
+
+    @PostMapping("/tracks/{id}/lyrics/match")
+    public LocalLyricsMatchResult matchLyrics(
+        @PathVariable String id,
+        @RequestParam(defaultValue = "false") boolean saveBesideAudio
+    ) {
+        return localLyricsMatchService.match(id, saveBesideAudio);
+    }
+
+    private static String requireDirectory(Map<String, Object> body) {
+        Object value = body.get("directory");
+        String directory = value == null ? "" : value.toString().trim();
+        if (directory.isEmpty()) {
+            throw new IllegalArgumentException("directory 不能为空");
+        }
+        return directory;
+    }
+
+    private static boolean useFilenameMetadata(Map<String, Object> body) {
+        Object value = body.get("useFilenameMetadata");
+        return value == null || Boolean.parseBoolean(value.toString());
     }
 }

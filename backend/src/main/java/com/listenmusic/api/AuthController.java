@@ -33,6 +33,9 @@ public class AuthController {
 
     @GetMapping("/{provider}/qr/start")
     public QrLoginStartResponse startQr(@PathVariable String provider) {
+        if ("qq".equalsIgnoreCase(provider)) {
+            return accountAuthService.startQqQrLogin();
+        }
         return authService.startQrLogin(provider);
     }
 
@@ -41,6 +44,9 @@ public class AuthController {
         @PathVariable String provider,
         @RequestParam String sessionId
     ) {
+        if ("qq".equalsIgnoreCase(provider)) {
+            return accountAuthService.checkQqQrLogin(sessionId);
+        }
         if (!"netease".equalsIgnoreCase(provider)) {
             throw new IllegalArgumentException("暂不支持的平台: " + provider);
         }

@@ -1,6 +1,9 @@
 package com.listenmusic.provider;
 
+import com.listenmusic.auth.CredentialStore;
+import com.listenmusic.auth.ProviderAccount;
 import com.listenmusic.domain.Track;
+import com.listenmusic.repository.AccountRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
@@ -8,11 +11,17 @@ import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.queryParam;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
 import static org.hamcrest.Matchers.startsWith;
@@ -20,12 +29,51 @@ import static org.hamcrest.Matchers.startsWith;
 class NetEaseProviderTest {
     private MockRestServiceServer server;
     private NetEaseProvider provider;
+    private AccountRepository accountRepository;
+    private CredentialStore credentialStore;
 
     @BeforeEach
     void setUp() {
         RestClient.Builder builder = RestClient.builder();
         server = MockRestServiceServer.bindTo(builder).build();
-        provider = new NetEaseProvider(builder, "http://api.test");
+        accountRepository = mock(AccountRepository.class);
+        credentialStore = mock(CredentialStore.class);
+        provider = new NetEaseProvider(builder, "http://api.test", accountRepository, credentialStore);
+    }
+
+    @Test
+    void resolvesAudioUsingTheActiveAccountCookie() {
+        String cookie = "MUSIC_U=secret";
+        ProviderAccount account = new ProviderAccount(
+            "netease", "100", "测试账号", "", "credential-ref", true, "now", "now"
+        );
+        when(accountRepository.findActive("netease")).thenReturn(Optional.of(account));
+        when(credentialStore.get("credential-ref")).thenReturn(Optional.of(cookie));
+        server.expect(requestTo(startsWith("http://api.test/song/url/v1?id=123&level=standard")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Cookie", cookie))
+            .andRespond(withSuccess("{\"data\":[{\"url\":\"https://audio.test/song.mp3\"}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertEquals("https://audio.test/song.mp3", provider.resolveAudioUrl("netease:123").orElseThrow());
+        server.verify();
+    }
+
+    @Test
+    void clearsTheActiveAccountWhenThePlaybackCookieHasExpired() {
+        String cookie = "MUSIC_U=expired";
+        ProviderAccount account = new ProviderAccount(
+            "netease", "100", "测试账号", "", "credential-ref", true, "now", "now"
+        );
+        when(accountRepository.findActive("netease")).thenReturn(Optional.of(account));
+        when(credentialStore.get("credential-ref")).thenReturn(Optional.of(cookie));
+        server.expect(requestTo(startsWith("http://api.test/song/url/v1?id=123&level=standard")))
+            .andExpect(header("Cookie", cookie))
+            .andRespond(withSuccess("{\"code\":301,\"message\":\"需要登录\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertThrows(ProviderLoginRequiredException.class, () -> provider.resolveAudioUrl("netease:123"));
+        verify(credentialStore).delete("credential-ref");
+        verify(accountRepository).deactivateProvider("netease");
+        server.verify();
     }
 
     @Test
@@ -59,6 +107,28 @@ class NetEaseProviderTest {
         assertEquals(269L, track.duration());
         assertEquals("netease", track.source());
         assertEquals("https://img.test/cover.jpg", track.coverUrl());
+        server.verify();
+    }
+
+    @Test
+    void updatesPlaylistSubscriptionWithTheAccountCookie() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/playlist/subscribe")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(queryParam("id", "778899"))
+            .andExpect(queryParam("t", "1"))
+            .andExpect(header("Cookie", cookie))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/subscribe")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(queryParam("id", "778899"))
+            .andExpect(queryParam("t", "2"))
+            .andExpect(header("Cookie", cookie))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.setPlaylistSubscription("100", "netease:778899", true, cookie);
+        provider.setPlaylistSubscription("100", "netease:778899", false, cookie);
+
         server.verify();
     }
 
@@ -105,6 +175,38 @@ class NetEaseProviderTest {
     }
 
     @Test
+    void loadsArtistProfileSongsAndAlbums() {
+        server.expect(requestTo("http://api.test/artist/detail?id=6452"))
+            .andRespond(withSuccess("""
+                {"data":{"artist":{"id":6452,"name":"周杰伦","cover":"https://img.test/artist.jpg","briefDesc":"音乐人","albumSize":39,"musicSize":512}}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/artist/top/song?id=6452"))
+            .andRespond(withSuccess("""
+                {"data":{"songs":[{"id":123,"name":"晴天","dt":269000,"ar":[{"name":"周杰伦"}],"al":{"name":"叶惠美","picUrl":"https://img.test/cover.jpg"}}]}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/artist/songs?id=6452&private_cloud=true&work_type=1&order=hot&offset=0&limit=50"))
+            .andRespond(withSuccess("""
+                {"songs":[],"total":0}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/artist/album?id=6452&limit=30&offset=0"))
+            .andRespond(withSuccess("""
+                {"hotAlbums":[{"id":1,"name":"叶惠美","picUrl":"https://img.test/album.jpg","size":11,"publishTime":1059609600000}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        ArtistDetail detail = provider.loadArtistDetail("netease:6452");
+        List<Track> topSongs = provider.loadArtistTopSongs("netease:6452");
+        ArtistSongPage songs = provider.loadArtistSongs("netease:6452", "hot", 50, 0);
+        List<ArtistAlbum> albums = provider.loadArtistAlbums("netease:6452", 30, 0);
+
+        assertEquals("周杰伦", detail.name());
+        assertEquals("https://img.test/artist.jpg", detail.avatarUrl());
+        assertEquals("netease:123", topSongs.getFirst().id());
+        assertEquals(0, songs.total());
+        assertEquals("netease:1", albums.getFirst().id());
+        server.verify();
+    }
+
+    @Test
     void resolvesPlaybackUrlFromTheNeteaseApi() {
         server.expect(requestTo("http://api.test/song/url/v1?id=123&level=standard"))
             .andExpect(method(HttpMethod.GET))
@@ -116,6 +218,51 @@ class NetEaseProviderTest {
             "https://audio.test/song.mp3",
             provider.resolveAudioUrl("netease:123").orElseThrow()
         );
+        server.verify();
+    }
+
+    @Test
+    void reportsListeningScrobbleWithTheAccountCredential() {
+        server.expect(requestTo(startsWith("http://api.test/scrobble/v1?")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(queryParam("id", "518066366"))
+            .andExpect(queryParam("time", "30"))
+            .andExpect(queryParam("total", "291"))
+            .andExpect(queryParam("name", "%E6%B5%8B%E8%AF%95%E6%AD%8C%E6%9B%B2"))
+            .andExpect(queryParam("artist", "%E6%B5%8B%E8%AF%95%E6%AD%8C%E6%89%8B"))
+            .andExpect(queryParam("source", "list"))
+            .andExpect(header("Cookie", "MUSIC_U=secret"))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.scrobble(
+            "100", "netease:518066366", "测试歌曲", "测试歌手", 30, 291, "MUSIC_U=secret"
+        );
+
+        server.verify();
+    }
+
+    @Test
+    void classifiesAndCreatesAccountPlaylists() {
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret&limit=100&offset=0&timestamp=")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":[
+                  {"id":1,"name":"我创建的","trackCount":2,"creator":{"userId":100},"subscribed":false},
+                  {"id":2,"name":"我收藏的","trackCount":3,"creator":{"userId":200},"subscribed":true}
+                ]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/create?name=%E6%96%B0%E6%AD%8C%E5%8D%95&privacy=0&type=NORMAL&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=secret"))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":{"id":3,"name":"新歌单","trackCount":0}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        List<HomepagePlaylist> playlists = provider.loadAccountPlaylists("100", "MUSIC_U=secret");
+        HomepagePlaylist created = provider.createAccountPlaylist("100", "新歌单", "MUSIC_U=secret");
+
+        assertTrue(playlists.get(0).createdByAccount());
+        assertTrue(!playlists.get(1).createdByAccount());
+        assertEquals("netease:3", created.id());
+        assertTrue(created.createdByAccount());
         server.verify();
     }
 
@@ -415,6 +562,22 @@ class NetEaseProviderTest {
     }
 
     @Test
+    void returnsOnlyFollowedArtistsInTheFollowingList() {
+        server.expect(requestTo(startsWith("http://api.test/artist/sublist?limit=30&offset=0&total=true&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=secret"))
+            .andRespond(withSuccess("""
+                {"code":200,"data":[{"id":61908633,"name":"鸣潮先约电台","picUrl":"https://img.test/artist.jpg","albumSize":84,"musicSize":946}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        List<AccountSocialUser> following = provider.loadAccountFollowing("100", "MUSIC_U=secret", 30, 0);
+
+        assertEquals(1, following.size());
+        assertEquals("鸣潮先约电台", following.get(0).nickname());
+        assertEquals("artist", following.get(0).type());
+        server.verify();
+    }
+
+    @Test
     void loadsPrivateRadarFromPersonalizedNewSongs() {
         server.expect(requestTo(startsWith("http://api.test/personalized/newsong?limit=30&timestamp=")))
             .andExpect(header("Cookie", "MUSIC_U=secret"))
@@ -507,6 +670,51 @@ class NetEaseProviderTest {
 
         provider.setAccountFavorite("100", "netease:123", true, "MUSIC_U=secret");
 
+        server.verify();
+    }
+
+    @Test
+    void loadsOfficialCloudTracksAndEnrichesThemWithSongUrls() {
+        server.expect(requestTo(startsWith("http://api.test/user/cloud?limit=200&offset=0&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=secret"))
+            .andRespond(withSuccess("""
+                {"code":200,"hasMore":false,"data":[{
+                  "songId":123,"fileName":"夜曲.flac","fileSize":2048,"addTime":1789952400000,
+                  "simpleSong":{"id":123,"name":"夜曲","dt":235000,
+                    "ar":[{"name":"周杰伦"}],
+                    "al":{"name":"十一月的萧邦","picUrl":"https://img.test/123.jpg"}}
+                }]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/song/url?id=123&br=999000&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=secret"))
+            .andRespond(withSuccess("""
+                {"code":200,"data":[{"id":123,"url":"https://audio.test/123.flac"}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        List<CloudTrack> tracks = provider.loadAccountCloudTracks("100", "MUSIC_U=secret");
+
+        assertEquals(1, tracks.size());
+        assertEquals("netease:123", tracks.getFirst().id());
+        assertEquals("夜曲.flac", tracks.getFirst().originalFileName());
+        assertEquals("FLAC", tracks.getFirst().format());
+        assertEquals("https://audio.test/123.flac", tracks.getFirst().audioUrl());
+        server.verify();
+    }
+
+    @Test
+    void loadsEmbeddedLyricsForAnAccountCloudTrack() {
+        server.expect(requestTo(startsWith("http://api.test/cloud/lyric/get?uid=100&sid=83142432955&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=secret"))
+            .andRespond(withSuccess("""
+                {"code":200,"lrc":{"lyric":"[00:01.00]致以无名的抗争者"}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        LyricData lyrics = provider.loadAccountCloudLyrics(
+            "100", "netease:83142432955", "MUSIC_U=secret"
+        ).orElseThrow();
+
+        assertEquals("[00:01.00]致以无名的抗争者", lyrics.lyrics());
+        assertEquals("netease-cloud", lyrics.source());
         server.verify();
     }
 }

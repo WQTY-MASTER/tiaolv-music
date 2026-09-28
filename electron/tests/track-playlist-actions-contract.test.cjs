@@ -6,8 +6,8 @@ const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
 const aggregateService = fs.readFileSync(path.join(root, "src/renderer/src/services/aggregatePlaylists.ts"), "utf8");
 
-assert.match(app, />加入歌单<\/button>/, "歌曲右键菜单应有普通歌单入口");
-assert.match(app, />加入聚合歌单<\/button>/, "歌曲右键菜单应有聚合歌单入口");
+assert.match(app, /添加到歌单/, "歌曲右键菜单应有普通歌单入口");
+assert.match(app, /添加到聚合歌单/, "歌曲右键菜单应有聚合歌单入口");
 assert.match(app, /openTrackPlaylistPicker\(localTrackContextMenu\.track, 'regular'\)/, "普通歌单入口应打开普通目标选择器");
 assert.match(app, /openTrackPlaylistPicker\(localTrackContextMenu\.track, 'aggregate'\)/, "聚合歌单入口应打开聚合目标选择器");
 assert.match(app, /class="track-playlist-picker-dialog"/, "加入歌曲时应显示目标歌单选择弹窗");

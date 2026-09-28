@@ -6,8 +6,12 @@ import com.listenmusic.provider.HomepageData;
 import com.listenmusic.provider.DailyRecommendationsLoginRequiredException;
 import com.listenmusic.provider.PlaylistCategoryData;
 import com.listenmusic.provider.PlaylistDiscoveryPage;
+import com.listenmusic.provider.ProviderLoginRequiredException;
 import com.listenmusic.provider.SearchResultPage;
 import com.listenmusic.provider.SearchType;
+import com.listenmusic.provider.ArtistAlbum;
+import com.listenmusic.provider.ArtistDetail;
+import com.listenmusic.provider.ArtistSongPage;
 import com.listenmusic.service.OnlineCatalogService;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -72,27 +76,31 @@ public class CatalogController {
     }
 
     @GetMapping("/playlist-categories")
-    public PlaylistCategoryData playlistCategories() {
-        return onlineCatalogService.loadPlaylistCategories();
+    public PlaylistCategoryData playlistCategories(
+        @RequestParam(defaultValue = "netease") String provider
+    ) {
+        return onlineCatalogService.loadPlaylistCategories(provider);
     }
 
     @GetMapping("/playlists")
     public PlaylistDiscoveryPage playlists(
+        @RequestParam(defaultValue = "netease") String provider,
         @RequestParam(defaultValue = "全部") String category,
         @RequestParam(defaultValue = "hot") String order,
         @RequestParam(defaultValue = "30") int limit,
         @RequestParam(defaultValue = "0") int offset
     ) {
-        return onlineCatalogService.loadPlaylists(category, order, limit, offset);
+        return onlineCatalogService.loadPlaylists(provider, category, order, limit, offset);
     }
 
     @GetMapping("/playlists/high-quality")
     public PlaylistDiscoveryPage highQualityPlaylists(
+        @RequestParam(defaultValue = "netease") String provider,
         @RequestParam(defaultValue = "全部") String category,
         @RequestParam(defaultValue = "30") int limit,
         @RequestParam(required = false) String before
     ) {
-        return onlineCatalogService.loadHighQualityPlaylists(category, limit, before);
+        return onlineCatalogService.loadHighQualityPlaylists(provider, category, limit, before);
     }
 
     @PostMapping("/playlists/{id}/play-count")
@@ -120,13 +128,17 @@ public class CatalogController {
 
     @GetMapping("/tracks/{id}/audio")
     public ResponseEntity<Void> audio(@PathVariable String id) {
-        return onlineCatalogService.resolveAudioUrl(id)
-            .map(url -> {
-                HttpHeaders headers = new HttpHeaders();
-                headers.setLocation(URI.create(url));
-                return new ResponseEntity<Void>(headers, HttpStatus.FOUND);
-            })
-            .orElseGet(() -> ResponseEntity.<Void>notFound().build());
+        try {
+            return onlineCatalogService.resolveAudioUrl(id)
+                .map(url -> {
+                    HttpHeaders headers = new HttpHeaders();
+                    headers.setLocation(URI.create(url));
+                    return new ResponseEntity<Void>(headers, HttpStatus.FOUND);
+                })
+                .orElseGet(() -> ResponseEntity.<Void>notFound().build());
+        } catch (ProviderLoginRequiredException exception) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
     }
 
     @GetMapping("/tracks/{id}/lyrics")
@@ -139,6 +151,43 @@ public class CatalogController {
     @GetMapping("/playlists/{id}")
     public List<Track> playlist(@PathVariable String id) {
         return onlineCatalogService.loadPlaylist(id);
+    }
+
+    @GetMapping("/artist/detail")
+    public ArtistDetail artistDetail(
+        @RequestParam String id,
+        @RequestParam(defaultValue = "netease") String provider
+    ) {
+        return onlineCatalogService.loadArtistDetail(id, provider);
+    }
+
+    @GetMapping("/artist/top-songs")
+    public List<Track> artistTopSongs(
+        @RequestParam String id,
+        @RequestParam(defaultValue = "netease") String provider
+    ) {
+        return onlineCatalogService.loadArtistTopSongs(id, provider);
+    }
+
+    @GetMapping("/artist/songs")
+    public ArtistSongPage artistSongs(
+        @RequestParam String id,
+        @RequestParam(defaultValue = "netease") String provider,
+        @RequestParam(defaultValue = "hot") String order,
+        @RequestParam(defaultValue = "50") int limit,
+        @RequestParam(defaultValue = "0") int offset
+    ) {
+        return onlineCatalogService.loadArtistSongs(id, provider, order, limit, offset);
+    }
+
+    @GetMapping("/artist/albums")
+    public List<ArtistAlbum> artistAlbums(
+        @RequestParam String id,
+        @RequestParam(defaultValue = "netease") String provider,
+        @RequestParam(defaultValue = "30") int limit,
+        @RequestParam(defaultValue = "0") int offset
+    ) {
+        return onlineCatalogService.loadArtistAlbums(id, provider, limit, offset);
     }
 
     @GetMapping("/tracks/{id}/cover")

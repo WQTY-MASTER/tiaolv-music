@@ -1,11 +1,43 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, screen, type Rectangle } from "electron";
+import {
+  app,
+  BrowserWindow,
+  clipboard,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  screen,
+  Tray,
+  type MenuItemConstructorOptions,
+  type Rectangle
+} from "electron";
 import path from "node:path";
+import { mkdirSync, openAsBlob } from "node:fs";
+import { writeFile } from "node:fs/promises";
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
 const MINI_WINDOW_WIDTH = 412;
 const MINI_WINDOW_HEIGHT = 184;
 const MINI_QUEUE_WINDOW_HEIGHT = 396;
 const WINDOW_ANIMATION_DURATION = 220;
+const BACKEND_BASE_URL = "http://127.0.0.1:17890";
+const TASKBAR_ICON_DATA = {
+  previous: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAClSURBVDhP7ZOxDcJADEUzAiUjMEJKxmAExqCjpWMcSkahZIP3kaW76M5xIqeigNecZH89yV+6YfjzVSTt/axD0lHSxV6/a5F0AB6W9buOIjPCoKQdcC2ZxdzEmhA4Aa9GFuY6ImFzXkReGJwXkRMCt+C8iJzQXmAEnk7gyQvrDDgDbyeqbBeWufV5d7JZbsaSsBLUEOYmsj+lqWFduIVSw+jnP8gHHomavl1TT/UAAAAASUVORK5CYII=",
+  play: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACqSURBVDhP7ZMhDsJAEEUrkUgkEolEIjkGx0DiOAJHqURyBI6AROLeI5t0EzLQdtsqEp7a7Px5yWZmq+pPQl3Gu0moR+CqrmJtFEmoCjyb8yxmBpGFGeAGbGKumCjMAGd1HvO9tAkTwB3YxZ5OuoQZoFYXsfcrJcIE8FDXsf+DEuGgp/cJgdOg4bQJR69PFDYLfoi5Yt6FwGXyF2z+cprgPtZGoW6Ld+zneAEWLHgrYCmGvwAAAABJRU5ErkJggg==",
+  pause: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAABTSURBVDhP7dOxDcAgFENBRmM0NncaUvpEQ5WcRPW+S8b4XZFkJln7zdNW7ePXOm2VRmqVRmqVRmqVRmqVRmqVRmqVRmqVRmqVRmqVRmqV/qvaRz2N4X6sr17uAAAAAABJRU5ErkJggg==",
+  next: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACbSURBVDhP7ZOxDYMwEEUZISUlY6TMOIyQki1gg4ySERiDDd6PDtmSfYII46TjNZZ9X0++s9w0F39BUufPqpA0AG/g7mspkh6WtdXXMkJoBRgl3XzGSHKDr2WkwiBdgP5LrkwY8WOoFkbiGH4mNMIYprCtEwJz8sLGOaHdStJzI1cuBF6S2p3ccWFsz2eMIqFvb4uSn2LBrL2LXT6ZEpu/+lZ0IgAAAABJRU5ErkJggg=="
+} as const;
+type SystemTrayPlayMode = "shuffle" | "sequence" | "single" | "loop";
+
+interface SystemTrayState {
+  title: string;
+  artist: string;
+  isPlaying: boolean;
+  liked: boolean;
+  playMode: SystemTrayPlayMode;
+  desktopLyricsVisible: boolean;
+  miniPlayerVisible: boolean;
+}
 
 interface MiniWindowState {
   windowId: number;
@@ -22,8 +54,192 @@ interface MiniWindowState {
 let mainWindow: BrowserWindow | null = null;
 let miniWindowState: MiniWindowState | null = null;
 let windowAnimationId = 0;
+let taskbarThumbnailButtonsEnabled = false;
+let taskbarPlaybackIsPlaying = false;
+let systemTray: Tray | null = null;
+let systemTrayEnabled = false;
+let systemTrayState: SystemTrayState = {
+  title: "调律音乐",
+  artist: "暂无歌曲",
+  isPlaying: false,
+  liked: false,
+  playMode: "sequence",
+  desktopLyricsVisible: false,
+  miniPlayerVisible: false
+};
 
+const chromiumCachePath = path.join(
+  process.env.LOCALAPPDATA || app.getPath("temp"),
+  "tiaolv-music-electron",
+  "ChromiumCache"
+);
+mkdirSync(chromiumCachePath, { recursive: true });
+app.setName("调律音乐");
+app.commandLine.appendSwitch("disk-cache-dir", chromiumCachePath);
 app.disableHardwareAcceleration();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+function taskbarIcon(name: keyof typeof TASKBAR_ICON_DATA) {
+  return nativeImage.createFromDataURL(`data:image/png;base64,${TASKBAR_ICON_DATA[name]}`);
+}
+
+function applicationIconPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "app-icon.png")
+    : path.join(__dirname, "../../resources/app-icon.png");
+}
+
+function applicationIcon() {
+  return nativeImage.createFromPath(applicationIconPath());
+}
+
+function applyTaskbarThumbnailButtons(win: BrowserWindow) {
+  if (process.platform !== "win32" || win.isDestroyed()) return false;
+  if (!taskbarThumbnailButtonsEnabled) {
+    return win.setThumbarButtons([]);
+  }
+
+  return win.setThumbarButtons([
+    {
+      tooltip: "上一首",
+      icon: taskbarIcon("previous"),
+      click: () => {
+        if (!win.isDestroyed()) win.webContents.send("taskbar-media-action", "previous");
+      }
+    },
+    {
+      tooltip: taskbarPlaybackIsPlaying ? "暂停" : "播放",
+      icon: taskbarIcon(taskbarPlaybackIsPlaying ? "pause" : "play"),
+      click: () => {
+        if (!win.isDestroyed()) win.webContents.send("taskbar-media-action", "toggle");
+      }
+    },
+    {
+      tooltip: "下一首",
+      icon: taskbarIcon("next"),
+      click: () => {
+        if (!win.isDestroyed()) win.webContents.send("taskbar-media-action", "next");
+      }
+    }
+  ]);
+}
+
+function showMainWindow() {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function trayTrackLabel(state: SystemTrayState) {
+  const text = [state.title, state.artist].filter(Boolean).join(" - ");
+  return text.length > 32 ? `${text.slice(0, 31)}…` : text;
+}
+
+function buildSystemTrayMenu(state: SystemTrayState) {
+  const template: MenuItemConstructorOptions[] = [
+    { label: trayTrackLabel(state), click: () => showMainWindow() },
+    { type: "separator" },
+    {
+      label: "上一首",
+      click: () => mainWindow?.webContents.send("tray-media-action", "previous")
+    },
+    {
+      label: state.isPlaying ? "暂停" : "播放",
+      click: () => mainWindow?.webContents.send("tray-media-action", "toggle")
+    },
+    {
+      label: "下一首",
+      click: () => mainWindow?.webContents.send("tray-media-action", "next")
+    },
+    {
+      label: state.liked ? "取消喜欢" : "喜欢",
+      click: () => mainWindow?.webContents.send("tray-media-action", "favorite")
+    },
+    { type: "separator" },
+    {
+      label: "播放模式",
+      submenu: [
+        {
+          label: "顺序播放",
+          type: "radio",
+          checked: state.playMode === "sequence",
+          click: () => mainWindow?.webContents.send("tray-media-action", "play-mode:sequence")
+        },
+        {
+          label: "列表循环",
+          type: "radio",
+          checked: state.playMode === "loop",
+          click: () => mainWindow?.webContents.send("tray-media-action", "play-mode:loop")
+        },
+        {
+          label: "单曲循环",
+          type: "radio",
+          checked: state.playMode === "single",
+          click: () => mainWindow?.webContents.send("tray-media-action", "play-mode:single")
+        },
+        {
+          label: "随机播放",
+          type: "radio",
+          checked: state.playMode === "shuffle",
+          click: () => mainWindow?.webContents.send("tray-media-action", "play-mode:shuffle")
+        }
+      ]
+    },
+    { type: "separator" },
+    {
+      label: "桌面歌词",
+      type: "checkbox",
+      checked: state.desktopLyricsVisible,
+      click: () => mainWindow?.webContents.send("tray-media-action", "desktop-lyrics")
+    },
+    { label: "锁定桌面歌词", enabled: false },
+    { type: "separator" },
+    {
+      label: "迷你播放器",
+      type: "checkbox",
+      checked: state.miniPlayerVisible,
+      click: () => mainWindow?.webContents.send("tray-media-action", "mini-player")
+    },
+    { type: "separator" },
+    {
+      label: "设置",
+      click: () => {
+        showMainWindow();
+        mainWindow?.webContents.send("tray-media-action", "settings");
+      }
+    },
+    { type: "separator" },
+    { label: "退出", click: () => app.quit() }
+  ];
+  return Menu.buildFromTemplate(template);
+}
+
+function refreshSystemTray() {
+  if (!systemTray || systemTray.isDestroyed()) return;
+  systemTray.setContextMenu(buildSystemTrayMenu(systemTrayState));
+  systemTray.setToolTip(trayTrackLabel(systemTrayState));
+}
+
+function setSystemTrayEnabled(enabled: boolean) {
+  systemTrayEnabled = enabled;
+  if (process.platform !== "win32") return false;
+  if (!enabled) {
+    systemTray?.destroy();
+    systemTray = null;
+    return true;
+  }
+  if (!systemTray || systemTray.isDestroyed()) {
+    const icon = applicationIcon().resize({ width: 20, height: 20 });
+    systemTray = new Tray(icon);
+    systemTray.on("click", () => {
+      showMainWindow();
+    });
+  }
+  refreshSystemTray();
+  return true;
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -31,6 +247,8 @@ function createWindow() {
     height: 860,
     minWidth: 1100,
     minHeight: 720,
+    title: "调律音乐",
+    icon: applicationIconPath(),
     backgroundColor: "#111111",
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
@@ -196,6 +414,59 @@ ipcMain.handle("select-playlist-cover-image", async () => {
   return result.canceled ? null : result.filePaths[0] ?? null;
 });
 
+ipcMain.handle("upload-cloud-audio", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options = {
+    properties: ["openFile", "multiSelections"] as Array<"openFile" | "multiSelections">,
+    filters: [
+      { name: "Audio", extensions: ["mp3", "flac", "wav", "ogg", "opus", "m4a"] }
+    ]
+  };
+  const result = win
+    ? await dialog.showOpenDialog(win, options)
+    : await dialog.showOpenDialog(options);
+  if (result.canceled || result.filePaths.length === 0) return [];
+
+  const uploaded: unknown[] = [];
+  for (const filePath of result.filePaths) {
+    const form = new FormData();
+    form.append("file", await openAsBlob(filePath), path.basename(filePath));
+    const response = await fetch(
+      `${BACKEND_BASE_URL}/account/netease/cloud/tracks`,
+      { method: "POST", body: form }
+    );
+    if (!response.ok) {
+      const detail = await response.json().catch(() => null) as { message?: string } | null;
+      throw new Error(detail?.message || `上传失败: ${response.status}`);
+    }
+    uploaded.push(await response.json());
+  }
+  return uploaded;
+});
+
+ipcMain.handle("download-cloud-track", async (event, audioUrl: string, fileName: string) => {
+  let source: URL;
+  try {
+    source = new URL(audioUrl);
+  } catch {
+    throw new Error("网易云未返回可用的歌曲下载地址");
+  }
+  if (!['http:', 'https:'].includes(source.protocol)) {
+    throw new Error("歌曲下载地址不安全");
+  }
+  const win = BrowserWindow.fromWebContents(event.sender);
+  const options = { defaultPath: path.basename(fileName || "cloud-audio") };
+  const result = win
+    ? await dialog.showSaveDialog(win, options)
+    : await dialog.showSaveDialog(options);
+  if (result.canceled || !result.filePath) return false;
+
+  const response = await fetch(source);
+  if (!response.ok) throw new Error(`下载失败: ${response.status}`);
+  await writeFile(result.filePath, new Uint8Array(await response.arrayBuffer()));
+  return true;
+});
+
 ipcMain.handle("enter-mini-mode", async (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   return win ? enterMiniMode(win) : false;
@@ -211,23 +482,68 @@ ipcMain.handle("set-mini-queue-expanded", async (event, expanded: boolean) => {
   return win ? setMiniQueueExpanded(win, Boolean(expanded)) : false;
 });
 
+ipcMain.handle("set-taskbar-thumbnail-buttons", (event, enabled: boolean, isPlaying: boolean) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || process.platform !== "win32") return false;
+  taskbarThumbnailButtonsEnabled = Boolean(enabled);
+  taskbarPlaybackIsPlaying = Boolean(isPlaying);
+  return applyTaskbarThumbnailButtons(win);
+});
+
+ipcMain.handle("update-taskbar-playback-state", (event, isPlaying: boolean) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win || process.platform !== "win32") return false;
+  taskbarPlaybackIsPlaying = Boolean(isPlaying);
+  return taskbarThumbnailButtonsEnabled ? applyTaskbarThumbnailButtons(win) : true;
+});
+
+ipcMain.handle("set-system-tray-enabled", (_event, enabled: boolean, state: SystemTrayState) => {
+  systemTrayState = { ...systemTrayState, ...state };
+  return setSystemTrayEnabled(Boolean(enabled));
+});
+
+ipcMain.handle("update-system-tray-state", (_event, state: SystemTrayState) => {
+  systemTrayState = { ...systemTrayState, ...state };
+  if (systemTrayEnabled) refreshSystemTray();
+  return systemTrayEnabled;
+});
+
 ipcMain.handle("copy-text", (_event, value: string) => {
   clipboard.writeText(String(value));
   return true;
 });
 
-app.whenReady().then(() => {
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
+if (!hasSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   });
-});
+
+  app.whenReady().then(() => {
+    if (process.platform === "win32") {
+      app.setAppUserModelId("com.tiaolvmusic.desktop");
+    }
+    createWindow();
+
+    app.on("activate", () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createWindow();
+      }
+    });
+  });
+}
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  systemTray?.destroy();
+  systemTray = null;
 });

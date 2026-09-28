@@ -33,7 +33,11 @@ assert.match(app, /persistPlaybackState/, "暂停、拖动或设置变化后应�
 assert.match(app, /stateSaveChain/, "播放状态保存应串行执行，避免旧进度覆盖新状态");
 assert.match(app, /persistPlaybackQueue/, "播放队列发生变化后应保存");
 assert.match(app, /class="queue-panel"/, "播放队列按钮应打开真实队列面板");
-assert.match(app, /<section\s+v-if="showSongDetail"[\s\S]*?<PlayerBar[\s\S]*?@like="toggleLiked"/, "歌词详情页的全局播放栏应复用收藏逻辑");
+assert.match(
+  app,
+  /<PlayerBar[\s\S]*?:class="\{ 'song-detail-player-bar': showSongDetail \}"[\s\S]*?@like="toggleLiked"/,
+  "歌词详情页的全局播放栏应复用收藏逻辑"
+);
 assert.match(playerBar, /<PlayerControlButton\s+kind="like"\s+:liked="props\.track\.liked"/, "播放栏应把收藏状态传给共享按钮");
 assert.match(playerControlButton, /:class="\{ liked: props\.liked, compact: props\.compact \}"/, "共享收藏按钮应根据收藏状态切换样式");
 assert.match(playerControlButton, /:aria-pressed="props\.liked"/, "共享收藏按钮应暴露收藏状态");

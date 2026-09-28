@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 import {
   ArrowRight,
   BarChart3,
@@ -7,11 +7,11 @@ import {
   ChevronDown,
   ChevronUp,
   Cloud,
-  Heart,
   History,
   LoaderCircle,
   Music2,
   Play,
+  Plus,
   UserRound
 } from "lucide-vue-next";
 import type { AccountProfileView, AccountView } from "../services/api";
@@ -21,13 +21,26 @@ interface LibraryTrack {
   coverUrl?: string;
 }
 
+interface LibraryPlaylist {
+  id: string;
+  title: string;
+  subtitle: string;
+  count: number;
+  imageUrl?: string;
+  createdByAccount?: boolean;
+}
+
+type PlaylistTab = "all" | "created" | "collected";
+
 const props = defineProps<{
   account: AccountView | null;
   accounts: AccountView[];
   profile: AccountProfileView | null;
+  followingCount: number;
   favoriteTracks: LibraryTrack[];
   recentTracks: LibraryTrack[];
   rankingTracks: LibraryTrack[];
+  playlists: LibraryPlaylist[];
   provider: "netease" | "qq";
   loading: boolean;
   error: string;
@@ -41,15 +54,55 @@ const emit = defineEmits<{
   (event: "play-favorites"): void;
   (event: "open-recent"): void;
   (event: "open-ranking"): void;
+  (event: "open-playlist", playlist: LibraryPlaylist): void;
+  (event: "create-playlist"): void;
   (event: "login"): void;
 }>();
 
 const sourceMenuOpen = ref(false);
+const playlistTab = ref<PlaylistTab>("all");
+const playlistOrder = ref<string[]>([]);
+const draggedPlaylistId = ref<string | null>(null);
 const providerName = computed(() => props.provider === "qq" ? "QQ 音乐" : "网易云音乐");
 const displayName = computed(() => props.profile?.nickname || props.account?.nickname || "未登录用户");
 const avatarUrl = computed(() => props.profile?.avatarUrl || props.account?.avatarUrl || "");
 const signature = computed(() => props.profile?.signature?.trim() || "暂无个人简介");
 const favoriteCover = computed(() => props.favoriteTracks.find((track) => track.coverUrl)?.coverUrl || "");
+const playlistOrderStorageKey = computed(() => (
+  `listenmusic:account-playlist-order:${props.provider}:${props.account?.userId || "anonymous"}`
+));
+const createdPlaylistCount = computed(() => props.playlists.filter((playlist) => playlist.createdByAccount).length);
+const collectedPlaylistCount = computed(() => props.playlists.length - createdPlaylistCount.value);
+const orderedPlaylists = computed(() => {
+  const positions = new Map(playlistOrder.value.map((id, index) => [id, index]));
+  return [...props.playlists].sort((left, right) => (
+    (positions.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (positions.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+  ));
+});
+const visiblePlaylists = computed(() => orderedPlaylists.value.filter((playlist) => {
+  if (playlistTab.value === "created") return playlist.createdByAccount;
+  if (playlistTab.value === "collected") return !playlist.createdByAccount;
+  return true;
+}));
+
+watch(
+  [playlistOrderStorageKey, () => props.playlists.map((playlist) => playlist.id).join("|")],
+  () => {
+    let storedOrder: string[] = [];
+    try {
+      const parsed = JSON.parse(localStorage.getItem(playlistOrderStorageKey.value) || "[]");
+      storedOrder = Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : [];
+    } catch {
+      storedOrder = [];
+    }
+    const availableIds = new Set(props.playlists.map((playlist) => playlist.id));
+    playlistOrder.value = [
+      ...storedOrder.filter((id) => availableIds.has(id)),
+      ...props.playlists.map((playlist) => playlist.id).filter((id) => !storedOrder.includes(id))
+    ];
+  },
+  { immediate: true }
+);
 
 function openOrLogin(action: "favorites" | "recent" | "ranking") {
   if (!props.account) {
@@ -68,6 +121,47 @@ function chooseProvider(provider: "netease" | "qq") {
 
 function providerAvailable(provider: "netease" | "qq") {
   return props.accounts.some((account) => account.provider === provider);
+}
+
+function persistPlaylistOrder() {
+  localStorage.setItem(playlistOrderStorageKey.value, JSON.stringify(playlistOrder.value));
+}
+
+function reorderPlaylist(sourceId: string, targetId: string, placeAfter = false) {
+  if (sourceId === targetId) return;
+  const nextOrder = [...playlistOrder.value];
+  const sourceIndex = nextOrder.indexOf(sourceId);
+  if (sourceIndex < 0) return;
+  nextOrder.splice(sourceIndex, 1);
+  const targetIndex = nextOrder.indexOf(targetId);
+  if (targetIndex < 0) return;
+  nextOrder.splice(targetIndex + (placeAfter ? 1 : 0), 0, sourceId);
+  playlistOrder.value = nextOrder;
+  persistPlaylistOrder();
+}
+
+function handlePlaylistKeydown(event: KeyboardEvent, playlist: LibraryPlaylist) {
+  if (!event.altKey) return;
+  const direction = event.key === "ArrowUp" ? -1 : event.key === "ArrowDown" ? 1 : 0;
+  if (!direction) return;
+  const visibleIndex = visiblePlaylists.value.findIndex((item) => item.id === playlist.id);
+  const target = visiblePlaylists.value[visibleIndex + direction];
+  if (!target) return;
+  event.preventDefault();
+  reorderPlaylist(playlist.id, target.id, direction > 0);
+}
+
+function finishPlaylistDrop(targetId: string) {
+  if (draggedPlaylistId.value) reorderPlaylist(draggedPlaylistId.value, targetId);
+  draggedPlaylistId.value = null;
+}
+
+function openPlaylist(playlist: LibraryPlaylist) {
+  emit('open-playlist', playlist);
+}
+
+function requestCreatePlaylist() {
+  if (props.provider === "netease") emit('create-playlist');
 }
 </script>
 
@@ -100,7 +194,7 @@ function providerAvailable(provider: "netease" | "qq") {
             <p>{{ signature }}</p>
             <div class="profile-stats" aria-label="账户统计">
               <button type="button" @click.stop="emit('open-following')">
-                <strong>{{ profile?.follows ?? 0 }}</strong> 关注
+                <strong>{{ followingCount }}</strong> 关注
               </button>
               <button type="button" @click.stop="emit('open-followers')">
                 <strong>{{ profile?.followers ?? 0 }}</strong> 粉丝
@@ -153,8 +247,8 @@ function providerAvailable(provider: "netease" | "qq") {
         @keydown.enter="openOrLogin('favorites')"
       >
         <div class="favorites-copy">
-          <span class="favorites-badge">我的收藏</span>
-          <h2>我收藏的歌曲</h2>
+          <span class="favorites-badge">我的喜欢</span>
+          <h2>我喜欢的歌曲</h2>
           <p>{{ favoriteTracks.length }} 首歌曲</p>
           <button
             class="favorites-play"
@@ -169,7 +263,6 @@ function providerAvailable(provider: "netease" | "qq") {
         <div class="favorites-art" aria-hidden="true">
           <img v-if="favoriteCover" :src="favoriteCover" alt="" />
           <span v-else></span>
-          <Heart :size="48" fill="white" stroke="white" />
         </div>
       </article>
 
@@ -202,6 +295,66 @@ function providerAvailable(provider: "netease" | "qq") {
         </div>
         <span class="shortcut-arrow" aria-hidden="true"><ArrowRight :size="24" :stroke-width="1.8" /></span>
       </article>
+
+      <section class="account-playlists-section" aria-labelledby="account-playlists-title">
+        <header class="account-playlists-header">
+          <div>
+            <h2 id="account-playlists-title">我的歌单</h2>
+            <p>{{ playlists.length }} 个在线列表</p>
+          </div>
+          <button
+            class="create-playlist-button"
+            type="button"
+            :disabled="provider !== 'netease'"
+            :title="provider === 'netease' ? '创建歌单' : '当前音源暂不支持创建歌单'"
+            @click="requestCreatePlaylist"
+          >
+            <Plus :size="17" :stroke-width="2" aria-hidden="true" />
+            创建歌单
+          </button>
+        </header>
+
+        <div class="playlist-tabs" role="tablist" aria-label="歌单分类">
+          <button type="button" role="tab" :aria-selected="playlistTab === 'all'" :class="{ active: playlistTab === 'all' }" @click="playlistTab = 'all'">
+            全部 <span>{{ playlists.length }}</span>
+          </button>
+          <button type="button" role="tab" :aria-selected="playlistTab === 'created'" :class="{ active: playlistTab === 'created' }" @click="playlistTab = 'created'">
+            我创建的 <span>{{ createdPlaylistCount }}</span>
+          </button>
+          <button type="button" role="tab" :aria-selected="playlistTab === 'collected'" :class="{ active: playlistTab === 'collected' }" @click="playlistTab = 'collected'">
+            我收藏的 <span>{{ collectedPlaylistCount }}</span>
+          </button>
+        </div>
+
+        <p class="playlist-sort-hint">长按歌单拖动排序；置顶优先。键盘可用 Alt + ↑ / ↓ 调整。</p>
+
+        <div v-if="visiblePlaylists.length" class="account-playlist-list">
+          <button
+            v-for="playlist in visiblePlaylists"
+            :key="playlist.id"
+            class="account-playlist-item"
+            type="button"
+            draggable="true"
+            @click="openPlaylist(playlist)"
+            @keydown="handlePlaylistKeydown($event, playlist)"
+            @dragstart="draggedPlaylistId = playlist.id"
+            @dragend="draggedPlaylistId = null"
+            @dragover.prevent
+            @drop.prevent="finishPlaylistDrop(playlist.id)"
+          >
+            <span class="account-playlist-cover">
+              <img v-if="playlist.imageUrl" :src="playlist.imageUrl" alt="" />
+              <Music2 v-else :size="24" :stroke-width="1.6" aria-hidden="true" />
+            </span>
+            <span class="account-playlist-copy">
+              <strong>{{ playlist.title }}</strong>
+              <small>{{ playlist.count }} 首 · {{ playlist.createdByAccount ? '创建' : '收藏' }}</small>
+            </span>
+            <ArrowRight class="account-playlist-arrow" :size="21" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </div>
+        <p v-else class="account-playlists-empty">当前分类暂无歌单</p>
+      </section>
     </div>
   </section>
 </template>
@@ -264,7 +417,7 @@ function providerAvailable(provider: "netease" | "qq") {
 .streaming-library-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  grid-template-rows: minmax(236px, 1.35fr) minmax(152px, 0.85fr);
+  grid-template-rows: minmax(236px, 1.35fr) minmax(152px, 0.85fr) auto;
   gap: 30px;
   width: 100%;
 }
@@ -348,8 +501,8 @@ function providerAvailable(provider: "netease" | "qq") {
 }
 
 .profile-copy > span {
-  color: rgba(78, 99, 130, .78);
-  font-size: 12px;
+  color: #66758d;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -364,9 +517,16 @@ function providerAvailable(provider: "netease" | "qq") {
 
 .profile-copy h2 {
   overflow: hidden;
-  font-size: 24px;
+  color: #2d2721;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+  font-size: 26px;
+  font-weight: 900;
+  line-height: 1.18;
   text-overflow: ellipsis;
+  text-shadow: none;
   white-space: nowrap;
+  -webkit-text-stroke: 0 transparent;
+  filter: none;
 }
 
 .profile-copy p,
@@ -375,6 +535,11 @@ function providerAvailable(provider: "netease" | "qq") {
   margin: 7px 0 0;
   color: rgba(91, 103, 123, .72);
   font-size: 13px;
+}
+
+.profile-copy p {
+  color: #c18a3d;
+  font-weight: 650;
 }
 
 .profile-stats {
@@ -386,13 +551,14 @@ function providerAvailable(provider: "netease" | "qq") {
 .profile-stats button {
   min-width: 74px;
   padding: 9px 13px;
-  border: 1px solid rgba(234, 216, 207, .7);
+  border: 1px solid rgba(225, 199, 186, .82);
   border-radius: 8px;
-  color: rgba(112, 84, 73, .82);
-  background: rgba(255, 249, 246, 0.68);
+  color: #72584d;
+  background: rgba(255, 246, 241, .9);
   text-align: center;
   font: inherit;
   font-size: 12px;
+  font-weight: 650;
   cursor: pointer;
   transition: transform 180ms ease-out, border-color 180ms ease-out, background 180ms ease-out;
 }
@@ -407,8 +573,9 @@ function providerAvailable(provider: "netease" | "qq") {
 
 .profile-stats strong {
   margin-right: 4px;
-  color: #3a312d;
+  color: #2f2926;
   font-size: 14px;
+  font-weight: 800;
 }
 
 .library-source-picker {
@@ -571,16 +738,10 @@ function providerAvailable(provider: "netease" | "qq") {
   height: 140px;
   place-items: center;
   overflow: hidden;
-  border-radius: 8px;
+  border: 2px solid rgba(255, 255, 255, .94);
+  border-radius: 12px;
   background: linear-gradient(145deg, #69737f, #202833);
-  box-shadow: 0 13px 28px rgba(44, 55, 76, 0.12);
-}
-
-.favorites-art::after {
-  position: absolute;
-  inset: 0;
-  background: rgba(12, 22, 35, 0.24);
-  content: "";
+  box-shadow: 0 14px 30px rgba(63, 82, 112, .2), 0 2px 8px rgba(63, 82, 112, .1);
 }
 
 .favorites-art img,
@@ -590,12 +751,6 @@ function providerAvailable(provider: "netease" | "qq") {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-
-.favorites-art > svg {
-  position: relative;
-  z-index: 1;
-  filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.14));
 }
 
 .shortcut-card {
@@ -655,6 +810,197 @@ function providerAvailable(provider: "netease" | "qq") {
   transform: translateX(3px);
 }
 
+.account-playlists-section {
+  grid-column: 1 / -1;
+  min-width: 0;
+  margin-top: 12px;
+  padding: 4px 2px 8px;
+}
+
+.account-playlists-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.account-playlists-header h2 {
+  margin: 0;
+  color: #202634;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
+.account-playlists-header p {
+  margin: 7px 0 0;
+  color: #78869d;
+  font-size: 13px;
+}
+
+.create-playlist-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 42px;
+  gap: 7px;
+  padding: 0 16px;
+  border: 1px solid #b9ccff;
+  border-radius: 8px;
+  color: #4069df;
+  background: #edf2ff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+  transition: color 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.create-playlist-button:hover:not(:disabled),
+.create-playlist-button:focus-visible {
+  border-color: #8eacff;
+  color: #2859e2;
+  background: #e5edff;
+  outline: none;
+}
+
+.create-playlist-button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.playlist-tabs {
+  display: inline-flex;
+  margin-top: 24px;
+  padding: 5px;
+  border: 1px solid rgba(224, 228, 236, .9);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .8);
+}
+
+.playlist-tabs button {
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  color: #69768d;
+  background: transparent;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.playlist-tabs button.active {
+  color: #3566e6;
+  background: #e7edff;
+  font-weight: 750;
+}
+
+.playlist-tabs span {
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+.playlist-sort-hint {
+  margin: 20px 0 14px;
+  color: #718096;
+  font-size: 12px;
+}
+
+.account-playlist-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.account-playlist-item {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 24px;
+  align-items: center;
+  min-height: 104px;
+  gap: 16px;
+  padding: 13px 16px;
+  border: 1px solid rgba(235, 237, 242, .9);
+  border-radius: 8px;
+  color: inherit;
+  background: rgba(255, 255, 255, .88);
+  box-shadow: 0 10px 26px rgba(40, 49, 67, .045);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.account-playlist-item:hover,
+.account-playlist-item:focus-visible {
+  transform: translateY(-2px);
+  border-color: #dce4f5;
+  box-shadow: 0 13px 30px rgba(40, 49, 67, .075);
+  outline: none;
+}
+
+.account-playlist-cover {
+  display: grid;
+  width: 76px;
+  height: 76px;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, .95);
+  border-radius: 8px;
+  color: #8493aa;
+  background: #edf1f7;
+  box-shadow: 0 5px 14px rgba(67, 82, 107, .12);
+}
+
+.account-playlist-cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.account-playlist-copy {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.account-playlist-copy strong,
+.account-playlist-copy small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-playlist-copy strong {
+  color: #242b3a;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.account-playlist-copy small {
+  color: #78859a;
+  font-size: 12px;
+}
+
+.account-playlist-arrow {
+  color: #a6b1c2;
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+.account-playlist-item:hover .account-playlist-arrow {
+  color: #4d70d5;
+  transform: translateX(2px);
+}
+
+.account-playlists-empty {
+  display: grid;
+  min-height: 112px;
+  margin: 0;
+  place-items: center;
+  border-top: 1px solid #e7eaf0;
+  color: #919cac;
+  font-size: 13px;
+}
+
 .library-source-menu-enter-active,
 .library-source-menu-leave-active {
   transition: opacity 180ms ease, transform 180ms ease;
@@ -683,6 +1029,14 @@ function providerAvailable(provider: "netease" | "qq") {
 
   .streaming-library-card {
     min-height: 160px;
+  }
+
+  .account-playlists-section {
+    grid-column: auto;
+  }
+
+  .account-playlist-list {
+    grid-template-columns: 1fr;
   }
 
   .profile-card,
@@ -730,6 +1084,33 @@ function providerAvailable(provider: "netease" | "qq") {
     flex-basis: 104px;
     width: 104px;
     height: 104px;
+  }
+
+  .account-playlists-header {
+    align-items: flex-start;
+  }
+
+  .account-playlists-header h2 {
+    font-size: 21px;
+  }
+
+  .playlist-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+  }
+
+  .playlist-tabs button {
+    padding: 0 6px;
+  }
+
+  .account-playlist-item {
+    grid-template-columns: 64px minmax(0, 1fr) 20px;
+  }
+
+  .account-playlist-cover {
+    width: 64px;
+    height: 64px;
   }
 }
 

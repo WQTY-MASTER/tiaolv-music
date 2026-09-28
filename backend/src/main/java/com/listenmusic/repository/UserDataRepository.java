@@ -16,8 +16,8 @@ import java.util.Optional;
 public class UserDataRepository {
     private static final String TRACK_COLUMNS = """
         t.track_id as id, t.title, t.artist, t.album, t.duration, t.source,
-        t.file_path, t.url, t.cover_url, t.lyrics, t.lyrics_source,
-        t.cover_mime_type, t.created_at, t.updated_at
+        t.file_path, t.url, t.cover_url, t.lyrics, t.lyrics_source, t.lyrics_format,
+        t.cover_mime_type, t.created_at, t.updated_at, t.meta_source
         """;
 
     private final JdbcTemplate jdbcTemplate;
@@ -146,8 +146,9 @@ public class UserDataRepository {
         jdbcTemplate.update("""
             insert into user_tracks(
               profile_id, track_id, title, artist, album, duration, source, file_path,
-              url, cover_url, lyrics, lyrics_source, cover_mime_type, created_at, updated_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              url, cover_url, lyrics, lyrics_source, lyrics_format, cover_mime_type, created_at, updated_at,
+              meta_source
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(profile_id, track_id) do update set
               title = excluded.title,
               artist = excluded.artist,
@@ -159,7 +160,9 @@ public class UserDataRepository {
               cover_url = coalesce(excluded.cover_url, user_tracks.cover_url),
               lyrics = coalesce(excluded.lyrics, user_tracks.lyrics),
               lyrics_source = coalesce(excluded.lyrics_source, user_tracks.lyrics_source),
+              lyrics_format = coalesce(excluded.lyrics_format, user_tracks.lyrics_format),
               cover_mime_type = coalesce(excluded.cover_mime_type, user_tracks.cover_mime_type),
+              meta_source = coalesce(excluded.meta_source, user_tracks.meta_source),
               updated_at = excluded.updated_at
             """,
             profileId,
@@ -174,9 +177,11 @@ public class UserDataRepository {
             track.coverUrl(),
             track.lyrics(),
             track.lyricsSource(),
+            track.lyricsFormat(),
             track.coverMimeType(),
             track.createdAt() == null ? now : track.createdAt(),
-            now
+            now,
+            track.metaSource()
         );
     }
 
@@ -193,9 +198,11 @@ public class UserDataRepository {
             rs.getString("cover_url"),
             rs.getString("lyrics"),
             rs.getString("lyrics_source"),
+            rs.getString("lyrics_format"),
             rs.getString("cover_mime_type"),
             rs.getString("created_at"),
-            rs.getString("updated_at")
+            rs.getString("updated_at"),
+            rs.getString("meta_source")
         );
     }
 }

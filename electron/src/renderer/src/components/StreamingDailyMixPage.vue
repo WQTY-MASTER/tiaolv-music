@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   ArrowLeftRight,
   ArrowUpAZ,
+  Bookmark,
   Heart,
   LocateFixed,
   Pause,
@@ -30,7 +31,11 @@ interface DailyTrack {
   secondary: string;
   mark: string;
   liked: boolean;
+  history: boolean;
   coverUrl?: string;
+  source?: string;
+  filePath?: string;
+  audioUrl?: string;
 }
 
 const props = defineProps<{
@@ -41,7 +46,14 @@ const props = defineProps<{
   title?: string;
   label?: string;
   coverUrl?: string;
+  coverMark?: string;
   refreshing?: boolean;
+  reorderable?: boolean;
+  sourceOptions?: ReadonlyArray<{ value: string; label: string }>;
+  sourceValue?: string;
+  collectable?: boolean;
+  collected?: boolean;
+  collectionPending?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -50,9 +62,12 @@ const emit = defineEmits<{
   "play-all": [trackIds: string[]];
   "play-random": [trackIds: string[]];
   "toggle-favorite": [trackId: string];
+  "toggle-collection": [];
   reorder: [draggedTrackId: string, targetTrackId: string];
   refresh: [];
   "search-global": [keyword: string];
+  "source-change": [source: string];
+  "context-menu": [payload: { track: DailyTrack; event: MouseEvent }];
 }>();
 
 const globalKeyword = ref("");
@@ -105,11 +120,17 @@ function submitGlobalSearch() {
   if (query) emit("search-global", query);
 }
 
+function emitSourceChange(event: Event) {
+  emit("source-change", (event.target as HTMLSelectElement).value);
+}
+
 function startTrackDrag(trackId: string) {
+  if (props.reorderable === false) return;
   draggedTrackId.value = trackId;
 }
 
 function dropTrack(targetTrackId: string) {
+  if (props.reorderable === false) return;
   if (draggedTrackId.value && draggedTrackId.value !== targetTrackId) {
     emit("reorder", draggedTrackId.value, targetTrackId);
   }
@@ -141,7 +162,7 @@ onBeforeUnmount(() => {
         </span>
         <span class="daily-detail-cover-media" :style="{ background: `linear-gradient(135deg, ${tracks[0]?.primary || '#dbe5ef'}, ${tracks[0]?.secondary || '#8294aa'})` }">
           <img v-if="heroCoverUrl" :src="resolveBackendUrl(heroCoverUrl)" :alt="`${title || '每日推荐'}封面`" />
-          <span v-else aria-hidden="true">日</span>
+          <span v-else aria-hidden="true">{{ coverMark || "日" }}</span>
         </span>
       </div>
       <div class="daily-detail-copy">
@@ -164,14 +185,33 @@ onBeforeUnmount(() => {
             <ArrowLeftRight :size="16" :stroke-width="1.8" aria-hidden="true" />
             随机
           </button>
+          <button
+            v-if="collectable"
+            type="button"
+            class="playlist-collection-button"
+            :class="{ 'collection-active': collected }"
+            :disabled="collectionPending"
+            :title="collected ? '取消收藏歌单' : '收藏歌单'"
+            :aria-label="collected ? '取消收藏歌单' : '收藏歌单'"
+            @click="emit('toggle-collection')"
+          >
+            <Bookmark :size="16" :stroke-width="1.8" :fill="collected ? 'currentColor' : 'none'" aria-hidden="true" />
+            {{ collectionPending ? "处理中" : collected ? "已收藏" : "收藏" }}
+          </button>
         </div>
       </div>
     </div>
 
-    <div class="daily-detail-toolbar">
+    <div class="daily-detail-toolbar" :class="{ 'has-source-select': sourceOptions?.length }">
       <label class="daily-detail-filter-search">
         <Search :size="16" :stroke-width="1.7" aria-hidden="true" />
         <input v-model="playlistKeyword" type="search" placeholder="在歌单中搜索" />
+      </label>
+      <label v-if="sourceOptions?.length" class="daily-detail-source-select">
+        <span class="sr-only">选择音源</span>
+        <select :value="sourceValue" aria-label="选择音源" @change="emitSourceChange">
+          <option v-for="source in sourceOptions" :key="source.value" :value="source.value">{{ source.label }}</option>
+        </select>
       </label>
       <span class="daily-detail-count">{{ visibleTracks.length }} 首</span>
       <label class="daily-detail-sort-select">
@@ -216,12 +256,13 @@ onBeforeUnmount(() => {
           :data-track-id="track.id"
           role="row"
           tabindex="0"
-          draggable="true"
+          :draggable="reorderable !== false"
           @dragstart="startTrackDrag(track.id)"
           @dragend="draggedTrackId = ''"
           @dragover.prevent
           @drop.prevent="dropTrack(track.id)"
           @click="emit('play', track.id)"
+          @contextmenu.prevent="emit('context-menu', { track, event: $event })"
           @keydown.enter.prevent="emit('play', track.id)"
           @keydown.space.prevent="emit('play', track.id)"
         >
@@ -244,7 +285,7 @@ onBeforeUnmount(() => {
             <span><strong>{{ track.title }}</strong><small>{{ track.artist }}</small></span>
           </span>
           <span class="daily-detail-album">
-            <button type="button" :class="{ liked: track.liked }" :title="track.liked ? '取消收藏' : '收藏歌曲'" :aria-label="track.liked ? `取消收藏${track.title}` : `收藏${track.title}`" @click.stop="emit('toggle-favorite', track.id)">
+            <button type="button" :class="{ liked: track.liked }" :title="track.liked ? '取消喜欢' : '喜欢歌曲'" :aria-label="track.liked ? `取消喜欢${track.title}` : `喜欢${track.title}`" @click.stop="emit('toggle-favorite', track.id)">
               <Heart :size="16" :stroke-width="1.7" :fill="track.liked ? 'currentColor' : 'none'" aria-hidden="true" />
             </button>
             <span>{{ track.album || "未知专辑" }}</span>
@@ -285,11 +326,17 @@ onBeforeUnmount(() => {
 .daily-detail-actions button { display: inline-flex; height: 42px; min-width: 100px; align-items: center; justify-content: center; gap: 7px; border: 1px solid #d5d8dc; border-radius: 21px; padding: 0 17px; background: #fff; color: #191d25; cursor: pointer; font-size: 12px; font-weight: 800; transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease; }
 .daily-detail-actions button:not(:disabled):hover { border-color: #bfc4ca; box-shadow: 0 9px 20px rgba(29,34,43,.08); transform: translateY(-1px); }
 .daily-detail-actions button.primary { border-color: #171a20; background: #171a20; color: #fff; box-shadow: 0 12px 25px rgba(20,23,29,.19); }
+.daily-detail-actions button.collection-active { border-color: #d7d9dd; background: #eff0f2; color: #4f5661; box-shadow: inset 0 0 0 1px rgba(30,36,45,.02); }
+.daily-detail-actions button.collection-active:not(:disabled):hover { border-color: #c9ccd1; background: #e8e9ec; }
 .daily-detail-actions button:disabled { opacity: .45; cursor: default; }
 .daily-detail-toolbar { display: grid; min-height: 60px; grid-template-columns: minmax(220px, 1fr) auto auto 38px 38px 38px; align-items: center; gap: 9px; border: 1px solid #e3e4e6; border-radius: 16px; padding: 9px 15px; background: rgba(255,255,255,.94); box-shadow: 0 12px 30px rgba(31,37,47,.045); }
+.daily-detail-toolbar.has-source-select { grid-template-columns: minmax(220px, 1fr) auto auto auto 38px 38px 38px; }
 .daily-detail-filter-search { display: flex; min-width: 0; align-items: center; gap: 9px; color: #84909f; }
 .daily-detail-count { color: #687588; font-size: 11px; white-space: nowrap; }
-.daily-detail-sort-select select { height: 36px; border: 0; border-radius: 9px; padding: 0 28px 0 11px; outline: 0; background: #f7f6f3; color: #292e37; cursor: pointer; font-size: 11px; }
+.daily-detail-sort-select select { height: 36px; border: 0; border-radius: 9px; padding: 0 28px 0 11px; outline: 0; background: #f7f6f3; color: #202631; cursor: pointer; font-size: 13px; font-weight: 700; }
+.daily-detail-source-select select { height: 36px; border: 0; border-radius: 9px; padding: 0 28px 0 11px; outline: 0; background: #f7f6f3; color: #202631; cursor: pointer; font-size: 13px; font-weight: 700; }
+.daily-detail-sort-select option { background: #fff; color: #202631; font-size: 13px; font-weight: 600; }
+.daily-detail-source-select option { background: #fff; color: #202631; font-size: 13px; font-weight: 600; }
 .daily-detail-icon-button { display: grid; width: 36px; height: 36px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #6f7988; cursor: pointer; transition: background 160ms ease, color 160ms ease; }
 .daily-detail-icon-button:not(:disabled):hover { background: #f0f3f5; color: #1d6cdd; }
 .daily-detail-icon-button:disabled { color: #c7cdd3; cursor: default; }
@@ -333,6 +380,7 @@ onBeforeUnmount(() => {
   .daily-detail-hero { grid-template-columns: 132px minmax(0, 1fr); gap: 20px; }
   .daily-detail-cover { width: 132px; }
   .daily-detail-toolbar { grid-template-columns: minmax(170px, 1fr) auto auto repeat(3, 36px); }
+  .daily-detail-toolbar.has-source-select { grid-template-columns: minmax(170px, 1fr) auto auto auto repeat(3, 36px); }
   .daily-detail-table-head,.daily-detail-row { grid-template-columns: 42px minmax(180px, 1.3fr) minmax(130px, .8fr) 58px; gap: 9px; padding-inline: 12px; }
 }
 @media (max-width: 620px) {
@@ -344,7 +392,11 @@ onBeforeUnmount(() => {
   .daily-detail-stats { display: none; }
   .daily-detail-actions { margin-top: 14px; }
   .daily-detail-toolbar { grid-template-columns: minmax(0, 1fr) auto repeat(3, 34px); }
+  .daily-detail-toolbar.has-source-select { grid-template-columns: minmax(0, 1fr) auto repeat(3, 34px); }
   .daily-detail-sort-select { grid-column: 1 / 3; grid-row: 2; }
+  .daily-detail-toolbar.has-source-select .daily-detail-source-select { grid-column: 1 / 2; grid-row: 2; }
+  .daily-detail-toolbar.has-source-select .daily-detail-sort-select { grid-column: 2 / 3; grid-row: 2; }
+  .daily-detail-source-select select { width: 100%; }
   .daily-detail-sort-select select { width: 100%; }
   .daily-detail-count { justify-self: end; }
   .daily-detail-table-head,.daily-detail-row { grid-template-columns: 34px minmax(170px, 1fr) 58px; }

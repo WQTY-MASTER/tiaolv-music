@@ -31,7 +31,7 @@ public class EncryptedFileCredentialStore implements CredentialStore {
     private SecretKey installationKey;
 
     public EncryptedFileCredentialStore(
-        @Value("${listenmusic.credentials.directory:${user.home}/.listen-music/credentials}") String directory
+        @Value("${listenmusic.credentials.directory:${user.home}/.tiaolv-music/credentials}") String directory
     ) {
         this.directory = Path.of(directory).toAbsolutePath().normalize();
     }

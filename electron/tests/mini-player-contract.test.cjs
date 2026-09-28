@@ -11,10 +11,10 @@ const controlButton = fs.readFileSync(path.join(root, "src/renderer/src/componen
 assert.match(app, /import MiniPlayer from/, "应用应接入迷你悬浮播放器组件");
 assert.match(app, /const miniPlayerVisible = ref\(false\)/, "应用应维护迷你播放器显示状态");
 assert.match(app, /function openMiniPlayer\(\)\s*\{[\s\S]*miniPlayerVisible\.value\s*=\s*true[\s\S]*showSongDetail\.value\s*=\s*false/, "打开迷你播放器时应退出歌曲详情并切换到迷你模式");
-assert.match(app, /<PlayerBar[\s\S]*v-if="!shouldHidePlayerBar && !showSongDetail && !miniPlayerVisible"/, "迷你播放器显示时应隐藏普通底部播放栏");
+assert.match(app, /<PlayerBar[\s\S]*v-if="!shouldHidePlayerBar && !miniPlayerVisible"/, "迷你播放器显示时应隐藏普通底部播放栏");
 assert.match(app, /<MiniPlayer[\s\S]*v-if="miniPlayerVisible"[\s\S]*:track="currentTrack"[\s\S]*:lyric="currentLyricText"[\s\S]*:theme-style="songDetailThemeStyle"/, "迷你播放器应复用当前歌曲、同步歌词和封面主题色");
 assert.match(app, /<MiniPlayer[\s\S]*@toggle="togglePlayback"[\s\S]*@previous="previousTrack"[\s\S]*@next="nextTrack"[\s\S]*@like="toggleLiked"[\s\S]*@queue="toggleMiniQueue"[\s\S]*@close="closeMiniPlayer"/, "迷你播放器应复用主播放器点击逻辑并切换内置队列");
-assert.match(app, /showSongDetail\.value \|\| miniPlayerVisible\.value/, "迷你播放器显示时也应持续提取封面主题色");
+assert.match(app, /watch\(\s*\[currentCoverUrl,[^\]]*currentTrack\.value\.primary[^\]]*currentTrack\.value\.secondary\]/, "播放器应在当前歌曲封面或回退色变化时持续提取主题色");
 
 assert.match(miniPlayer, /class="mini-player"/, "迷你播放器应使用独立悬浮卡片");
 assert.match(miniPlayer, /position:\s*fixed/, "迷你播放器应悬浮在软件窗口内");

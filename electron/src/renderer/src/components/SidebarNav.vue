@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, type Component } from "vue";
-import { Cloud, Heart, History, LayoutGrid, Sparkles } from "lucide-vue-next";
+import { Cloud, Globe2, Heart, History, LayoutGrid, Monitor, Sparkles } from "lucide-vue-next";
 import type { AppMode } from "../services/appMode";
 import type { AccountView } from "../services/api";
 
@@ -63,6 +63,12 @@ const streamingNavigation: Array<{ id: ViewKey; label: string; icon: Component }
 ];
 
 const navigation = computed(() => props.mode === "local" ? localNavigation : streamingNavigation);
+
+function selectMode(mode: AppMode) {
+  if (mode !== props.mode) {
+    emit("toggleMode");
+  }
+}
 </script>
 
 <template>
@@ -92,17 +98,34 @@ const navigation = computed(() => props.mode === "local" ? localNavigation : str
     </nav>
 
     <div class="sidebar-footer">
-      <span class="footer-dot" aria-hidden="true"></span>
-      <span>{{ props.mode === "local" ? "本地模式" : "流媒体模式" }}</span>
-      <button
-        class="mode-switch-button"
-        type="button"
-        :title="props.mode === 'local' ? '切换到流媒体模式' : '切换到本地模式'"
-        :aria-label="props.mode === 'local' ? '切换到流媒体模式' : '切换到本地模式'"
-        @click="emit('toggleMode')"
-      >
-        {{ props.mode === "local" ? "切换到流媒体模式" : "切换到本地模式" }}
-      </button>
+      <div class="mode-segmented-control" role="radiogroup" aria-label="应用模式">
+        <button
+          class="mode-option"
+          :class="{ active: props.mode === 'local' }"
+          type="button"
+          role="radio"
+          :aria-checked="props.mode === 'local'"
+          title="切换到本地模式"
+          aria-label="切换到本地模式"
+          @click="selectMode('local')"
+        >
+          <Monitor class="mode-option-icon" :size="17" :stroke-width="1.8" aria-hidden="true" />
+          <span class="mode-option-label">本地模式</span>
+        </button>
+        <button
+          class="mode-option"
+          :class="{ active: props.mode === 'streaming' }"
+          type="button"
+          role="radio"
+          :aria-checked="props.mode === 'streaming'"
+          title="切换到流媒体模式"
+          aria-label="切换到流媒体模式"
+          @click="selectMode('streaming')"
+        >
+          <Globe2 class="mode-option-icon" :size="17" :stroke-width="1.8" aria-hidden="true" />
+          <span class="mode-option-label">流媒体模式</span>
+        </button>
+      </div>
     </div>
   </aside>
 </template>
@@ -121,6 +144,12 @@ const navigation = computed(() => props.mode === "local" ? localNavigation : str
 .streaming-sidebar .nav-item:hover { background: #eceff7; color: #111827; }
 .streaming-sidebar .nav-item.active { background: #dfe7fb; color: #111827; box-shadow: none; }
 .streaming-nav-icon { width: 20px; height: 20px; flex: 0 0 auto; }
-.sidebar-footer { display: flex; align-items: center; gap: 7px; margin-top: auto; padding: 0 10px; color: #a3a8aa; font-size: 10px; }.footer-dot { width: 6px; height: 6px; flex: 0 0 auto; border-radius: 50%; background: #20d57a; box-shadow: 0 0 0 4px rgba(32,213,122,.12); }.mode-switch-button { min-width: 0; margin-left: auto; overflow: hidden; border: 0; background: transparent; color: #8c9797; cursor: pointer; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.mode-switch-button:hover { color: #168ec6; }
-@media (max-width: 980px) { .sidebar { width: 72px; min-width: 72px; align-items: center; padding: 112px 10px 18px; }.streaming-nav-title,.nav-item>span:last-child,.sidebar-footer > span:not(.footer-dot),.mode-switch-button { display: none; }.nav-section { width: 100%; }.nav-item,.streaming-sidebar .nav-item { justify-content: center; padding: 12px 0; } }
+.sidebar-footer { width: 100%; margin-top: auto; }
+.mode-segmented-control { display: grid; width: 100%; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; border-radius: 24px; background: transparent; }
+.mode-option { display: flex; min-width: 0; height: 40px; align-items: center; justify-content: center; gap: 4px; overflow: hidden; border: 1px solid #e5e8ec; border-radius: 20px; background: #eceef2; color: #a3a8b0; cursor: pointer; font-size: 13px; font-weight: 700; line-height: 1; white-space: nowrap; transition: background 160ms ease,color 160ms ease,box-shadow 160ms ease,border-color 160ms ease; }
+.mode-option:hover:not(.active) { background: rgba(255,255,255,.56); color: #56616d; }
+.mode-option.active { border-color: #20292e; background: #20292e; color: #fff; box-shadow: 0 4px 9px rgba(31,40,45,.16); }
+.mode-option-icon { flex: 0 0 auto; color: currentColor; transition: color 160ms ease,filter 160ms ease; }
+.mode-option.active .mode-option-icon { color: #43dda0; filter: drop-shadow(0 0 4px rgba(67,221,160,.34)); }
+@media (max-width: 980px) { .sidebar { width: 72px; min-width: 72px; align-items: center; padding: 112px 10px 18px; }.streaming-nav-title,.nav-item>span:last-child,.mode-option-label { display: none; }.nav-section { width: 100%; }.nav-item,.streaming-sidebar .nav-item { justify-content: center; padding: 12px 0; }.sidebar-footer { width: 52px; }.mode-segmented-control { grid-template-columns: 1fr; border-radius: 24px; }.mode-option { width: 44px; height: 40px; border-radius: 20px; } }
 </style>

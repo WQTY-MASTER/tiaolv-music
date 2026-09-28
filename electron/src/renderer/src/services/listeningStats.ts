@@ -1,4 +1,5 @@
-const STORAGE_KEY = "tingting.localListeningStats";
+const STORAGE_KEY = "tiaolv-music.localListeningStats";
+const LEGACY_STORAGE_KEY = "tingting.localListeningStats";
 
 export interface TrackListeningStat {
   trackId: string;
@@ -31,7 +32,7 @@ export function createEmptyListeningStats(): ListeningStatsState {
 }
 
 export function readListeningStats(storage: StorageLike | undefined = browserStorage()): ListeningStatsState {
-  const raw = storage?.getItem(STORAGE_KEY);
+  const raw = storage?.getItem(STORAGE_KEY) ?? storage?.getItem(LEGACY_STORAGE_KEY);
   if (!raw) {
     return createEmptyListeningStats();
   }

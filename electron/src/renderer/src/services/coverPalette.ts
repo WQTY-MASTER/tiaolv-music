@@ -3,11 +3,14 @@ export interface CoverPalette {
   pageEnd: string;
   playerStart: string;
   playerEnd: string;
+  accentPrimary: string;
+  accentSecondary: string;
 }
 
 type Rgb = [number, number, number];
 
 const SAFE_LIGHT_COLOR = "#f4f6f8";
+const SAFE_ACCENT_COLOR = "#68369a";
 
 function parseHexColor(color: string): Rgb | null {
   const match = /^#([0-9a-f]{6})$/i.exec(color.trim());
@@ -24,6 +27,69 @@ function toHex([red, green, blue]: Rgb) {
 
 function colorDistance(left: Rgb, right: Rgb) {
   return Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2]);
+}
+
+function rgbToHsl([red, green, blue]: Rgb): [number, number, number] {
+  const [r, g, b] = [red, green, blue].map((channel) => channel / 255);
+  const maximum = Math.max(r, g, b);
+  const minimum = Math.min(r, g, b);
+  const lightness = (maximum + minimum) / 2;
+  if (maximum === minimum) return [0, 0, lightness];
+
+  const delta = maximum - minimum;
+  const saturation = lightness > 0.5
+    ? delta / (2 - maximum - minimum)
+    : delta / (maximum + minimum);
+  let hue = maximum === r
+    ? (g - b) / delta + (g < b ? 6 : 0)
+    : maximum === g
+      ? (b - r) / delta + 2
+      : (r - g) / delta + 4;
+  hue /= 6;
+  return [hue, saturation, lightness];
+}
+
+function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {
+  if (saturation === 0) {
+    return [lightness * 255, lightness * 255, lightness * 255];
+  }
+
+  const upper = lightness < 0.5
+    ? lightness * (1 + saturation)
+    : lightness + saturation - lightness * saturation;
+  const lower = 2 * lightness - upper;
+  const channel = (offset: number) => {
+    let value = hue + offset;
+    if (value < 0) value += 1;
+    if (value > 1) value -= 1;
+    if (value < 1 / 6) return lower + (upper - lower) * 6 * value;
+    if (value < 1 / 2) return upper;
+    if (value < 2 / 3) return lower + (upper - lower) * (2 / 3 - value) * 6;
+    return lower;
+  };
+  return [channel(1 / 3) * 255, channel(0) * 255, channel(-1 / 3) * 255];
+}
+
+function relativeLuminance([red, green, blue]: Rgb) {
+  const [linearRed, linearGreen, linearBlue] = [red, green, blue].map((channel) => {
+    const value = channel / 255;
+    return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return linearRed * 0.2126 + linearGreen * 0.7152 + linearBlue * 0.0722;
+}
+
+export function ensureReadableAccent(color: string, minimumContrast = 4.5) {
+  const parsed = parseHexColor(color) ?? parseHexColor(SAFE_ACCENT_COLOR)!;
+  const [hue, saturation, initialLightness] = rgbToHsl(parsed);
+  let adjusted = parsed;
+  let lightness = initialLightness;
+
+  while (1.05 / (relativeLuminance(adjusted) + 0.05) < minimumContrast) {
+    lightness = Math.max(0, lightness - 0.02);
+    adjusted = hslToRgb(hue, saturation, lightness);
+  }
+
+  return toHex(adjusted);
 }
 
 export function mixHexWithWhite(color: string, whiteAmount: number) {
@@ -65,8 +131,13 @@ export function selectRepresentativeColors(pixels: Uint8ClampedArray): [string, 
 
   if (!colors.length) return ["#8ea9b5", "#c4979a"];
 
-  const primary = colors[0].rgb;
-  const secondary = colors.slice(1).sort((left, right) => (
+  const chromaticColors = colors.filter(({ count, rgb }) => (
+    Math.max(...rgb) - Math.min(...rgb) >= 24
+    && count >= colors[0].count * 0.08
+  ));
+  const primaryColor = chromaticColors[0] ?? colors[0];
+  const primary = primaryColor.rgb;
+  const secondary = colors.filter((color) => color !== primaryColor).sort((left, right) => (
     colorDistance(right.rgb, primary) * Math.sqrt(right.count)
     - colorDistance(left.rgb, primary) * Math.sqrt(left.count)
   ))[0]?.rgb ?? [primary[2], primary[0], primary[1]] as Rgb;
@@ -79,7 +150,9 @@ export function createSoftCoverPalette(primary: string, secondary: string): Cove
     pageStart: mixHexWithWhite(primary, 0.8),
     pageEnd: mixHexWithWhite(secondary, 0.86),
     playerStart: mixHexWithWhite(primary, 0.9),
-    playerEnd: mixHexWithWhite(secondary, 0.82)
+    playerEnd: mixHexWithWhite(secondary, 0.82),
+    accentPrimary: ensureReadableAccent(primary),
+    accentSecondary: ensureReadableAccent(secondary)
   };
 }
 

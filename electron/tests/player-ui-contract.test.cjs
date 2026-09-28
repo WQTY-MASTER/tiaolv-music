@@ -30,10 +30,11 @@ assert.match(playerBar, /transport-icon-next/, "播放器下一首按钮应使�
 assert.match(sidebarNav, /id:\s*"library"[\s\S]{0,80}label:\s*"所有歌曲"/, "左侧导航应提供所有歌曲入口");
 
 assert.match(app, /showSongDetail/, "应用应支持全屏歌曲详情页");
+assert.match(app, /function openSongDetail\(\)[\s\S]*?streamingSourceMenuVisible\.value = false;[\s\S]*?showSongDetail\.value = true;/, "进入歌曲详情页时应关闭音源菜单浮层");
 assert.match(app, /<div\s+v-if="!showSongDetail"\s+class="shell-controls"/, "歌曲详情页打开时应隐藏菜单和设置按钮");
-assert.doesNotMatch(app, /class="topbar"|floatingTopbarVisible|handleMainScroll/, "已废弃的普通页面悬浮顶栏应删除");
-assert.match(app, /<PlayerBar\s+v-if="!shouldHidePlayerBar && !showSongDetail && !miniPlayerVisible"/, "歌曲详情页或迷你播放器打开时不应继续渲染外层播放栏");
-assert.match(app, /<section\s+v-if="showSongDetail"[\s\S]*<PlayerBar[\s\S]*:sidebar-collapsed="true"[\s\S]*@expand="closeSongDetail"/, "歌曲详情页应复用全局底部播放栏并支持返回");
+assert.doesNotMatch(app, /class="topbar"|floatingTopbarVisible/, "已废弃的普通页面悬浮顶栏应删除");
+assert.match(app, /<PlayerBar\s+v-if="!shouldHidePlayerBar && !miniPlayerVisible"/, "普通页面与歌曲详情页应持续复用同一个播放栏实例");
+assert.equal((app.match(/<PlayerBar\b/g) ?? []).length, 1, "应用中只应渲染一个全局播放栏，避免进入详情页时重新挂载闪烁");
 assert.doesNotMatch(app, /<footer class="song-detail-player"/, "歌曲详情页不应保留旧版独立播放控件");
 assert.match(coverPalette, /extractCoverPalette/, "歌曲详情页应从真实封面提取环境色");
 assert.match(app, /songDetailThemeStyle/, "歌曲详情页应生成共享的环境色 CSS 变量");
@@ -41,8 +42,12 @@ assert.match(app, /songDetailPaletteRequestId/, "快速切歌时应防止过期�
 assert.doesNotMatch(app, /const requestId\s*=\s*\+\+songDetailPaletteRequestId;\s*songDetailPalette\.value\s*=\s*createSoftCoverPalette/, "新封面取色期间不应提前重置上一首歌曲的环境色");
 assert.match(app, /const fallbackPalette\s*=\s*createSoftCoverPalette[\s\S]*if\s*\(!coverUrl\)\s*\{[\s\S]*songDetailPalette\.value\s*=\s*fallbackPalette/, "封面不可用时应平滑回退默认主题色");
 assert.match(app, /const extractedPalette\s*=\s*await extractCoverPalette[\s\S]*requestId\s*!==\s*songDetailPaletteRequestId[\s\S]*songDetailPalette\.value\s*=\s*extractedPalette\s*\?\?\s*fallbackPalette/, "新封面取色完成前应保留旧色，成功或失败后再切换主题");
+assert.doesNotMatch(app, /if\s*\(!themeVisible\)\s*return/, "底部播放栏取色不应依赖详情页或迷你播放器是否打开");
+assert.match(app, /"--player-accent":\s*songDetailPalette\.value\.accentPrimary[\s\S]*"--player-accent-hover":\s*songDetailPalette\.value\.accentSecondary/, "封面主色与辅助色应作为播放器主题变量下发");
+assert.match(app, /<PlayerBar\s+v-if="!shouldHidePlayerBar && !miniPlayerVisible"[\s\S]*?:style="songDetailThemeStyle"/, "全局底部播放栏应接收当前封面主题色");
 assert.match(app, /<section\s+v-if="showSongDetail"[^>]*:style="songDetailThemeStyle"/, "歌曲详情背景应绑定封面环境色");
-assert.match(app, /class="song-detail-player-bar"[\s\S]*?ambient[\s\S]*?:style="songDetailThemeStyle"/, "详情页底部播放栏应共享封面环境色");
+assert.match(app, /:class="\{ 'song-detail-player-bar': showSongDetail \}"/, "进入详情页时应只提升同一个播放栏的层级");
+assert.match(app, /\.player-bar\.song-detail-player-bar\s*\{[^}]*z-index:\s*70/, "详情页中的全局播放栏应以更高优先级显示在详情背景上方");
 assert.match(app, /\.song-detail\s*\{[^}]*linear-gradient\([^}]*--detail-ambient-start[^}]*--detail-ambient-end/, "歌曲详情页应使用浅淡环境色渐变");
 assert.match(app, /\.song-detail\s*\{[^}]*background-color:\s*#fff/, "歌曲详情渐变下方应有不透明白色底层，不能透出下层页面内容");
 assert.match(app, /desktopLyricsPreview/, "应用应支持桌面歌词预览");
@@ -101,6 +106,8 @@ assert.match(app, /song-detail-header button:first-child\s*\{[^}]*transform:\s*n
 assert.match(app, /assets\/icons\/back\.svg/, "歌曲详情页左上角应使用本地返回图标");
 assert.match(app, /song-detail-back-icon/, "歌曲详情页左上角应使用独立的返回图标样式");
 assert.doesNotMatch(app, /title="关闭歌曲详情"/, "歌曲详情页已有左上角返回入口，不应重复显示右上角关闭按钮");
+assert.doesNotMatch(app, /<header class="song-detail-header">[\s\S]*?<span>正在播放<\/span>[\s\S]*?<\/header>/, "歌曲详情页顶部不应显示正在播放文字");
+assert.match(app, /\.song-detail-header > button:only-child\s*\{[^}]*justify-self:\s*start/, "移除顶部文字后返回按钮仍应保持左对齐");
 assert.match(app, /getLyricHighlightState/, "歌词高亮应由统一时间轴状态计算");
 assert.doesNotMatch(app, /class="lyric-character"[\s\S]*:class="\{[^}]*'is-sung'/, "逐字高亮不应再由 Vue 每帧重绘");
 assert.match(app, /lyric-original/, "双语歌词应区分原歌词和翻译");
@@ -125,9 +132,37 @@ assert.match(app, /volume-slider-rail/, "详情页音量滑块应有明确的竖
 assert.match(app, /\.song-detail-volume \.volume-slider-rail\s*\{[^}]*position:\s*relative[^}]*margin-inline:\s*auto/, "详情页音量轨道应相对定位并在面板中水平居中");
 assert.match(app, /\.song-detail-volume \.song-detail-volume-slider\s*\{[^}]*position:\s*absolute[^}]*top:\s*50%[^}]*left:\s*50%[^}]*translate\(-50%,\s*-50%\)\s*rotate\(-90deg\)/, "详情页音量滑块应以轨道中心为基准定位");
 assert.match(playerBar, /\.player-volume-wrap \.volume-slider-rail\s*\{[^}]*position:\s*relative[^}]*margin-inline:\s*auto/, "底部播放器音量轨道应相对定位并水平居中");
+assert.doesNotMatch(playerBar, /\.player-volume-wrap \.volume-slider-rail\s*\{[^}]*left:/, "底部播放器音量轨道不应使用水平偏移补偿");
+assert.match(playerBar, /\.player-volume-panel::after\s*\{[^}]*left:\s*50%[^}]*right:\s*auto[^}]*translateX\(-50%\)\s*rotate\(45deg\)/, "音量弹层底部凸起应以弹层中心轴定位");
 assert.match(playerBar, /\.player-volume-wrap \.player-volume-slider\s*\{[^}]*position:\s*absolute[^}]*top:\s*50%[^}]*left:\s*50%[^}]*translate\(-50%,\s*-50%\)\s*rotate\(-90deg\)/, "底部播放器音量滑块应以轨道中心为基准定位");
+assert.match(playerBar, /--player-accent\s+300ms\s+ease[^;]*--player-accent-hover\s+300ms\s+ease/, "封面主题色切换应使用 0.3 秒平滑过渡");
+assert.match(playerBar, /\.transport-controls \.player-control-button\.play-button\.compact\s*\{[^}]*background:\s*var\(--player-accent/, "底部播放按钮应使用封面主色");
+assert.match(playerBar, /class="player-volume-slider"[^>]*:style="\{\s*'--volume':\s*`\$\{props\.volume\}%`\s*\}"/, "音量滑块应将当前音量传给填充轨道");
+assert.match(playerBar, /\.player-volume-slider::\-webkit-slider-runnable-track\s*\{[^}]*linear-gradient\([^}]*var\(--player-accent[^}]*var\(--volume\)/, "音量已填充轨道应使用封面主色");
+assert.match(playerBar, /\.player-volume-slider::\-webkit-slider-thumb\s*\{[^}]*background:\s*var\(--player-accent/, "音量滑块圆点应使用封面主色");
+assert.match(playerBar, /\.player-volume-slider:hover::\-webkit-slider-thumb\s*\{[^}]*background:\s*var\(--player-accent-hover/, "音量滑块悬浮时圆点应使用封面辅助色");
+assert.match(playerBar, /\.player-volume-icon\s*\{[^}]*background:\s*currentColor/, "喇叭图标应保持原有颜色体系");
 assert.match(app, /requestAnimationFrame/, "歌词同步应使用高精度动画时钟");
 assert.match(lyricSync, /findCharacterCountAtTime/, "歌词同步应使用高效的逐字时间定位");
+assert.match(lyricSync, /getLyricCharacterProgress/, "歌词同步应提供连续的当前字符填充进度");
+assert.match(app, /--lyric-character-progress/, "歌曲详情应逐帧更新当前字符的填充比例");
+assert.match(app, /classList\.add\("is-progressing"\)/, "当前歌词字符应使用连续扫色状态");
+assert.match(app, /--lyric-highlight-color:\s*#2f9fc8/, "逐字歌词应使用较柔和且稳定的高亮颜色");
+assert.match(
+  app,
+  /\.lyric-line\.is-word-timed \.lyric-character\s*\{[^}]*linear-gradient\([^}]*--lyric-highlight-color[^}]*--lyric-character-progress[^}]*background-clip:\s*text[^}]*color:\s*transparent/,
+  "逐字歌词应在同一个字形上用文字渐变裁切，避免覆盖层与正文抗锯齿不同"
+);
+assert.match(
+  app,
+  /\.lyric-line\.is-word-timed \.lyric-character\.is-sung\s*\{[^}]*--lyric-character-progress:\s*100%/,
+  "唱完的字符应把同一文字渐变固定在百分之百，不能切换绘制层"
+);
+assert.doesNotMatch(
+  app,
+  /\.lyric-character::after\s*\{/,
+  "逐字歌词不能再叠加字符副本，否则唱完切回正文时会出现颜色跳变"
+);
 assert.match(app, /cancelAnimationFrame/, "歌词同步应在暂停或卸载时停止动画时钟");
 assert.match(app, /data-lyric-index/, "歌词行应提供稳定的 DOM 定位标记");
 assert.match(app, /updateLyricAnchorFromScroll/, "歌词滚动时应更新固定定位线对应的歌词");
@@ -138,6 +173,13 @@ assert.match(app, /renderedCharacterElements\.length\s*===\s*0/, "歌词 DOM 更
 assert.ok(lyricParser.includes("/<(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?>/gu"), "歌词解析应支持增强 LRC 的逐字时间标记");
 assert.match(lyricParser, /characterTimes/, "歌词行应保存逐字时间信息");
 assert.match(lyricParser, /parseKaraokeTokens/, "歌词解析应支持带逐词时间的 QRC/YRC 歌词");
+assert.match(lyricParser, /parseQrcContent/, "QQ QRC 应使用独立解析入口");
+assert.match(lyricParser, /parseYrcContent/, "网易云 YRC 应使用独立解析入口");
+assert.match(
+  app,
+  /parseLyricContent\(\s*track\.lyrics,\s*track\.lyricsTranslation,\s*track\.lyricsFormat\s*\)/,
+  "歌曲歌词应根据后端返回的 QRC/YRC/LRC 格式选择解析器"
+);
 assert.match(lyricParser, /isLyricMetadataText/, "歌词解析应过滤网易云的作词、作曲等歌曲信息行");
 assert.match(lyricParser, /parseYrcContent/, "歌词解析应优先读取网易云逐字时间轴");
 assert.match(lyricParser, /parseLrcContent/, "歌词解析应支持本地普通 LRC 兜底");
@@ -229,8 +271,12 @@ assert.match(app, /@pointerdown="handleLyricPointerDown"/, "歌词容器应绑�
 assert.match(app, /prefaceAnchorActive/, "歌曲信息经过定位线时应作为前奏播放目标");
 assert.match(app, /prefaceAnchorLineIndex/, "歌曲信息经过定位线时应记录具体的信息行");
 assert.match(app, /prefaceLineTimes/, "歌曲信息应优先使用每行真实时间轴");
-assert.match(app, /creditTime \?\? getPrefaceLineStartTime/, "只有缺少时间戳的歌曲信息才应使用前奏估算时间");
-assert.doesNotMatch(app, /song-detail-preface-track/, "前奏信息不应再包含前端伪造的歌名和歌手行");
+assert.match(app, /createPrefaceLineTimes\([\s\S]{0,180}currentLyricCredits\.value\.map\(\(credit\) => credit\.time\)/, "歌曲信息应保留平台真实时间戳，并只为缺少时间的行估算前奏位置");
+assert.match(app, /class="song-detail-preface-track"[^>]*data-song-info-line/, "前奏区应始终提供可跟随滚动的歌名和歌手行");
+assert.match(app, /currentTrack\.value\.title\s*\+\s*' - '\s*\+\s*currentTrack\.value\.artist/, "QQ 音乐没有制作信息时应使用已有歌曲详情构造前奏文本");
+assert.match(app, /getPreludeEndTime/, "前奏条目应依据第一句歌词时间和歌曲时长决定显示区间");
+assert.match(app, /followActiveLyricItem/, "歌曲信息和真实歌词应复用同一个自动滚动函数");
+assert.match(app, /nextState\.activeIndex\s*!==\s*renderedSongInfoLineIndex[\s\S]{0,900}followActiveLyricItem/, "前奏歌曲信息切换活动行时应立即触发自动滚动");
 assert.match(app, /playbackDuration/, "播放进度显示应基于媒体实际时长");
 assert.match(app, /@loadedmetadata="updateMediaDuration"/, "音频加载元数据后应刷新真实播放时长");
 assert.match(app, /isPreviewPlayback/, "网易云试听片段结束时应识别为试听限制");
@@ -276,10 +322,11 @@ assert.match(app, /playFromTime\(anchorPlaybackTime/, "定位按钮应支持从�
 assert.match(app, /\[data-song-info-line\]/, "前奏播放定位应使用具体的歌曲信息行，而非整个信息区");
 assert.match(app, /targetPrefaceLineIndex/, "点击前奏播放时应保留当前信息行的定位索引");
 assert.match(app, /song-detail-song-header/, "顶部歌曲标题信息应与前奏歌曲信息分开布局");
-assert.doesNotMatch(app, /currentTrack\.title \+ ' - ' \+ currentTrack\.artist/, "不应把歌名和歌手伪造成一条可播放的制作信息");
+assert.match(app, /currentTrack\.value\.title \+ ' - ' \+ currentTrack\.value\.artist/, "前奏应使用当前歌曲的歌名和歌手，不依赖平台歌词接口返回制作信息");
 assert.match(app, /!isPlaying\.value\s*\|\|\s*manualLyricsScroll\.value/, "暂停时不应自动跳转到正在播放的歌词行");
 assert.match(app, /lyricEndSpacerHeight/, "歌词末尾应根据定位线保留可滚动缓冲区");
 assert.match(app, /lyricStartSpacerHeight/, "歌曲信息开头应根据定位线保留动态对齐空间");
+assert.match(app, /const firstTimelineItem = firstSongInfoLine \?\? lyricLineElements\.item\(0\)/, "短前奏不生成歌曲信息时，第一句歌词仍应获得定位线顶部缓冲区");
 assert.match(app, /LYRIC_START_VISUAL_OFFSET\s*=\s*14/, "开头歌曲信息应轻微上移以匹配定位按钮的视觉中心");
 assert.match(app, /class="lyric-start-spacer"/, "歌曲信息前应渲染开头定位缓冲区");
 assert.match(
@@ -289,8 +336,8 @@ assert.match(
 );
 assert.match(
   app,
-  /anchorOffset\s*-\s*firstSongInfoCenterWithoutSpacer/,
-  "开头缓冲区应让第一行歌曲信息的中心对齐固定定位线"
+  /anchorOffset\s*-\s*firstTimelineCenterWithoutSpacer/,
+  "开头缓冲区应让第一条前奏信息或歌词的中心对齐固定定位线"
 );
 assert.match(app, /class="lyric-end-spacer"/, "歌词列表末尾应渲染定位缓冲区");
 assert.match(app, /root\.clientHeight\s*-\s*anchorOffset/, "最后一句歌词应获得足够空间滚动到固定定位线");

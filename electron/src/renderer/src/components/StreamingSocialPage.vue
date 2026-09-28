@@ -21,6 +21,7 @@ const emit = defineEmits<{
   (event: "search"): void;
   (event: "change-page", page: number): void;
   (event: "open-user", user: AccountSocialUserView): void;
+  (event: "open-artist", artist: AccountSocialUserView): void;
 }>();
 
 const title = computed(() => props.mode === "following" ? "关注" : "粉丝");
@@ -59,7 +60,7 @@ function updateSearch(event: Event) {
         <UsersRound :size="52" :stroke-width="1.5" />
       </span>
       <div>
-        <p><span aria-hidden="true"></span> 社交 <b>·</b> 共 {{ total }} 人</p>
+        <p><span aria-hidden="true"></span> 社交 <b>·</b> 共 {{ total }} {{ mode === 'following' ? '个关注' : '人' }}</p>
         <h1>{{ title }}</h1>
       </div>
     </div>
@@ -75,7 +76,7 @@ function updateSearch(event: Event) {
         :key="`${user.provider}:${user.userId}`"
         class="social-user-card"
         type="button"
-        @click="emit('open-user', user)"
+        @click="user.type === 'artist' ? emit('open-artist', user) : emit('open-user', user)"
       >
         <span class="social-avatar">
           <img v-if="user.avatarUrl" :src="user.avatarUrl" :alt="`${user.nickname}头像`" />
@@ -84,7 +85,7 @@ function updateSearch(event: Event) {
         <strong :title="user.nickname">{{ user.nickname }}</strong>
       </button>
     </div>
-    <div v-else class="social-state">暂无{{ title }}用户</div>
+    <div v-else class="social-state">暂无{{ title }}</div>
 
     <nav v-if="!loading && !error && (page > 1 || hasMore || totalPages > 1)" class="social-pagination" aria-label="社交列表分页">
       <button type="button" :disabled="page <= 1" @click="emit('change-page', page - 1)">上一页</button>

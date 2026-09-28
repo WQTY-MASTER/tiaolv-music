@@ -20,7 +20,7 @@ public class NetEaseSessionStore {
     private final Path sessionFile;
 
     public NetEaseSessionStore(
-        @Value("${listenmusic.providers.netease.session-file:${user.home}/.listen-music/netease_cookie.json}") String sessionFile
+        @Value("${listenmusic.providers.netease.session-file:${user.home}/.tiaolv-music/netease_cookie.json}") String sessionFile
     ) {
         this.sessionFile = Path.of(sessionFile).toAbsolutePath().normalize();
     }

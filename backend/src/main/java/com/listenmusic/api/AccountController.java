@@ -99,9 +99,33 @@ public class AccountController {
         return accountCatalogService.loadListeningRank(provider);
     }
 
+    @PostMapping("/{provider}/listening-scrobbles")
+    public Map<String, Object> scrobble(
+        @PathVariable String provider,
+        @RequestBody ListeningScrobbleRequest request
+    ) {
+        accountCatalogService.scrobble(
+            provider,
+            request.trackId(),
+            request.title(),
+            request.artist(),
+            request.listenedSeconds(),
+            request.totalSeconds()
+        );
+        return Map.of("ok", true);
+    }
+
     @GetMapping("/{provider}/playlists")
     public List<HomepagePlaylist> playlists(@PathVariable String provider) {
         return accountCatalogService.loadPlaylists(provider);
+    }
+
+    @PostMapping("/{provider}/playlists")
+    public HomepagePlaylist createPlaylist(
+        @PathVariable String provider,
+        @RequestBody CreatePlaylistRequest request
+    ) {
+        return accountCatalogService.createPlaylist(provider, request.name());
     }
 
     @GetMapping("/{provider}/featured-playlists")
@@ -114,6 +138,16 @@ public class AccountController {
         return accountCatalogService.loadPlaylist(provider, id);
     }
 
+    @PostMapping("/{provider}/playlists/{id}/subscription")
+    public Map<String, Boolean> setPlaylistSubscription(
+        @PathVariable String provider,
+        @PathVariable String id,
+        @RequestParam boolean subscribed
+    ) {
+        boolean synced = accountCatalogService.setPlaylistSubscribed(provider, id, subscribed);
+        return Map.of("subscribed", subscribed, "synced", synced);
+    }
+
     @PostMapping("/{provider}/favorites")
     public Map<String, Object> addFavorite(@PathVariable String provider, @RequestBody Track track) {
         accountCatalogService.addFavorite(provider, track);
@@ -124,6 +158,24 @@ public class AccountController {
     public Map<String, Object> removeFavorite(@PathVariable String provider, @PathVariable String id) {
         accountCatalogService.removeFavorite(provider, id);
         return Map.of("ok", true);
+    }
+
+    @GetMapping("/{provider}/artists/{artistId}/subscription")
+    public Map<String, Boolean> artistSubscription(
+        @PathVariable String provider,
+        @PathVariable String artistId
+    ) {
+        return Map.of("subscribed", accountCatalogService.isArtistSubscribed(provider, artistId));
+    }
+
+    @PostMapping("/{provider}/artists/{artistId}/subscription")
+    public Map<String, Boolean> setArtistSubscription(
+        @PathVariable String provider,
+        @PathVariable String artistId,
+        @RequestParam boolean subscribed
+    ) {
+        accountCatalogService.setArtistSubscribed(provider, artistId, subscribed);
+        return Map.of("subscribed", subscribed);
     }
 
     @org.springframework.web.bind.annotation.ExceptionHandler(AccountLoginRequiredException.class)

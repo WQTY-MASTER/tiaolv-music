@@ -34,12 +34,50 @@ class MusicScanServiceTest {
         assertEquals("内嵌歌曲", track.title());
         assertEquals("内嵌歌手", track.artist());
         assertEquals("内嵌专辑", track.album());
+        assertEquals("embedded", track.metaSource());
         assertTrue(track.hasLyrics());
         assertTrue(track.hasCover());
         assertEquals(embeddedLyrics, track.embeddedLyrics());
         assertArrayEquals(embeddedCover, track.embeddedCover());
         assertEquals(embeddedLyrics, track.effectiveLyrics());
         assertArrayEquals(embeddedCover, track.effectiveCover());
+    }
+
+    @Test
+    void filenameMetadataOnlyRepairsInvalidEmbeddedFields() throws Exception {
+        Path audio = tempDirectory.resolve("01 - 正确歌手 - 正确歌名 - Live.flac");
+        Files.write(audio, flacFixture("�", "未知歌手", "内嵌专辑", "", new byte[0]));
+
+        ScannedTrack track = new MusicScanService().scanFiles(List.of(audio), true).get(0);
+
+        assertEquals("正确歌名 - Live", track.title());
+        assertEquals("正确歌手", track.artist());
+        assertEquals("内嵌专辑", track.album());
+        assertEquals("filename", track.metaSource());
+    }
+
+    @Test
+    void filenameMetadataNeverOverridesValidEmbeddedFields() throws Exception {
+        Path audio = tempDirectory.resolve("文件名歌手 - 文件名歌名.flac");
+        Files.write(audio, flacFixture("内嵌歌名", "内嵌歌手", "内嵌专辑", "", new byte[0]));
+
+        ScannedTrack track = new MusicScanService().scanFiles(List.of(audio), true).get(0);
+
+        assertEquals("内嵌歌名", track.title());
+        assertEquals("内嵌歌手", track.artist());
+        assertEquals("embedded", track.metaSource());
+    }
+
+    @Test
+    void filenameMetadataCanBeDisabled() throws Exception {
+        Path audio = tempDirectory.resolve("歌手 - 歌名.flac");
+        Files.write(audio, flacFixture("", "", "", "", new byte[0]));
+
+        ScannedTrack track = new MusicScanService().scanFiles(List.of(audio), false).get(0);
+
+        assertEquals("歌手 - 歌名", track.title());
+        assertEquals("未知歌手", track.artist());
+        assertEquals(null, track.metaSource());
     }
 
     @Test
@@ -55,7 +93,46 @@ class MusicScanServiceTest {
         assertTrue(track.hasLyrics());
         assertTrue(track.hasCover());
         assertEquals("[00:02.00]旁边歌词", track.sidecarLyrics());
+        assertEquals("LRC", track.lyricsFormat());
         assertArrayEquals(sidecarCover, track.effectiveCover());
+    }
+
+    @Test
+    void preciseSidecarLyricsTakePriorityOverPlainLrc() throws Exception {
+        Path audio = tempDirectory.resolve("逐字歌词测试.flac");
+        Files.write(audio, flacFixture("逐字歌词", "测试歌手", "测试专辑", "", new byte[0]));
+        Files.writeString(
+            tempDirectory.resolve("逐字歌词测试.qrc"),
+            "[1000,1200]你(1000,500)好(1500,700)",
+            StandardCharsets.UTF_8
+        );
+        Files.writeString(
+            tempDirectory.resolve("逐字歌词测试.yrc"),
+            "[1000,1200](1000,500,0)你(1500,700,0)好",
+            StandardCharsets.UTF_8
+        );
+        Files.writeString(
+            tempDirectory.resolve("逐字歌词测试.lrc"),
+            "[00:01.00]你好",
+            StandardCharsets.UTF_8
+        );
+
+        ScannedTrack track = new MusicScanService().scan(tempDirectory).get(0);
+
+        assertEquals("[1000,1200]你(1000,500)好(1500,700)", track.sidecarLyrics());
+        assertEquals("QRC", track.lyricsFormat());
+    }
+
+    @Test
+    void embeddedLyricsFormatIsDetectedFromContent() throws Exception {
+        Path audio = tempDirectory.resolve("内嵌逐字.flac");
+        String yrc = "[1000,1200](1000,500,0)你(1500,700,0)好";
+        Files.write(audio, flacFixture("内嵌逐字", "测试歌手", "测试专辑", yrc, new byte[0]));
+
+        ScannedTrack track = new MusicScanService().scan(tempDirectory).get(0);
+
+        assertEquals(yrc, track.effectiveLyrics());
+        assertEquals("YRC", track.lyricsFormat());
     }
 
     @Test

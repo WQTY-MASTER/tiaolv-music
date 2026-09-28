@@ -23,7 +23,8 @@ assert.match(app, /\.local-home-page\s*\{[^}]*transition:\s*width\s+280ms\s+ease
 assert.match(app, /\.local-home-page\s*\{[^}]*margin-left:\s*calc\(\(100%\s*-\s*min\(1180px,\s*calc\(100vw\s*-\s*224px\s*-\s*36px\)\)\)\s*\/\s*2\)/, "本地主页面应在工作区内居中");
 assert.match(app, /@media\s*\(max-width:\s*980px\)[\s\S]*?\.shell-controls\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*32px\)/, "窄侧栏中的窗口工具应改为两列，避免覆盖主标题");
 assert.match(sidebar, /@media\s*\(max-width:\s*980px\)[^}]*\.sidebar\s*\{[^}]*padding:\s*112px\s+10px\s+18px/, "窄侧栏导航应为两行窗口工具预留高度");
-assert.match(sidebar, /\.sidebar-footer\s*>\s*span:not\(\.footer-dot\)/, "窄侧栏应隐藏模式文字，仅保留状态点");
+assert.match(sidebar, /@media\s*\(max-width:\s*980px\)[\s\S]*?\.mode-option-label\s*\{[^}]*display:\s*none/, "窄侧栏应隐藏模式文字，仅保留模式图标");
+assert.match(sidebar, /\.mode-option\.active \.mode-option-icon\s*\{[^}]*color:\s*#43dda0/, "当前模式应通过对应图标亮起表示");
 assert.match(app, /@media\s*\(max-width:\s*700px\)[\s\S]*?\.app-shell\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*72px\s+minmax\(0,\s*1fr\)/, "手机宽度下应用壳仍应保持侧栏与内容区网格，不能把内容挤到侧栏下方");
 assert.match(app, /\.main-scroll\s*\{[^}]*width:\s*100%[^}]*min-width:\s*0/, "主内容滚动区应允许收缩到窄窗口宽度");
 

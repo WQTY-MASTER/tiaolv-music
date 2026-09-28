@@ -1,6 +1,12 @@
 server:
   port: 17890
 
+spring:
+  servlet:
+    multipart:
+      max-file-size: 512MB
+      max-request-size: 512MB
+
 listenmusic:
   catalog:
     provider: netease

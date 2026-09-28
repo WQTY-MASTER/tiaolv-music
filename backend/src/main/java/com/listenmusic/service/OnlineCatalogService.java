@@ -9,6 +9,9 @@ import com.listenmusic.provider.PlaylistCategoryData;
 import com.listenmusic.provider.PlaylistDiscoveryPage;
 import com.listenmusic.provider.SearchResultPage;
 import com.listenmusic.provider.SearchType;
+import com.listenmusic.provider.ArtistAlbum;
+import com.listenmusic.provider.ArtistDetail;
+import com.listenmusic.provider.ArtistSongPage;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -54,6 +57,22 @@ public class OnlineCatalogService {
             .orElseGet(List::of);
     }
 
+    public ArtistDetail loadArtistDetail(String artistId, String providerId) {
+        return provider(providerId).loadArtistDetail(artistId);
+    }
+
+    public List<Track> loadArtistTopSongs(String artistId, String providerId) {
+        return provider(providerId).loadArtistTopSongs(artistId);
+    }
+
+    public ArtistSongPage loadArtistSongs(String artistId, String providerId, String order, int limit, int offset) {
+        return provider(providerId).loadArtistSongs(artistId, order, limit, offset);
+    }
+
+    public List<ArtistAlbum> loadArtistAlbums(String artistId, String providerId, int limit, int offset) {
+        return provider(providerId).loadArtistAlbums(artistId, limit, offset);
+    }
+
     public Optional<CoverData> loadCover(String trackId) {
         return providerForTrack(trackId).flatMap(provider -> provider.loadCover(trackId));
     }
@@ -70,12 +89,24 @@ public class OnlineCatalogService {
         return provider().loadPlaylistCategories();
     }
 
+    public PlaylistCategoryData loadPlaylistCategories(String providerId) {
+        return provider(providerId).loadPlaylistCategories();
+    }
+
     public PlaylistDiscoveryPage loadPlaylists(String category, String order, int limit, int offset) {
         return provider().loadPlaylists(category, order, limit, offset);
     }
 
+    public PlaylistDiscoveryPage loadPlaylists(String providerId, String category, String order, int limit, int offset) {
+        return provider(providerId).loadPlaylists(category, order, limit, offset);
+    }
+
     public PlaylistDiscoveryPage loadHighQualityPlaylists(String category, int limit, String before) {
         return provider().loadHighQualityPlaylists(category, limit, before);
+    }
+
+    public PlaylistDiscoveryPage loadHighQualityPlaylists(String providerId, String category, int limit, String before) {
+        return provider(providerId).loadHighQualityPlaylists(category, limit, before);
     }
 
     public void updatePlaylistPlayCount(String playlistId) {

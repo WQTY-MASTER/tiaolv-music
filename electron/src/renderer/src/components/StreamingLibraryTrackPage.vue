@@ -28,6 +28,7 @@ defineProps<{
 const emit = defineEmits<{
   (event: "play", track: LibraryTrack): void;
   (event: "play-all"): void;
+  (event: "context-menu", payload: { track: LibraryTrack; event: MouseEvent }): void;
 }>();
 
 function formatDuration(seconds: number) {
@@ -45,7 +46,7 @@ function formatDuration(seconds: number) {
       </button>
     </div>
     <div v-if="tracks.length" class="library-track-list">
-      <button v-for="(track, index) in tracks" :key="track.id" type="button" :class="{ active: track.id === currentTrackId }" @click="emit('play', track)">
+      <button v-for="(track, index) in tracks" :key="track.id" type="button" :class="{ active: track.id === currentTrackId }" @click="emit('play', track)" @contextmenu.prevent="emit('context-menu', { track, event: $event })">
         <span class="library-track-index">{{ String(index + 1).padStart(2, "0") }}</span>
         <span class="library-track-cover" :style="{ background: `linear-gradient(135deg, ${track.primary}, ${track.secondary})` }">
           <img v-if="track.coverUrl" :src="track.coverUrl" :alt="`${track.title}封面`" />

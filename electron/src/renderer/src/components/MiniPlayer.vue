@@ -307,7 +307,7 @@ onBeforeUnmount(() => {
                 <Pause v-if="isCurrentTrack(track) && props.isPlaying" :size="16" :stroke-width="1.6" aria-hidden="true" />
                 <Play v-else :size="16" :stroke-width="1.6" aria-hidden="true" />
               </button>
-              <button class="mini-queue-like" type="button" :class="{ liked: track.liked }" :title="track.liked ? '取消收藏' : '收藏'" :aria-label="track.liked ? '取消收藏' : '收藏'" @click.stop="emit('queueTrackLike', track)">
+              <button class="mini-queue-like" type="button" :class="{ liked: track.liked }" :title="track.liked ? '取消喜欢' : '喜欢'" :aria-label="track.liked ? '取消喜欢' : '喜欢'" @click.stop="emit('queueTrackLike', track)">
                 <Heart :size="16" :stroke-width="1.6" :fill="track.liked ? 'currentColor' : 'none'" aria-hidden="true" />
               </button>
               <button class="mini-queue-more" type="button" title="更多" aria-label="更多" @click.stop="toggleMoreMenu(track, index)">

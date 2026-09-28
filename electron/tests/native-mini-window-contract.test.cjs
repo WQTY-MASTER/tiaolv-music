@@ -12,6 +12,10 @@ const mini = fs.readFileSync(path.join(root, "src/renderer/src/components/MiniPl
 assert.match(main, /ipcMain\.handle\("enter-mini-mode"/, "主进程应提供进入迷你窗口的 IPC");
 assert.match(main, /ipcMain\.handle\("exit-mini-mode"/, "主进程应提供退出迷你窗口的 IPC");
 assert.match(main, /loadFile\(path\.join\(__dirname, "\.\.\/renderer\/index\.html"\)\)/, "打包后应从 out/renderer 加载渲染页面");
+assert.match(main, /LOCALAPPDATA[\s\S]*ChromiumCache/, "Chromium 缓存应写入本地应用数据目录，避免漫游目录权限错误");
+assert.match(main, /appendSwitch\("disk-cache-dir"/, "主进程应显式配置可写磁盘缓存目录");
+assert.match(main, /requestSingleInstanceLock\(\)/, "应用应阻止多个实例争用同一缓存目录");
+assert.match(main, /app\.on\("second-instance"[\s\S]*focus\(\)/, "重复启动时应聚焦已有窗口");
 assert.match(main, /interface MiniWindowState[\s\S]*bounds:[\s\S]*wasMaximized:[\s\S]*wasFullScreen:[\s\S]*wasAlwaysOnTop:[\s\S]*wasMenuBarVisible:[\s\S]*minimumSize:/, "进入前应保存窗口尺寸、位置、最大化、全屏、置顶、菜单栏和最小尺寸状态");
 assert.match(main, /getNormalBounds\(\)/, "最大化窗口应保存可恢复的普通窗口边界");
 assert.match(main, /setAlwaysOnTop\(true\)/, "迷你模式窗口应置顶");

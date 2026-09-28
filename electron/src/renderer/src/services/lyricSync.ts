@@ -91,6 +91,27 @@ export function getPrefaceLineStartTime(
   return (firstLyricTime / lineCount) * lineIndex;
 }
 
+export function getPreludeEndTime(
+  firstLyricTime: number,
+  playbackDuration: number,
+  hasLyrics: boolean
+) {
+  if (hasLyrics) {
+    return Number.isFinite(firstLyricTime) && firstLyricTime > 2 ? firstLyricTime : 0;
+  }
+  return Number.isFinite(playbackDuration) && playbackDuration > 0 ? playbackDuration : 0;
+}
+
+export function stabilizeLyricCharacterProgress(
+  previousProgress: number,
+  nextProgress: number,
+  allowRewind = false
+) {
+  const safePrevious = Number.isFinite(previousProgress) ? Math.max(0, previousProgress) : 0;
+  const safeNext = Number.isFinite(nextProgress) ? Math.max(0, nextProgress) : safePrevious;
+  return allowRewind ? safeNext : Math.max(safePrevious, safeNext);
+}
+
 export function createPrefaceLineTimes(
   firstLyricTime: number,
   creditTimes: Array<number | undefined>
@@ -184,15 +205,52 @@ function lyricCharacterProgressAtTime(
     return findCharacterCountAtTime(line.characters, time);
   }
 
-  // 普通 LRC 只有句首时间，先把句间时间平滑分配给当前句字符。
-  const nextLine = lines[lineIndex + 1];
-  const characterCount = Array.from(line.text).length;
-  const fallbackDuration = Math.max(2, Math.min(8, characterCount * 0.38));
-  const lineDuration = Math.max(0.6, (nextLine?.time ?? line.time + fallbackDuration) - line.time);
-  const elapsed = Math.max(0, Math.min(lineDuration, time - line.time));
-  const progress = Math.floor((elapsed / lineDuration) * characterCount);
+  return 0;
+}
 
-  return Math.min(characterCount, Math.max(1, progress));
+export function getLyricCharacterProgress(time: number, lines: LyricLine[]) {
+  const activeIndex = findActiveLyricIndex(time, lines);
+  if (activeIndex < 0) {
+    return 0;
+  }
+
+  const line = lines[activeIndex];
+  const characterCount = Array.from(line.text).length;
+  if (characterCount === 0 || time < line.time) {
+    return 0;
+  }
+
+  if (line.characters?.length) {
+    const startedCount = findCharacterCountAtTime(line.characters, time);
+    if (startedCount === 0) {
+      return 0;
+    }
+    const characterIndex = Math.min(startedCount - 1, line.characters.length - 1);
+    const character = line.characters[characterIndex];
+    const nextStart = line.characters[characterIndex + 1]?.start;
+    const duration = Math.max(
+      0.001,
+      character.duration || (nextStart !== undefined ? nextStart - character.start : 0.35)
+    );
+    const fill = Math.max(0, Math.min(1, (time - character.start) / duration));
+    return Math.min(characterCount, characterIndex + fill);
+  }
+
+  if (line.characterTimes?.length) {
+    const startedCount = findCharacterCountAtTime(line.characterTimes, time);
+    if (startedCount === 0) {
+      return 0;
+    }
+    const characterIndex = Math.min(startedCount - 1, line.characterTimes.length - 1);
+    const start = line.characterTimes[characterIndex];
+    const nextLine = lines[activeIndex + 1];
+    const end = line.characterTimes[characterIndex + 1]
+      ?? Math.min(nextLine?.time ?? start + 0.6, start + 0.6);
+    const fill = Math.max(0, Math.min(1, (time - start) / Math.max(0.001, end - start)));
+    return Math.min(characterCount, characterIndex + fill);
+  }
+
+  return 0;
 }
 
 export function getLyricHighlightState(time: number, lines: LyricLine[]): LyricHighlightState {

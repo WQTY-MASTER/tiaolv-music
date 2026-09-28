@@ -13,9 +13,32 @@ public record ScannedTrack(
     byte[] embeddedCover,
     String embeddedCoverMimeType,
     String sidecarLyrics,
+    String lyricsFormat,
     byte[] sidecarCover,
-    Path sidecarCoverPath
+    Path sidecarCoverPath,
+    String metaSource
 ) {
+    public ScannedTrack(
+        String id,
+        String title,
+        String artist,
+        String album,
+        long durationSeconds,
+        Path filePath,
+        String embeddedLyrics,
+        byte[] embeddedCover,
+        String embeddedCoverMimeType,
+        String sidecarLyrics,
+        String lyricsFormat,
+        byte[] sidecarCover,
+        Path sidecarCoverPath
+    ) {
+        this(
+            id, title, artist, album, durationSeconds, filePath, embeddedLyrics, embeddedCover,
+            embeddedCoverMimeType, sidecarLyrics, lyricsFormat, sidecarCover, sidecarCoverPath, null
+        );
+    }
+
     public boolean hasLyrics() {
         return effectiveLyrics() != null && !effectiveLyrics().isBlank();
     }

@@ -51,9 +51,9 @@ export function splitLyricCharacters(text: string): string[] {
   return Array.from(text);
 }
 
-export function parseKaraokeTokens(body: string): KaraokeToken[] {
+export function parseYrcTokens(body: string): KaraokeToken[] {
   const yrcTimings = Array.from(body.matchAll(yrcTimingPattern));
-  const yrcTokens = yrcTimings.map((match, index) => {
+  return yrcTimings.map((match, index) => {
     const textStart = (match.index ?? 0) + match[0].length;
     const textEnd = yrcTimings[index + 1]?.index ?? body.length;
     return {
@@ -62,26 +62,41 @@ export function parseKaraokeTokens(body: string): KaraokeToken[] {
       duration: Number(match[2]) / 1000
     };
   }).filter((token) => token.text.length > 0);
+}
 
-  if (yrcTokens.length > 0 && body.trimStart().startsWith("(")) {
-    return yrcTokens;
-  }
-
-  const qrcTokens = Array.from(body.matchAll(qrcTokenPattern), (match) => ({
+export function parseQrcTokens(body: string): KaraokeToken[] {
+  return Array.from(body.matchAll(qrcTokenPattern), (match) => ({
     text: match[1],
     start: Number(match[2]) / 1000,
     duration: Number(match[3]) / 1000
   })).filter((token) => token.text.length > 0);
-
-  return qrcTokens.length > 0 ? qrcTokens : yrcTokens;
 }
 
-export function parseLyricContent(raw: string | undefined, translationRaw?: string): LyricLine[] {
+export function parseKaraokeTokens(body: string): KaraokeToken[] {
+  return body.trimStart().startsWith("(")
+    ? parseYrcTokens(body)
+    : parseQrcTokens(body);
+}
+
+export function parseLyricContent(
+  raw: string | undefined,
+  translationRaw?: string,
+  format?: string
+): LyricLine[] {
   if (!raw?.trim()) {
     return [];
   }
 
-  const wordTimedLines = parseYrcContent(raw);
+  const normalizedFormat = format?.trim().toUpperCase();
+  const wordTimedLines = normalizedFormat === "QRC"
+    ? parseQrcContent(raw)
+    : normalizedFormat === "YRC"
+      ? parseYrcContent(raw)
+      : normalizedFormat === "LRC"
+        ? []
+        : detectWordTimedFormat(raw) === "YRC"
+          ? parseYrcContent(raw)
+          : parseQrcContent(raw);
   if (wordTimedLines.length > 0) {
     return attachTranslations(wordTimedLines, translationRaw);
   }
@@ -90,6 +105,17 @@ export function parseLyricContent(raw: string | undefined, translationRaw?: stri
 }
 
 export function parseYrcContent(raw: string): LyricLine[] {
+  return parseWordTimedContent(raw, parseYrcTokens);
+}
+
+export function parseQrcContent(raw: string): LyricLine[] {
+  return parseWordTimedContent(raw, parseQrcTokens);
+}
+
+function parseWordTimedContent(
+  raw: string,
+  parseTokens: (body: string) => KaraokeToken[]
+): LyricLine[] {
   const lines: LyricLine[] = [];
 
   for (const rawLine of raw.split(/\r?\n/)) {
@@ -106,12 +132,12 @@ export function parseYrcContent(raw: string): LyricLine[] {
       ? Number(yrcMatch[2]) / 1000
       : Number(clockMatch?.[4] ?? 0) / 1000;
     const body = yrcMatch?.[3] ?? clockMatch?.[5] ?? "";
-    const tokens = parseKaraokeTokens(body);
+    const tokens = parseTokens(body);
     const characters = expandKaraokeTokens(tokens);
     const trimmedCharacters = trimCharacterData(characters);
     const text = trimmedCharacters.map((character) => character.text).join("");
 
-    if (!text || isLyricMetadataText(text)) {
+    if (!text || isLyricMetadataText(text) || (duration > 0 && duration < 0.1)) {
       continue;
     }
 
@@ -134,6 +160,18 @@ export function parseYrcContent(raw: string): LyricLine[] {
   return lines.sort((left, right) => left.time - right.time);
 }
 
+function detectWordTimedFormat(raw: string) {
+  for (const rawLine of raw.split(/\r?\n/)) {
+    const body = rawLine.match(yrcHeaderPattern)?.[3]
+      ?? rawLine.match(clockHeaderPattern)?.[5];
+    if (!body?.trim()) {
+      continue;
+    }
+    return body.trimStart().startsWith("(") ? "YRC" : "QRC";
+  }
+  return undefined;
+}
+
 export function parseLrcContent(raw: string): LyricLine[] {
   const entries: LyricLine[] = [];
 
@@ -150,14 +188,11 @@ export function parseLrcContent(raw: string): LyricLine[] {
     }
 
     const lyricText = splitInlineTranslation(text);
-    const characters = parseEnhancedCharacters(rawText, lyricText.text);
     for (const match of matches) {
       entries.push({
         time: parseClockTime(match[1], match[2], match[3]),
         text: lyricText.text,
-        translation: lyricText.translation,
-        characters,
-        characterTimes: characters?.map((character) => character.start)
+        translation: lyricText.translation
       });
     }
   }

@@ -5,6 +5,10 @@ public record HomepagePlaylist(
     String title,
     String subtitle,
     String imageUrl,
-    int count
+    int count,
+    boolean createdByAccount
 ) {
+    public HomepagePlaylist(String id, String title, String subtitle, String imageUrl, int count) {
+        this(id, title, subtitle, imageUrl, count, false);
+    }
 }

@@ -10,7 +10,25 @@ public final class ApplicationDirectories {
     }
 
     public static Path dataDirectory() {
-        return Path.of(System.getProperty("user.home"), ".listen-music");
+        return Path.of(System.getProperty("user.home"), ".tiaolv-music");
+    }
+
+    static Path prepareDataDirectory(Path homeDirectory) {
+        Path dataDirectory = homeDirectory.resolve(".tiaolv-music");
+        Path legacyDirectory = homeDirectory.resolve(".listen-music");
+        try {
+            if (Files.notExists(dataDirectory) && Files.isDirectory(legacyDirectory)) {
+                Files.move(legacyDirectory, dataDirectory);
+            }
+            ensureDataDirectory(dataDirectory);
+            return dataDirectory;
+        } catch (IOException ex) {
+            throw new UncheckedIOException("Failed to migrate data directory: " + legacyDirectory, ex);
+        }
+    }
+
+    public static Path prepareDataDirectory() {
+        return prepareDataDirectory(Path.of(System.getProperty("user.home")));
     }
 
     public static void ensureDataDirectory(Path dataDirectory) {

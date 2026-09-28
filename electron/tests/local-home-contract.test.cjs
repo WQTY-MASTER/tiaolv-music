@@ -5,7 +5,7 @@ const path = require("node:path");
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
 
-assert.doesNotMatch(app, /topbar-right|class="topbar"|floatingTopbarVisible|handleMainScroll/, "全局悬浮顶部导航应彻底删除");
+assert.doesNotMatch(app, /topbar-right|class="topbar"|floatingTopbarVisible/, "全局悬浮顶部导航应彻底删除");
 assert.match(app, /<main\s+ref="mainScrollElement"\s+class="main-scroll"/, "主滚动区引用仍应用于页面回顶");
 
 assert.match(app, /local-home-date/, "本地主页缺少日期与模式信息");
@@ -61,14 +61,14 @@ assert.match(app, /openLocalAlbum/, "专辑卡片缺少进入专辑详情逻辑"
 assert.match(app, /selectedLocalAlbum/, "专辑详情缺少选中专辑状态");
 assert.match(app, /\.local-featured-albums\s*\{[^}]*background:\s*transparent/, "专辑精选外层背景应与主页大背景融合");
 assert.match(app, /\.local-album-card:hover\s+\.[\s\S]*transform:\s*translateY\(-4px\)/, "专辑封面需要 hover 上浮动画");
-for (const item of ["首歌曲", "张专辑", "位艺术家", "收藏总时长"]) {
+for (const item of ["首歌曲", "张专辑", "位艺术家", "喜欢总时长"]) {
   assert.match(app, new RegExp(item), `音乐库统计面板缺少 ${item}`);
 }
 assert.match(app, /playRandomLocalTrack/, "随机漫游入口缺少播放逻辑");
 assert.match(app, /\.local-home-play \.play-icon/, "本地主页播放按钮缺少播放三角图标样式");
 assert.match(app, /\.local-home-play \.pause-icon/, "本地主页播放按钮缺少暂停图标样式");
 assert.match(app, /localHomeTrack/, "本地主页没有使用上次播放歌曲数据");
-assert.match(app, /首收藏里抽一首/, "随机漫游说明没有体现本地收藏数量");
+assert.match(app, /首喜欢里抽一首/, "随机漫游说明没有体现本地喜欢数量");
 assert.match(app, /shouldShowLocalEmptyRoom/, "本地模式缺少未选择音乐文件夹的空房间状态");
 assert.match(app, /localLibraryHydrated = ref\(false\)/, "本地音乐库恢复完成前不能误判为空");
 assert.match(app, /shouldShowLocalEmptyRoom[\s\S]*localLibraryHydrated\.value[\s\S]*!hasLocalLibraryContent\.value/, "空房间状态需要等本地音乐库恢复完成后再显示");
@@ -86,6 +86,6 @@ assert.match(app, /聆听统计/, "空房间界面缺少聆听统计标签");
 assert.match(app, /chooseMusicFolderAndScan/, "空房间添加按钮需要选择并扫描音乐文件夹");
 assert.doesNotMatch(app, /window\.prompt/, "选择本地音乐库不能再使用浏览器输入框");
 assert.match(app, /const shouldOpenLocalHomeAfterScan = shouldShowLocalEmptyRoom\.value[\s\S]*activeView\.value = "home"/, "空房间选择文件夹并扫描后需要回到本地主页");
-assert.match(app, /<PlayerBar\s+v-if="!shouldHidePlayerBar && !showSongDetail && !miniPlayerVisible"/, "未选择本地文件夹、打开歌曲详情或迷你播放器时外层播放栏需要隐藏");
+assert.match(app, /<PlayerBar\s+v-if="!shouldHidePlayerBar && !miniPlayerVisible"/, "未选择本地文件夹或打开迷你播放器时全局播放栏需要隐藏");
 
 console.log("本地主页契约通过");

@@ -1,6 +1,12 @@
 {
-  "name": "tingting-music-workspace",
+  "name": "tiaolv-music-workspace",
   "private": true,
+  "repository": "git@github.com:WQTY-MASTER/tiaolv-music.git",
+  "pnpm": {
+    "overrides": {
+      "@electron/get": "5.1.0"
+    }
+  },
   "workspaces": [
     "electron"
   ],
@@ -10,6 +16,6 @@
     "serve": "node scripts/web-dev.cjs",
     "web:dev": "node scripts/web-dev.cjs",
     "build": "npm --prefix electron run build",
-    "test": "npm --prefix electron test"
+    "test": "npm --prefix electron run test:branding && npm --prefix electron test"
   }
 }

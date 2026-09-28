@@ -19,6 +19,8 @@ assert.match(component, /歌曲名称/);
 assert.match(component, /歌手/);
 assert.match(component, /专辑/);
 assert.match(component, /时长/);
+assert.match(component, /\.daily-detail-sort-select select\s*\{[^}]*color:\s*#202631[^}]*font-size:\s*13px[^}]*font-weight:\s*700/s, "共用筛选框文字应更大、更深且清晰");
+assert.match(component, /\.daily-detail-sort-select option\s*\{[^}]*color:\s*#202631[^}]*font-size:\s*13px[^}]*font-weight:\s*600/s, "筛选下拉选项应同步使用清晰字体");
 assert.match(component, /定位到当前播放歌曲/);
 assert.match(component, /刷新歌单/);
 assert.match(component, /降序，点击切换升序|升序，点击切换降序/);
@@ -26,7 +28,8 @@ assert.match(component, /data-track-id/);
 assert.match(component, /scrollIntoView/);
 assert.match(component, /toggle-favorite/);
 assert.match(component, /reorder: \[draggedTrackId: string, targetTrackId: string\]/);
-assert.match(component, /draggable="true"/);
+assert.match(component, /reorderable\?: boolean/, "复用详情页应支持关闭拖动排序");
+assert.match(component, /:draggable="reorderable !== false"/, "只读歌曲集合不应允许拖动排序");
 assert.match(component, /@dragstart="startTrackDrag\(track\.id\)"/);
 assert.match(component, /@drop\.prevent="dropTrack\(track\.id\)"/);
 assert.match(component, /play-all/);
@@ -85,6 +88,6 @@ assert.match(app, /async function playTrack[\s\S]{0,180}isPlaybackStarting\.valu
 assert.match(app, /:is-playing="isPlaying \|\| isPlaybackStarting"/, "每日推荐详情应在播放启动阶段直接显示动态音条");
 assert.match(app, /if \(!audio \|\| !playbackTrack\.audioUrl\)[\s\S]{0,120}isPlaybackStarting\.value\s*=\s*false/, "播放地址不可用时应结束启动状态");
 assert.match(app, /await audio\.play\(\)[\s\S]{0,180}isPlaybackStarting\.value\s*=\s*false/, "音频开始播放后应结束启动状态");
-assert.doesNotMatch(app, /class="topbar"|floatingTopbarVisible|handleMainScroll/, "每日推荐详情不应残留已废弃的全局浮动状态栏");
+assert.doesNotMatch(app, /class="topbar"|floatingTopbarVisible/, "每日推荐详情不应残留已废弃的全局浮动状态栏");
 
 console.log("流媒体每日推荐详情页契约通过");

@@ -20,7 +20,8 @@ public class TrackRepository {
     public List<Track> findAll() {
         return jdbcTemplate.query("""
             select id, title, artist, album, duration, source, file_path, url, cover_url,
-                   lyrics, lyrics_source, cover_mime_type, created_at, updated_at
+                   lyrics, lyrics_source, lyrics_format, cover_mime_type, created_at, updated_at,
+                   meta_source
             from tracks
             order by title
             """, (rs, rowNum) -> new Track(
@@ -35,16 +36,30 @@ public class TrackRepository {
             rs.getString("cover_url"),
             rs.getString("lyrics"),
             rs.getString("lyrics_source"),
+            rs.getString("lyrics_format"),
             rs.getString("cover_mime_type"),
             rs.getString("created_at"),
-            rs.getString("updated_at")
+            rs.getString("updated_at"),
+            rs.getString("meta_source")
         ));
+    }
+
+    public List<Track> findLocalTracks() {
+        return jdbcTemplate.query("""
+            select id, title, artist, album, duration, source, file_path, url, cover_url,
+                   lyrics, lyrics_source, lyrics_format, cover_mime_type, created_at, updated_at,
+                   meta_source
+            from tracks
+            where source = 'local'
+            order by title
+            """, this::mapTrack);
     }
 
     public Optional<Track> findById(String id) {
         return jdbcTemplate.query("""
             select id, title, artist, album, duration, source, file_path, url, cover_url,
-                   lyrics, lyrics_source, cover_mime_type, created_at, updated_at
+                   lyrics, lyrics_source, lyrics_format, cover_mime_type, created_at, updated_at,
+                   meta_source
             from tracks
             where id = ?
             """, this::mapTrack, id).stream().findFirst();
@@ -55,8 +70,8 @@ public class TrackRepository {
         jdbcTemplate.update("""
             insert into tracks (
               id, title, artist, album, duration, source, file_path, url, cover_url,
-              lyrics, lyrics_source, cover_mime_type, created_at, updated_at
-            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              lyrics, lyrics_source, lyrics_format, cover_mime_type, created_at, updated_at, meta_source
+            ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             on conflict(id) do update set
               title = excluded.title,
               artist = excluded.artist,
@@ -68,7 +83,9 @@ public class TrackRepository {
               cover_url = excluded.cover_url,
               lyrics = excluded.lyrics,
               lyrics_source = excluded.lyrics_source,
+              lyrics_format = excluded.lyrics_format,
               cover_mime_type = excluded.cover_mime_type,
+              meta_source = excluded.meta_source,
               updated_at = excluded.updated_at
             """,
             track.id(),
@@ -82,9 +99,11 @@ public class TrackRepository {
             track.coverUrl(),
             track.lyrics(),
             track.lyricsSource(),
+            track.lyricsFormat(),
             track.coverMimeType(),
             track.createdAt() == null ? now : track.createdAt(),
-            now
+            now,
+            track.metaSource()
         );
     }
 
@@ -98,6 +117,21 @@ public class TrackRepository {
             "delete from tracks where source = 'local' and id not in (" + placeholders + ")",
             ids.toArray()
         );
+    }
+
+    public void removeLocalTracksByIds(List<String> ids) {
+        if (ids == null || ids.isEmpty()) {
+            return;
+        }
+        int batchSize = 500;
+        for (int start = 0; start < ids.size(); start += batchSize) {
+            List<String> batch = ids.subList(start, Math.min(start + batchSize, ids.size()));
+            String placeholders = batch.stream().map(id -> "?").collect(Collectors.joining(", "));
+            jdbcTemplate.update(
+                "delete from tracks where source = 'local' and id in (" + placeholders + ")",
+                batch.toArray()
+            );
+        }
     }
 
     public void clearLocalTracks() {
@@ -117,9 +151,11 @@ public class TrackRepository {
             rs.getString("cover_url"),
             rs.getString("lyrics"),
             rs.getString("lyrics_source"),
+            rs.getString("lyrics_format"),
             rs.getString("cover_mime_type"),
             rs.getString("created_at"),
-            rs.getString("updated_at")
+            rs.getString("updated_at"),
+            rs.getString("meta_source")
         );
     }
 }

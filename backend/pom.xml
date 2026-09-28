@@ -11,9 +11,9 @@
   </parent>
 
   <groupId>com.listenmusic</groupId>
-  <artifactId>listenmusic-backend</artifactId>
+  <artifactId>tiaolv-music-backend</artifactId>
   <version>0.1.0</version>
-  <name>listenmusic-backend</name>
+  <name>tiaolv-music-backend</name>
 
   <properties>
     <java.version>21</java.version>

@@ -37,6 +37,14 @@ public class AccountAuthService {
         return qqMusicAuthService.login(cookie);
     }
 
+    public QrLoginStartResponse startQqQrLogin() {
+        return qqMusicAuthService.startQrLogin();
+    }
+
+    public QrLoginStatusResponse checkQqQrLogin(String sessionId) {
+        return qqMusicAuthService.checkQrLogin(sessionId);
+    }
+
     public synchronized void logout(String provider) {
         String normalizedProvider = normalizeProvider(provider);
         accountRepository.findActive(normalizedProvider).ifPresent(account -> {

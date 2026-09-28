@@ -10,7 +10,12 @@ const service = fs.readFileSync(path.join(root, "src/renderer/src/services/aggre
 assert.match(app, /import AggregatePlaylistPage from/, "应用应接入独立聚合歌单页面组件");
 assert.match(app, /activeView === 'aggregate'/, "聚合歌单导航应渲染独立页面");
 assert.match(app, /AGGREGATE_PLAYLIST_STORAGE_KEY/, "聚合歌单应使用独立本地存储键");
-assert.match(app, /<PlayerBar[\s\S]*v-if="!shouldHidePlayerBar && !showSongDetail && !miniPlayerVisible"/, "聚合歌单页面应继续使用全局底部播放栏");
+assert.match(app, /<PlayerBar[\s\S]*v-if="!shouldHidePlayerBar && !miniPlayerVisible"/, "聚合歌单页面应继续使用全局底部播放栏");
+assert.match(app, /availableAggregateSources = computed[\s\S]*accounts\.value[\s\S]*candidate\.provider/, "聚合歌单应从全局账号列表读取所有已登录平台");
+assert.match(app, /function isAggregateSourceAvailable[\s\S]*accounts\.value\.some[\s\S]*candidate\.provider/, "每首聚合歌曲应按自身音源检查对应平台账号");
+assert.match(app, /async function loadOnlineTrackAssets[\s\S]*track\.source !== "netease"[\s\S]*track\.source !== "qq"[\s\S]*loadCatalogAudio\(track\.id\)/, "网易云与 QQ 聚合歌曲都应通过统一目录接口补取播放地址");
+assert.match(app, /function playAggregateSource[\s\S]*openProviderAuthPanel\(provider\)/, "未登录音源被点击时应打开对应平台登录面板");
+assert.match(app, /async function refreshAccountsAfterPlaybackFailure[\s\S]*loadCurrentAccounts[\s\S]*accounts\.value = refreshedAccounts[\s\S]*openProviderAuthPanel\(provider\)/, "播放凭证失效后应刷新全局账号并打开对应登录面板");
 
 assert.match(page, />聚合歌单</, "页面应显示聚合歌单标题");
 assert.match(page, /本地维护的跨平台虚拟歌单，可混合本地、网易云与 QQ 音乐；同名同歌手自动合并。/, "页面应说明聚合歌单只在本地维护并支持跨平台音源");

@@ -60,5 +60,27 @@ export function createPlaybackClock() {
     return Math.max(0, estimatedTime);
   }
 
-  return { reset, read };
+  function synchronize(media: PlaybackMedia, now: number) {
+    const mediaTime = Number.isFinite(media.currentTime) ? Math.max(0, media.currentTime) : anchorMediaTime;
+    const wallTime = Number.isFinite(now) ? now : anchorWallTime;
+    const playbackRate = Number.isFinite(media.playbackRate) && media.playbackRate > 0
+      ? media.playbackRate
+      : 1;
+
+    if (!initialized || media.paused || media.ended || media.seeking || playbackRate !== anchorPlaybackRate) {
+      reset(media, wallTime);
+      return mediaTime;
+    }
+
+    const estimatedTime = read(media, wallTime);
+    // Browser timeupdate values can trail the animation clock; only re-anchor forward during playback.
+    if (mediaTime > estimatedTime) {
+      reset(media, wallTime);
+      return mediaTime;
+    }
+
+    return estimatedTime;
+  }
+
+  return { reset, read, synchronize };
 }

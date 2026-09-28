@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 在不破坏现有本地扫描、歌词、队列和播放能力的前提下，为“倾听音乐”建立本地模式、网易云流媒体模式、二维码登录、账号数据和聚合歌单的可运行基础，并为未来 QQ 音乐保留 Provider 边界。
+**Goal:** 在不破坏现有本地扫描、歌词、队列和播放能力的前提下，为“调律音乐”建立本地模式、网易云流媒体模式、二维码登录、账号数据和聚合歌单的可运行基础，并为未来 QQ 音乐保留 Provider 边界。
 
-**Architecture:** Electron/Vue 只负责界面和播放器，通过 `services/api.ts` 调用 Java 后端。Java 后端以统一 `MusicProvider` 处理公开内容，以独立的账号会话服务处理网易云二维码、Cookie 和用户数据；聚合歌单及本地播放状态始终属于倾听音乐本地数据库，不随平台账号退出而删除。第一阶段先完成前端模式模型和网易云二维码会话，随后接入账号内容与聚合歌单。
+**Architecture:** Electron/Vue 只负责界面和播放器，通过 `services/api.ts` 调用 Java 后端。Java 后端以统一 `MusicProvider` 处理公开内容，以独立的账号会话服务处理网易云二维码、Cookie 和用户数据；聚合歌单及本地播放状态始终属于调律音乐本地数据库，不随平台账号退出而删除。第一阶段先完成前端模式模型和网易云二维码会话，随后接入账号内容与聚合歌单。
 
 **Tech Stack:** Vue 3、TypeScript、Electron、Spring Boot 3、Java 21、Spring JDBC、SQLite/Flyway、本地 NeteaseCloudMusicApi。
 
@@ -98,7 +98,7 @@ export function writeAppMode(
 }
 ```
 
-In `SidebarNav.vue`, accept `mode: AppMode`, emit `toggleMode`, rename the visible product name to `倾听音乐`, show local navigation (`主页、所有歌曲、艺术家、专辑、流派、歌单、聚合歌单、文件夹、最近播放`) in local mode, and show streaming navigation (`主页、发现歌单、音乐库、音乐云盘、最近播放`) in streaming mode. The bottom button must emit the toggle event and use the exact opposite-mode label.
+In `SidebarNav.vue`, accept `mode: AppMode`, emit `toggleMode`, rename the visible product name to `调律音乐`, show local navigation (`主页、所有歌曲、艺术家、专辑、流派、歌单、聚合歌单、文件夹、最近播放`) in local mode, and show streaming navigation (`主页、发现歌单、音乐库、音乐云盘、最近播放`) in streaming mode. The bottom button must emit the toggle event and use the exact opposite-mode label.
 
 In `App.vue`, import `AppMode`, `readAppMode`, and `writeAppMode`; initialize `const appMode = ref<AppMode>(readAppMode())`; add `function toggleAppMode()` that switches the value, persists it, clears only page-specific search/selection state, and keeps `currentTrack`, `playbackQueue`, `isPlaying`, and `volume` unchanged. Pass `:mode="appMode"` and `@toggle-mode="toggleAppMode"` to `SidebarNav`.
 

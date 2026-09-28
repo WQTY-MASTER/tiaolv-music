@@ -21,8 +21,8 @@ const emit = defineEmits<{
     class="player-control-button player-like-button tool-button"
     :class="{ liked: props.liked, compact: props.compact }"
     type="button"
-    :title="props.liked ? '取消收藏' : '喜欢这首歌'"
-    :aria-label="props.liked ? '取消收藏' : '喜欢这首歌'"
+    :title="props.liked ? '取消喜欢' : '喜欢这首歌'"
+    :aria-label="props.liked ? '取消喜欢' : '喜欢这首歌'"
     :aria-pressed="props.liked"
     @click="emit('activate')"
   ><span class="player-like-icon" aria-hidden="true">{{ props.liked ? "♥" : "♡" }}</span></button>

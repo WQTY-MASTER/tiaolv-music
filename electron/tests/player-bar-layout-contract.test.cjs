@@ -21,6 +21,9 @@ assert.match(playerBar, /\.progress-row\s*\{[^}]*grid-template-columns:\s*34px\s
 assert.match(playerBar, /\.progress-times\s*\{[^}]*display:\s*contents/, "进度时间应参与进度行栅格对齐");
 assert.match(playerBar, /\.track-copy strong,\.track-copy span\s*\{[^}]*text-overflow:\s*ellipsis[^}]*white-space:\s*nowrap/, "歌曲信息应保持单行并在超长时显示省略号");
 assert.match(playerBar, /\.player-bar\s*\{[^}]*background:\s*rgba\(255,255,255,\.98\)/, "普通页面播放器应使用接近纯白的通栏背景");
+assert.match(playerBar, /\.player-bar\s*\{[^}]*overflow:\s*visible/, "播放器应允许音量弹层向上溢出显示");
+assert.match(playerBar, /\.player-bar::before\s*\{[^}]*border-radius:\s*inherit/, "播放器环境色覆盖层应自行继承圆角");
+assert.match(playerBar, /\.player-volume-panel\s*\{[^}]*left:\s*50%[^}]*right:\s*auto[^}]*translateX\(-50%\)/, "音量弹层应以音量按钮容器的中心线定位");
 assert.match(playerBar, /\.player-bar\.is-ambient\.is-theme-ready::before\s*\{[^}]*linear-gradient\([^}]*--detail-player-start[^}]*--detail-player-end/, "详情页播放器应使用封面环境色渐变");
 assert.match(playerBar, /@property\s+--detail-player-start\s*\{[^}]*syntax:\s*"<color>"/, "播放器环境色变量应注册为可插值颜色");
 assert.match(playerBar, /@property\s+--detail-player-end\s*\{[^}]*syntax:\s*"<color>"/, "播放器第二环境色变量应注册为可插值颜色");

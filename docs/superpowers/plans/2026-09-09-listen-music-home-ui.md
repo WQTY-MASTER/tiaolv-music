@@ -1,8 +1,8 @@
-# 倾听音乐首页界面实现计划
+# 调律音乐首页界面实现计划
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**目标：** 在现有 Vue 3 + Vite 渲染层中实现一个参考 QQ 音乐与 YesPlayMusic 信息层级的“倾听音乐”首页原型。
+**目标：** 在现有 Vue 3 + Vite 渲染层中实现一个参考 QQ 音乐与 YesPlayMusic 信息层级的“调律音乐”首页原型。
 
 **架构：** 保留现有 Electron/Vite 入口和 Java 后端接口。首页由 Vue 组件负责布局、交互和演示数据；后端连接状态继续通过现有 `/health` 接口显示。后续再将演示歌曲、歌单和播放动作替换为 Java API。
 

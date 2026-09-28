@@ -32,6 +32,22 @@ public interface MusicProvider {
         return List.of();
     }
 
+    default ArtistDetail loadArtistDetail(String artistId) {
+        return new ArtistDetail(id(), artistId, "", "", "", 0, 0);
+    }
+
+    default List<Track> loadArtistTopSongs(String artistId) {
+        return List.of();
+    }
+
+    default ArtistSongPage loadArtistSongs(String artistId, String order, int limit, int offset) {
+        return new ArtistSongPage(List.of(), 0, false);
+    }
+
+    default List<ArtistAlbum> loadArtistAlbums(String artistId, int limit, int offset) {
+        return List.of();
+    }
+
     default HomepageData loadHomepage(boolean refresh, String cursor) {
         return HomepageData.empty();
     }
@@ -115,8 +131,36 @@ public interface MusicProvider {
         return List.of();
     }
 
+    default List<CloudTrack> loadAccountCloudTracks(String accountId, String credential) {
+        throw new UnsupportedOperationException("该音乐源暂不支持音乐云盘");
+    }
+
+    default CloudTrack uploadAccountCloudTrack(String accountId, String credential, CloudUpload upload) {
+        throw new UnsupportedOperationException("该音乐源暂不支持音乐云盘上传");
+    }
+
+    default Optional<LyricData> loadAccountCloudLyrics(String accountId, String trackId, String credential) {
+        return Optional.empty();
+    }
+
+    default void scrobble(
+        String accountId,
+        String trackId,
+        String title,
+        String artist,
+        long listenedSeconds,
+        long totalSeconds,
+        String credential
+    ) {
+        throw new UnsupportedOperationException("该音乐源暂不支持听歌打卡");
+    }
+
     default List<HomepagePlaylist> loadAccountPlaylists(String accountId, String credential) {
         return List.of();
+    }
+
+    default HomepagePlaylist createAccountPlaylist(String accountId, String name, String credential) {
+        throw new UnsupportedOperationException("该音乐源暂不支持创建歌单");
     }
 
     default List<HomepagePlaylist> loadAccountFeaturedPlaylists(String accountId, String credential) {
@@ -129,6 +173,18 @@ public interface MusicProvider {
 
     default void setAccountFavorite(String accountId, String trackId, boolean liked, String credential) {
         throw new UnsupportedOperationException("该音乐源暂不支持账号收藏");
+    }
+
+    default boolean isArtistSubscribed(String accountId, String artistId, String credential) {
+        return false;
+    }
+
+    default void setArtistSubscription(String accountId, String artistId, boolean subscribed, String credential) {
+        throw new UnsupportedOperationException("该音乐源暂不支持关注歌手");
+    }
+
+    default void setPlaylistSubscription(String accountId, String playlistId, boolean subscribed, String credential) {
+        throw new UnsupportedOperationException("该音乐源暂不支持收藏歌单");
     }
 
     default Optional<CoverData> loadCover(String trackId) {

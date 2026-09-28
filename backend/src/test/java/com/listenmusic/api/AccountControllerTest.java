@@ -142,4 +142,69 @@ class AccountControllerTest {
 
         verify(accountCatalogService).loadFeaturedPlaylists("netease");
     }
+
+    @Test
+    void reportsAnAccountListeningScrobble() throws Exception {
+        mockMvc.perform(post("/account/netease/listening-scrobbles")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "trackId":"netease:518066366",
+                      "title":"测试歌曲",
+                      "artist":"测试歌手",
+                      "listenedSeconds":30,
+                      "totalSeconds":291
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.ok").value(true));
+
+        verify(accountCatalogService).scrobble(
+            "netease", "netease:518066366", "测试歌曲", "测试歌手", 30, 291
+        );
+    }
+
+    @Test
+    void createsAnAccountPlaylist() throws Exception {
+        given(accountCatalogService.createPlaylist("netease", "新歌单")).willReturn(
+            new HomepagePlaylist("netease:3", "新歌单", "网易云歌单", "", 0, true)
+        );
+
+        mockMvc.perform(post("/account/netease/playlists")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"name\":\"新歌单\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.id").value("netease:3"))
+            .andExpect(jsonPath("$.createdByAccount").value(true));
+
+        verify(accountCatalogService).createPlaylist("netease", "新歌单");
+    }
+
+    @Test
+    void exposesArtistSubscriptionStatusAndMutation() throws Exception {
+        given(accountCatalogService.isArtistSubscribed("netease", "netease:6452")).willReturn(true);
+
+        mockMvc.perform(get("/account/netease/artists/netease:6452/subscription"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.subscribed").value(true));
+        mockMvc.perform(post("/account/netease/artists/netease:6452/subscription")
+                .param("subscribed", "false"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.subscribed").value(false));
+
+        verify(accountCatalogService).setArtistSubscribed("netease", "netease:6452", false);
+    }
+
+    @Test
+    void updatesPlaylistSubscription() throws Exception {
+        given(accountCatalogService.setPlaylistSubscribed("qq", "qq:778899", true)).willReturn(false);
+
+        mockMvc.perform(post("/account/qq/playlists/qq:778899/subscription")
+                .param("subscribed", "true"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.subscribed").value(true))
+            .andExpect(jsonPath("$.synced").value(false));
+
+        verify(accountCatalogService).setPlaylistSubscribed("qq", "qq:778899", true);
+    }
 }

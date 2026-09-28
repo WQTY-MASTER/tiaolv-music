@@ -16,6 +16,15 @@
 - Modify: `electron/src/renderer/src/services/api.ts`
 - Create: `electron/tests/streaming-artist-detail-contract.test.cjs`
 - Modify: `electron/package.json`
+- Modify: `backend/src/main/java/com/listenmusic/api/CatalogController.java`
+- Modify: `backend/src/main/java/com/listenmusic/api/AccountController.java`
+- Modify: `backend/src/main/java/com/listenmusic/service/OnlineCatalogService.java`
+- Modify: `backend/src/main/java/com/listenmusic/service/AccountCatalogService.java`
+- Modify: `backend/src/main/java/com/listenmusic/provider/MusicProvider.java`
+- Modify: `backend/src/main/java/com/listenmusic/provider/NetEaseProvider.java`
+- Test: `backend/src/test/java/com/listenmusic/api/CatalogControllerTest.java`
+- Test: `backend/src/test/java/com/listenmusic/api/AccountControllerTest.java`
+- Test: `backend/src/test/java/com/listenmusic/provider/NetEaseProviderTest.java`
 
 - [ ] **Step 1: Write the failing contract test**
 
@@ -36,7 +45,7 @@ Expected: FAIL because the artist API functions and search event do not exist.
 
 - [ ] **Step 3: Add typed API functions**
 
-Add `CatalogArtistDetail`, `CatalogArtistPage`, `loadCatalogArtistDetail`, `loadCatalogArtistTopSongs`, `loadCatalogArtistSongs`, `loadCatalogArtistSubscriptions`, and `toggleCatalogArtistSubscription` in `api.ts`. Each function must URL-encode the artist ID and use `/catalog/artist/...` paths.
+Add backend provider/service/controller methods for `/artist/detail`, `/artist/top/song`, `/artist/songs`, `/artist/album`, `/artist/sublist`, and `/artist/sub`. Public reads use `/catalog/artist/**`; credential-backed subscription reads/writes use `/account/{provider}/artists/**`. Add `CatalogArtistDetail`, `CatalogArtistPage`, `loadCatalogArtistDetail`, `loadCatalogArtistTopSongs`, `loadCatalogArtistSongs`, `loadCatalogArtistAlbums`, `loadCatalogArtistSubscription`, and `toggleCatalogArtistSubscription` in `api.ts`.
 
 - [ ] **Step 4: Add the test script entry and run the test**
 
