@@ -1,3 +1,9 @@
+import type {
+  DesktopLyricsAction,
+  DesktopLyricsPlaybackState,
+  DesktopLyricsPreferences
+} from "../../shared/desktopLyrics";
+
 type TaskbarMediaAction = "previous" | "toggle" | "next";
 type TrayMediaAction = TaskbarMediaAction
   | "favorite"
@@ -38,6 +44,21 @@ interface ListenMusicBridge {
   setSystemTrayEnabled(enabled: boolean, state: SystemTrayState): Promise<boolean>;
   updateSystemTrayState(state: SystemTrayState): Promise<boolean>;
   onTrayMediaAction(listener: (action: TrayMediaAction) => void): () => void;
+  toggleDesktopLyricsWindow(): Promise<boolean>;
+  closeDesktopLyricsWindow(): Promise<boolean>;
+  getDesktopLyricsSnapshot(): Promise<{
+    playback: DesktopLyricsPlaybackState;
+    preferences: DesktopLyricsPreferences;
+  } | null>;
+  updateDesktopLyricsPlaybackState(state: DesktopLyricsPlaybackState): void;
+  updateDesktopLyricsTime(currentTime: number): void;
+  updateDesktopLyricsPreferences(patch: Partial<DesktopLyricsPreferences>): Promise<DesktopLyricsPreferences>;
+  sendDesktopLyricsAction(action: DesktopLyricsAction): void;
+  onDesktopLyricsPlaybackState(listener: (state: DesktopLyricsPlaybackState) => void): () => void;
+  onDesktopLyricsTime(listener: (currentTime: number) => void): () => void;
+  onDesktopLyricsPreferences(listener: (preferences: DesktopLyricsPreferences) => void): () => void;
+  onDesktopLyricsVisibilityChanged(listener: (visible: boolean) => void): () => void;
+  onDesktopLyricsAction(listener: (action: DesktopLyricsAction) => void): () => void;
   copyText(value: string): Promise<boolean>;
 }
 

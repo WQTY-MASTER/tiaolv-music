@@ -50,7 +50,8 @@ assert.match(app, /:class="\{ 'song-detail-player-bar': showSongDetail \}"/, "�
 assert.match(app, /\.player-bar\.song-detail-player-bar\s*\{[^}]*z-index:\s*70/, "详情页中的全局播放栏应以更高优先级显示在详情背景上方");
 assert.match(app, /\.song-detail\s*\{[^}]*linear-gradient\([^}]*--detail-ambient-start[^}]*--detail-ambient-end/, "歌曲详情页应使用浅淡环境色渐变");
 assert.match(app, /\.song-detail\s*\{[^}]*background-color:\s*#fff/, "歌曲详情渐变下方应有不透明白色底层，不能透出下层页面内容");
-assert.match(app, /desktopLyricsPreview/, "应用应支持桌面歌词预览");
+assert.match(app, /toggleDesktopLyricsWindow/, "播放器应通过 Electron 打开独立桌面歌词窗口");
+assert.doesNotMatch(app, /desktopLyricsPreview/, "应用不应继续渲染页内桌面歌词预览");
 assert.match(app, /\.app-shell\s*\{[^}]*height:\s*100vh/, "主应用容器应固定为视口高度，供内容区域滚动");
 assert.match(app, /\.main-scroll\s*\{[^}]*overflow:\s*auto/, "内容区域应自行滚动");
 assert.match(app, /manualLyricsScroll/, "手动滚动歌词后应暂时停止自动跟随");

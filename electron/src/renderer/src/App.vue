@@ -146,6 +146,10 @@ import {
   normalizeFadeDurationMs
 } from "./services/playbackFade";
 import { selectPreferredLocalPlaybackTrack } from "./services/preferredLocalPlayback";
+import type {
+  DesktopLyricsAction,
+  DesktopLyricsPlaybackState
+} from "../../shared/desktopLyrics";
 import {
   normalizeLyricCredits,
   parseLyricCredits,
@@ -960,6 +964,8 @@ const autoScanLocalLibraryEnabled = ref(readAutoScanLocalLibraryEnabled());
 let localLibraryScanToastTimer: number | undefined;
 let removeTaskbarMediaActionListener: (() => void) | undefined;
 let removeTrayMediaActionListener: (() => void) | undefined;
+let removeDesktopLyricsActionListener: (() => void) | undefined;
+let removeDesktopLyricsVisibilityListener: (() => void) | undefined;
 const hasScannedLocalLibrary = ref(false);
 const localLibraryHydrated = ref(false);
 const audioElement = ref<HTMLAudioElement | null>(null);
@@ -974,7 +980,7 @@ const miniPlayerVisible = ref(false);
 const miniQueueVisible = ref(false);
 const miniQueueShellOpen = ref(false);
 const nativeMiniMode = ref(false);
-const desktopLyricsPreview = ref(false);
+const desktopLyricsVisible = ref(false);
 const detailLyricsRef = ref<HTMLElement | null>(null);
 const manualLyricsScroll = ref(false);
 const lyricAnchorVisible = ref(false);
@@ -988,8 +994,18 @@ const systemTrayState = computed(() => ({
   isPlaying: isPlaying.value,
   liked: currentTrack.value.liked,
   playMode: playMode.value,
-  desktopLyricsVisible: desktopLyricsPreview.value,
+  desktopLyricsVisible: desktopLyricsVisible.value,
   miniPlayerVisible: miniPlayerVisible.value || nativeMiniMode.value
+}));
+const desktopLyricsPlaybackState = computed<DesktopLyricsPlaybackState>(() => ({
+  title: currentTrack.value.title,
+  artist: currentTrack.value.artist,
+  isPlaying: isPlaying.value,
+  playMode: playMode.value,
+  currentTime: currentTime.value,
+  lyrics: currentTrack.value.lyrics,
+  lyricsTranslation: currentTrack.value.lyricsTranslation,
+  lyricsFormat: currentTrack.value.lyricsFormat
 }));
 const playbackQueue = ref<Track[]>([]);
 const privateRoamingCurrentIndex = computed(() => privateRoamingTracks.value.findIndex((track) => track.id === currentTrack.value.id));
@@ -1026,6 +1042,7 @@ let searchRequestId = 0;
 let searchDebounceTimer: ReturnType<typeof window.setTimeout> | undefined;
 let searchToastTimer: ReturnType<typeof window.setTimeout> | undefined;
 let lyricClockTime = 0;
+let lastDesktopLyricsTimeSentAt = 0;
 let renderedLyricIndex = -1;
 let renderedCharacterCount = 0;
 let renderedCharacterProgress = 0;
@@ -5381,6 +5398,14 @@ function handleTaskbarMediaAction(action: "previous" | "toggle" | "next") {
   }
 }
 
+function handleDesktopLyricsAction(action: DesktopLyricsAction) {
+  if (action === "cycle-mode") {
+    cyclePlayerBarPlayMode();
+    return;
+  }
+  handleTaskbarMediaAction(action);
+}
+
 function handleTrayMediaAction(action: TrayMediaAction) {
   switch (action) {
     case "previous":
@@ -5871,6 +5896,7 @@ function seekPlayback(value: number) {
     resetPlaybackClock();
     lyricClockTime = targetTime;
     currentTime.value = lyricClockTime;
+    syncDesktopLyricsTime(lyricClockTime, true);
     updateLyricHighlightDom(lyricClockTime, true);
   }
 }
@@ -6009,6 +6035,7 @@ async function playFromTime(time: number) {
   audio.currentTime = Math.max(0, time);
   lyricClockTime = audio.currentTime;
   currentTime.value = lyricClockTime;
+  syncDesktopLyricsTime(lyricClockTime, true);
   resetPlaybackClock();
   updateLyricHighlightDom(lyricClockTime, true);
   await alignPlaybackTargetToAnchor(time, targetIsPreface, targetPrefaceLineIndex);
@@ -6186,6 +6213,23 @@ watch(systemTrayState, (state) => {
   }
 });
 
+function syncDesktopLyricsPlaybackState() {
+  window.listenMusic?.updateDesktopLyricsPlaybackState({
+    ...desktopLyricsPlaybackState.value,
+    currentTime: currentPlaybackPosition()
+  });
+}
+
+function syncDesktopLyricsTime(time: number, force = false) {
+  if (!desktopLyricsVisible.value || !Number.isFinite(time)) return;
+  const now = performance.now();
+  if (!force && now - lastDesktopLyricsTimeSentAt < 100) return;
+  lastDesktopLyricsTimeSentAt = now;
+  window.listenMusic?.updateDesktopLyricsTime(time);
+}
+
+watch(desktopLyricsPlaybackState, syncDesktopLyricsPlaybackState, { deep: true, immediate: true });
+
 watch(musicFolder, (directory) => {
   const normalized = directory.trim();
   if (normalized) {
@@ -6226,7 +6270,6 @@ function openSongDetail() {
     currentTime.value = audioTime;
   }
   showSongDetail.value = true;
-  desktopLyricsPreview.value = false;
 }
 
 function closeSongDetail() {
@@ -6243,8 +6286,10 @@ function toggleSongDetail() {
   }
 }
 
-function toggleDesktopLyrics() {
-  desktopLyricsPreview.value = !desktopLyricsPreview.value;
+async function toggleDesktopLyrics() {
+  syncDesktopLyricsPlaybackState();
+  const visible = await window.listenMusic?.toggleDesktopLyricsWindow();
+  if (typeof visible === "boolean") desktopLyricsVisible.value = visible;
 }
 
 async function chooseMusicFolder() {
@@ -6707,6 +6752,7 @@ function startPlaybackClock() {
 
     const time = playbackClock.read(audio, performance.now());
     lyricClockTime = time;
+    syncDesktopLyricsTime(time);
     const nextIndex = findActiveLyricIndex(time, lyricLines.value);
     if (nextIndex !== activeLyricIndex.value) {
       currentTime.value = time;
@@ -6727,6 +6773,7 @@ function updateProgressFromAudio() {
     ? audio.currentTime
     : playbackClock.synchronize(audio, performance.now());
   lyricClockTime = lyricTime;
+  syncDesktopLyricsTime(lyricTime);
   progress.value = playbackDuration.value > 0
     ? Math.min(100, (audio.currentTime / playbackDuration.value) * 100)
     : 0;
@@ -7055,7 +7102,6 @@ async function openMiniPlayer() {
   miniQueueShellOpen.value = false;
   showSongDetail.value = false;
   queuePanelVisible.value = false;
-  desktopLyricsPreview.value = false;
   authPanelVisible.value = false;
 
   const enterMiniMode = window.listenMusic?.enterMiniMode;
@@ -7262,6 +7308,10 @@ onMounted(async () => {
   document.addEventListener("pointerdown", handleLocalToolMenuPointerDown);
   removeTaskbarMediaActionListener = window.listenMusic?.onTaskbarMediaAction(handleTaskbarMediaAction);
   removeTrayMediaActionListener = window.listenMusic?.onTrayMediaAction(handleTrayMediaAction);
+  removeDesktopLyricsActionListener = window.listenMusic?.onDesktopLyricsAction(handleDesktopLyricsAction);
+  removeDesktopLyricsVisibilityListener = window.listenMusic?.onDesktopLyricsVisibilityChanged((visible) => {
+    desktopLyricsVisible.value = visible;
+  });
   if (taskbarThumbnailButtonsSupported) {
     void window.listenMusic?.setTaskbarThumbnailButtons(taskbarThumbnailButtonsEnabled.value, isPlaying.value);
     void window.listenMusic?.setSystemTrayEnabled(systemTrayEnabled.value, systemTrayState.value);
@@ -7278,6 +7328,8 @@ onBeforeUnmount(() => {
   document.removeEventListener("pointerdown", handleLocalToolMenuPointerDown);
   removeTaskbarMediaActionListener?.();
   removeTrayMediaActionListener?.();
+  removeDesktopLyricsActionListener?.();
+  removeDesktopLyricsVisibilityListener?.();
   stopPlaybackClock();
   void persistPlaybackState();
   writeListeningStats(listeningStats.value);
@@ -7945,6 +7997,22 @@ onBeforeUnmount(() => {
               </div>
               </template>
               <p v-else class="settings-platform-note">系统托盘和任务栏缩略图按钮仅支持 Windows。</p>
+            </article>
+            <article v-else-if="activeSettingsSection === 'shortcuts'" class="settings-card">
+              <div class="settings-card-heading">
+                <span class="settings-icon" aria-hidden="true">⌘</span>
+                <div>
+                  <h2>快捷键</h2>
+                  <p>查看调律音乐当前可用的全局操作。</p>
+                </div>
+              </div>
+              <div class="settings-shortcut-field">
+                <div>
+                  <strong>解锁桌面歌词</strong>
+                  <span>桌面歌词锁定并开启鼠标穿透后，可在任意应用中解除锁定。</span>
+                </div>
+                <kbd>Ctrl</kbd><b>+</b><kbd>Alt</kbd><b>+</b><kbd>L</kbd>
+              </div>
             </article>
             <article v-else class="settings-card settings-placeholder">
               <div class="settings-card-heading">
@@ -9195,14 +9263,6 @@ onBeforeUnmount(() => {
       @error="handleAudioError"
     ></audio>
 
-      <Transition name="desktop-lyrics">
-        <aside v-if="desktopLyricsPreview" class="desktop-lyrics-preview" aria-label="桌面歌词预览">
-          <button type="button" title="关闭桌面歌词" aria-label="关闭桌面歌词" @click="toggleDesktopLyrics">×</button>
-          <span>{{ currentTrack.title }} · {{ currentTrack.artist }}</span>
-          <strong>{{ currentLyricText }}</strong>
-        </aside>
-      </Transition>
-
       <PlayerBar
         v-if="!shouldHidePlayerBar && !miniPlayerVisible"
         :class="{ 'song-detail-player-bar': showSongDetail }"
@@ -10329,7 +10389,6 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .playlist-grid { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 18px; }
 .now-playing-section { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 26px; margin: 14px 0 30px; padding: 20px; border: 1px solid #e4e9e7; border-radius: 14px; background: rgba(255,255,255,.72); }.now-playing-cover { display: grid; width: 190px; aspect-ratio: 1; place-items: center; overflow: hidden; border-radius: 11px; color: rgba(255,255,255,.9); font-family: Georgia,"Times New Roman",serif; font-size: 54px; font-weight: 700; }.now-playing-info { min-width: 0; }.now-playing-info .section-heading { align-items: center; margin-bottom: 15px; }.now-playing-info .section-heading h2 { margin-right: 0; }.lyrics-list { display: grid; max-height: 235px; gap: 9px; overflow: auto; padding: 4px 9px 4px 0; }.lyrics-list p { margin: 0; color: #9da6a2; font-size: 12px; line-height: 1.55; transition: color 160ms ease,font-size 160ms ease; }.lyrics-list p.active { color: #1bbd6b; font-size: 14px; font-weight: 700; }.lyrics-empty { display: grid; min-height: 150px; place-items: center; color: #a4adaa; font-size: 12px; } audio { display: none; }
 .lyrics-panel { position: fixed; right: 26px; bottom: 101px; z-index: 19; display: flex; width: min(430px,calc(100vw - 32px)); max-height: min(590px,calc(100vh - 150px)); flex-direction: column; overflow: hidden; border: 1px solid #e1e8e4; border-radius: 14px; background: rgba(255,255,255,.98); box-shadow: 0 16px 40px rgba(35,50,44,.16); backdrop-filter: blur(16px); }.lyrics-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 21px 15px; border-bottom: 1px solid #edf0ef; }.lyrics-panel-header h2 { margin: 5px 0 4px; color: #273130; font-size: 17px; }.lyrics-panel-header p { margin: 0; color: #9ba5a1; font-size: 11px; }.lyrics-panel-header button { border: 0; background: transparent; color: #929c98; cursor: pointer; font-size: 25px; line-height: .8; }.lyrics-panel-kicker { color: #1cbd6a; font-size: 9px; font-weight: 800; letter-spacing: 1.2px; }.lyrics-panel-list { min-height: 180px; overflow: auto; padding: 20px 22px 25px; }.lyrics-panel-list p { margin: 0; padding: 7px 0; color: #9ba5a1; font-size: 13px; line-height: 1.55; transition: color 180ms ease,transform 180ms ease,font-size 180ms ease; }.lyrics-panel-list p.is-active { color: #1dbb69; font-size: 15px; font-weight: 700; transform: translateX(2px); }.lyrics-panel-empty { display: grid; min-height: 180px; place-items: center; color: #a4adaa; font-size: 12px; }.lyrics-panel-enter-active,.lyrics-panel-leave-active { transition: opacity 180ms ease,transform 180ms ease; }.lyrics-panel-enter-from,.lyrics-panel-leave-to { opacity: 0; transform: translateY(12px); }
-.desktop-lyrics-preview { position: fixed; top: 94px; right: 26px; z-index: 30; display: grid; width: min(410px,calc(100vw - 40px)); gap: 7px; padding: 15px 40px 16px 18px; border: 1px solid #d3edf0; border-radius: 8px; background: rgba(242,254,255,.96); box-shadow: 0 14px 32px rgba(46,115,122,.14); color: #6b8a8f; backdrop-filter: blur(14px); }.desktop-lyrics-preview button { position: absolute; top: 8px; right: 10px; border: 0; background: transparent; color: #7c989d; cursor: pointer; font-size: 19px; }.desktop-lyrics-preview span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.desktop-lyrics-preview strong { overflow: hidden; color: #29474d; font-size: 17px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }.desktop-lyrics-enter-active,.desktop-lyrics-leave-active { transition: opacity 180ms ease,transform 180ms ease; }.desktop-lyrics-enter-from,.desktop-lyrics-leave-to { opacity: 0; transform: translateY(-8px); }
 .song-detail { position: fixed; inset: 0; z-index: 60; display: grid; min-height: 0; grid-template-rows: 68px minmax(0,1fr) 126px; overflow: hidden; background: linear-gradient(125deg,var(--detail-ambient-start,#eef8f9) 0%,rgba(255,255,255,.9) 52%,var(--detail-ambient-end,#edf7f8) 100%); color: #27484e; }.song-detail-header { display: grid; grid-template-columns: 44px 1fr 44px; align-items: center; padding: 0 27px; color: #6a878d; }.song-detail-header span { justify-self: center; color: #7d9ba0; font-size: 11px; font-weight: 700; letter-spacing: 1.4px; }.song-detail-header button { display: grid; width: 36px; height: 36px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: #527278; cursor: pointer; font-size: 23px; line-height: 1; }.song-detail-header button:first-child { font-size: 28px; transform: none; }.song-detail-back-icon { display: block; width: 18px; height: 18px; background: currentColor; -webkit-mask: url("./assets/icons/back.svg") center / contain no-repeat; mask: url("./assets/icons/back.svg") center / contain no-repeat; }.song-detail-header button:last-child { justify-self: end; }.song-detail-header button:hover { background: rgba(126,211,221,.22); color: #168ec6; }.song-detail-content { display: grid; min-height: 0; grid-template-columns: minmax(230px,360px) minmax(330px,560px); align-items: center; justify-content: center; gap: clamp(40px,8vw,132px); padding: 12px 8vw 36px; }.song-detail-cover { display: grid; width: min(31vw,350px); min-width: 230px; aspect-ratio: 1; place-items: center; overflow: hidden; border-radius: 10px; color: rgba(255,255,255,.92); font-family: Georgia,"Times New Roman",serif; font-size: 92px; font-weight: 700; box-shadow: 0 24px 50px rgba(52,125,134,.18); }.song-detail-cover img { width: 100%; height: 100%; object-fit: cover; }.song-detail-lyrics { display: grid; min-width: 0; min-height: 0; align-content: center; }.song-detail-kicker { margin: 0 0 9px; color: #70a6af; font-size: 10px; font-weight: 800; letter-spacing: 1.6px; }.song-detail-lyrics h2 { margin: 0 0 7px; color: #233f45; font-size: clamp(24px,2.6vw,36px); line-height: 1.15; }.song-detail-lyrics>span { color: #77959b; font-size: 12px; }.song-detail-lyrics-list { height: min(48vh,420px); margin-top: 28px; overflow: auto; overscroll-behavior: contain; padding: 34px 12px; text-align: center; scrollbar-width: none; scroll-behavior: auto; touch-action: pan-y; }.song-detail-lyrics-list::-webkit-scrollbar { width: 0; height: 0; }.song-detail-lyrics-list p { margin: 0; padding: 8px 0; color: #8faeb4; font-size: 15px; line-height: 1.55; transition: font-size 180ms ease,transform 180ms ease; }.song-detail-lyrics-list p.is-active { font-size: 20px; font-weight: 800; transform: scale(1.04); }.lyric-character { color: #8faeb4; transition: color 100ms linear; }.lyric-character.is-sung { color: #168ec6; }.song-detail-lyrics-empty { display: grid; height: min(48vh,420px); margin-top: 28px; place-items: center; color: #91afb5; font-size: 13px; }.song-detail-player { display: grid; grid-template-rows: 22px 1fr; align-items: center; padding: 15px max(40px,10vw) 18px; border-top: 1px solid rgba(106,171,181,.22); background: rgba(239,253,254,.86); }.song-detail-progress { display: grid; grid-template-columns: 43px minmax(120px,1fr) 43px; align-items: center; gap: 10px; color: #7c9ca2; font-size: 10px; text-align: center; }.song-detail-progress input { width: 100%; height: 4px; accent-color: #24c985; cursor: pointer; }.song-detail-controls { display: flex; align-items: center; justify-content: center; gap: 28px; }.song-detail-controls button { border: 0; background: transparent; color: #385d63; cursor: pointer; font-size: 15px; transition: color 150ms ease; }.song-detail-controls button:hover { color: #168ec6; }.song-detail-controls .song-detail-play { display: grid; width: 42px; height: 42px; place-items: center; border-radius: 50%; background: #22ce80; color: #fff; box-shadow: 0 7px 16px rgba(31,180,119,.26); }.song-detail-controls .song-detail-play:hover { background: #168ec6; color: #fff; }.song-detail-volume { display: flex; align-items: center; gap: 8px; }.song-detail-volume input { width: 76px; height: 4px; accent-color: #168ec6; cursor: pointer; }.song-detail-play .play-icon { width: 0; height: 0; margin-left: 3px; border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 10px solid currentColor; }.song-detail-play .pause-icon { width: 10px; height: 14px; border-right: 3px solid currentColor; border-left: 3px solid currentColor; }.song-detail-enter-active,.song-detail-leave-active { transition: opacity 210ms ease; }.song-detail-enter-from,.song-detail-leave-to { opacity: 0; }
 .song-detail-lyrics-list .lyric-original { display: block; color: #405d63; }
 .song-detail-lyrics-list .song-detail-translation { display: block; margin-top: 2px; color: #6f9296; font-size: 13px; font-weight: 400; line-height: 1.5; transition: color 180ms ease,font-size 180ms ease; }
@@ -10693,6 +10752,37 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   font-size: 12px;
 }
 
+.settings-shortcut-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid #edf0f5;
+  padding-top: 20px;
+}
+
+.settings-shortcut-field > div {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 5px;
+}
+
+.settings-shortcut-field strong { color: #11192b; font-size: 14px; font-weight: 800; }
+.settings-shortcut-field span { color: #7b8799; font-size: 12px; line-height: 1.5; }
+.settings-shortcut-field kbd {
+  min-width: 34px;
+  border: 1px solid #d8dee8;
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #fff;
+  color: #253148;
+  box-shadow: 0 2px 5px rgba(30, 39, 56, .06);
+  font: 700 11px/1 sans-serif;
+  text-align: center;
+}
+.settings-shortcut-field b { color: #a1a9b5; font-size: 11px; }
+
 .settings-select-control {
   width: 210px;
   height: 38px;
@@ -10805,6 +10895,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   .settings-fade-slider { width: 100%; }
   .settings-fade-controls .settings-switch { align-self: flex-end; }
   .settings-select-control { width: 100%; }
+  .settings-shortcut-field { align-items: flex-start; flex-wrap: wrap; }
+  .settings-shortcut-field > div { flex-basis: 100%; }
   .settings-segmented-control { width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .settings-segmented-control button { min-width: 0; padding-inline: 8px; white-space: normal; }
 }

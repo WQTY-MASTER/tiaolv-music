@@ -21,9 +21,11 @@ assert.match(main, /systemTray\?\.destroy\(\)/, "关闭托盘设置时应销毁�
 for (const label of ["上一首", "播放", "下一首", "喜欢", "播放模式", "桌面歌词", "迷你播放器", "设置", "退出"]) {
   assert.match(main, new RegExp(label), `托盘菜单缺少 ${label}`);
 }
-for (const action of ["previous", "toggle", "next", "favorite", "desktop-lyrics", "mini-player", "settings"]) {
+for (const action of ["previous", "toggle", "next", "favorite", "mini-player", "settings"]) {
   assert.match(main, new RegExp(`tray-media-action[\\s\\S]{0,240}"${action}"`), `托盘菜单缺少 ${action} 动作`);
 }
+assert.match(main, /label:\s*"桌面歌词"[\s\S]{0,180}toggleDesktopLyricsWindow\(\)/, "托盘桌面歌词应直接控制独立窗口");
+assert.match(main, /Ctrl\+Alt\+L 解锁/, "托盘应提示桌面歌词全局解锁快捷键");
 for (const mode of ["sequence", "loop", "single", "shuffle"]) {
   assert.match(main, new RegExp(`play-mode:${mode}`), `托盘菜单缺少 ${mode} 播放模式`);
 }

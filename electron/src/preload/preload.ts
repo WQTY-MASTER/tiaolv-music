@@ -1,4 +1,9 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type {
+  DesktopLyricsAction,
+  DesktopLyricsPlaybackState,
+  DesktopLyricsPreferences
+} from "../shared/desktopLyrics";
 
 type TaskbarMediaAction = "previous" | "toggle" | "next";
 type TrayMediaAction = TaskbarMediaAction
@@ -84,6 +89,46 @@ contextBridge.exposeInMainWorld("listenMusic", {
     const handler = (_event: Electron.IpcRendererEvent, action: TrayMediaAction) => listener(action);
     ipcRenderer.on("tray-media-action", handler);
     return () => ipcRenderer.removeListener("tray-media-action", handler);
+  },
+  toggleDesktopLyricsWindow: () => ipcRenderer.invoke("toggle-desktop-lyrics-window"),
+  closeDesktopLyricsWindow: () => ipcRenderer.invoke("close-desktop-lyrics-window"),
+  getDesktopLyricsSnapshot: () => ipcRenderer.invoke("get-desktop-lyrics-snapshot"),
+  updateDesktopLyricsPlaybackState: (state: DesktopLyricsPlaybackState) => {
+    ipcRenderer.send("update-desktop-lyrics-playback-state", state);
+  },
+  updateDesktopLyricsTime: (currentTime: number) => {
+    ipcRenderer.send("update-desktop-lyrics-time", currentTime);
+  },
+  updateDesktopLyricsPreferences: (patch: Partial<DesktopLyricsPreferences>) => (
+    ipcRenderer.invoke("update-desktop-lyrics-preferences", patch)
+  ),
+  sendDesktopLyricsAction: (action: DesktopLyricsAction) => {
+    ipcRenderer.send("desktop-lyrics-action", action);
+  },
+  onDesktopLyricsPlaybackState: (listener: (state: DesktopLyricsPlaybackState) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: DesktopLyricsPlaybackState) => listener(state);
+    ipcRenderer.on("desktop-lyrics-playback-state", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-playback-state", handler);
+  },
+  onDesktopLyricsTime: (listener: (currentTime: number) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, currentTime: number) => listener(currentTime);
+    ipcRenderer.on("desktop-lyrics-time", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-time", handler);
+  },
+  onDesktopLyricsPreferences: (listener: (preferences: DesktopLyricsPreferences) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, preferences: DesktopLyricsPreferences) => listener(preferences);
+    ipcRenderer.on("desktop-lyrics-preferences", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-preferences", handler);
+  },
+  onDesktopLyricsVisibilityChanged: (listener: (visible: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, visible: boolean) => listener(Boolean(visible));
+    ipcRenderer.on("desktop-lyrics-visibility-changed", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-visibility-changed", handler);
+  },
+  onDesktopLyricsAction: (listener: (action: DesktopLyricsAction) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: DesktopLyricsAction) => listener(action);
+    ipcRenderer.on("desktop-lyrics-action", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-action", handler);
   },
   copyText: (value: string) => ipcRenderer.invoke("copy-text", value)
 });
