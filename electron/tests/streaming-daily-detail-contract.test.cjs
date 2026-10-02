@@ -87,7 +87,7 @@ assert.match(app, /const isPlaybackStarting = ref\(false\)/, "播放器应记录
 assert.match(app, /async function playTrack[\s\S]{0,180}isPlaybackStarting\.value\s*=\s*true/, "点击歌曲后应立即进入启动状态");
 assert.match(app, /:is-playing="isPlaying \|\| isPlaybackStarting"/, "每日推荐详情应在播放启动阶段直接显示动态音条");
 assert.match(app, /if \(!audio \|\| !playbackTrack\.audioUrl\)[\s\S]{0,120}isPlaybackStarting\.value\s*=\s*false/, "播放地址不可用时应结束启动状态");
-assert.match(app, /await audio\.play\(\)[\s\S]{0,180}isPlaybackStarting\.value\s*=\s*false/, "音频开始播放后应结束启动状态");
+assert.match(app, /await playAudioWithNetworkFallback\([\s\S]{0,220}isPlaybackStarting\.value\s*=\s*false/, "音频开始播放或完成网络回退后应结束启动状态");
 assert.doesNotMatch(app, /class="topbar"|floatingTopbarVisible/, "每日推荐详情不应残留已废弃的全局浮动状态栏");
 
 console.log("流媒体每日推荐详情页契约通过");

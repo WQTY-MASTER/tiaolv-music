@@ -145,6 +145,7 @@ import {
   interpolateFadeVolume,
   normalizeFadeDurationMs
 } from "./services/playbackFade";
+import { selectPreferredLocalPlaybackTrack } from "./services/preferredLocalPlayback";
 import {
   normalizeLyricCredits,
   parseLyricCredits,
@@ -282,6 +283,8 @@ interface Track {
   createdAt?: string;
   updatedAt?: string;
   queueKey?: string;
+  preferredLocalPlayback?: boolean;
+  playbackFallbackUrl?: string;
 }
 
 interface PlayTrackOptions {
@@ -459,6 +462,7 @@ const STORED_SETTING_NAMES = [
   "system-tray-enabled",
   "playback-fade-enabled",
   "playback-fade-duration-ms",
+  "prefer-local-download-playback",
   "aggregate-playlists"
 ] as const;
 
@@ -489,6 +493,7 @@ const TASKBAR_THUMBNAIL_BUTTONS_STORAGE_KEY = `${STORAGE_PREFIX}taskbar-thumbnai
 const SYSTEM_TRAY_ENABLED_STORAGE_KEY = `${STORAGE_PREFIX}system-tray-enabled`;
 const PLAYBACK_FADE_ENABLED_STORAGE_KEY = `${STORAGE_PREFIX}playback-fade-enabled`;
 const PLAYBACK_FADE_DURATION_STORAGE_KEY = `${STORAGE_PREFIX}playback-fade-duration-ms`;
+const PREFER_LOCAL_DOWNLOAD_PLAYBACK_STORAGE_KEY = `${STORAGE_PREFIX}prefer-local-download-playback`;
 
 function readStreamingSource(): AccountProvider {
   return window.localStorage.getItem(STREAMING_SOURCE_STORAGE_KEY) === "qq" ? "qq" : "netease";
@@ -543,6 +548,10 @@ function readPlaybackFadeEnabled() {
 function readPlaybackFadeDurationMs() {
   const storedValue = window.localStorage.getItem(PLAYBACK_FADE_DURATION_STORAGE_KEY);
   return storedValue === null ? DEFAULT_FADE_DURATION_MS : normalizeFadeDurationMs(Number(storedValue));
+}
+
+function readPreferLocalDownloadPlayback() {
+  return window.localStorage.getItem(PREFER_LOCAL_DOWNLOAD_PLAYBACK_STORAGE_KEY) !== "false";
 }
 
 function trackFromPersisted(track: PersistedTrack, index: number): Track {
@@ -777,6 +786,7 @@ const progress = ref(0);
 const volume = ref(72);
 const playbackFadeEnabled = ref(readPlaybackFadeEnabled());
 const playbackFadeDurationMs = ref(readPlaybackFadeDurationMs());
+const preferLocalDownloadPlayback = ref(readPreferLocalDownloadPlayback());
 const currentTrack = ref<Track>(defaultTrack);
 const remoteTracks = ref<Track[]>([]);
 const remotePlaylists = ref<Playlist[]>([]);
@@ -4991,14 +5001,14 @@ async function loadOnlineTrackAssets(track: Track) {
   const localLyricFallback = onlineLyrics ? undefined : findLocalLyricFallback(track);
   const proxyCoverUrl = `/catalog/tracks/${encodeURIComponent(track.id)}/cover`;
   const primaryCoverUrl = detail?.coverUrl ?? track.coverUrl ?? proxyCoverUrl;
-
-  return {
+  const networkAudioUrl = detail?.audioUrl ?? track.audioUrl ?? loadCatalogAudio(track.id);
+  const resolvedTrack: Track = {
     ...track,
     ...(detail ?? {}),
     id: track.id,
     liked: favoriteTracks.value.some((favorite) => favorite.id === track.id)
       || accountFavoriteTracks.value.some((favorite) => favorite.id === track.id),
-    audioUrl: detail?.audioUrl ?? track.audioUrl ?? loadCatalogAudio(track.id),
+    audioUrl: networkAudioUrl,
     coverUrl: primaryCoverUrl,
     coverFallbackUrl: detail?.coverFallbackUrl
       ?? track.coverFallbackUrl
@@ -5017,6 +5027,20 @@ async function loadOnlineTrackAssets(track: Track) {
       : localLyricFallback?.lyricCredits ?? track.lyricCredits,
     hasLyrics: Boolean(onlineLyrics?.lyrics ?? localLyricFallback?.lyrics ?? track.lyrics),
     hasCover: Boolean(detail?.coverUrl ?? track.coverUrl)
+  };
+
+  if (!preferLocalDownloadPlayback.value || !networkAudioUrl) {
+    return resolvedTrack;
+  }
+  const localPlaybackTrack = selectPreferredLocalPlaybackTrack(resolvedTrack, remoteTracks.value);
+  if (!localPlaybackTrack?.audioUrl) {
+    return resolvedTrack;
+  }
+  return {
+    ...resolvedTrack,
+    audioUrl: localPlaybackTrack.audioUrl,
+    preferredLocalPlayback: true,
+    playbackFallbackUrl: networkAudioUrl
   };
 }
 
@@ -5085,6 +5109,47 @@ async function fadeAudioVolume(
   return false;
 }
 
+function createNetworkFallbackTrack(track: Track) {
+  if (!track.preferredLocalPlayback || !track.playbackFallbackUrl) {
+    return undefined;
+  }
+  return {
+    ...track,
+    audioUrl: track.playbackFallbackUrl,
+    preferredLocalPlayback: false,
+    playbackFallbackUrl: undefined
+  } satisfies Track;
+}
+
+async function playAudioWithNetworkFallback(
+  audio: HTMLAudioElement,
+  track: Track,
+  initialVolume: number,
+  fallbackImmediately = false
+) {
+  if (!fallbackImmediately) {
+    audio.volume = initialVolume;
+    try {
+      await audio.play();
+      return track;
+    } catch (error) {
+      if (!track.preferredLocalPlayback) {
+        throw error;
+      }
+    }
+  }
+
+  const fallbackTrack = createNetworkFallbackTrack(track);
+  if (!fallbackTrack) {
+    throw new Error("没有可用的网络回退地址");
+  }
+  currentTrack.value = fallbackTrack;
+  prepareAudioSource(fallbackTrack);
+  audio.volume = initialVolume;
+  await audio.play();
+  return fallbackTrack;
+}
+
 async function playTrack(track: Track, options: PlayTrackOptions = {}) {
   isPlaybackStarting.value = true;
   const transitionToken = options.transitionToken;
@@ -5144,22 +5209,24 @@ async function playTrack(track: Track, options: PlayTrackOptions = {}) {
     }
     prepareAudioSource(playbackTrack);
     const shouldFadeIn = Boolean(options.fadeIn && playbackFadeEnabled.value && transitionToken !== undefined);
-    audio.volume = shouldFadeIn ? 0 : volume.value / 100;
+    const initialVolume = shouldFadeIn ? 0 : volume.value / 100;
+    let activePlaybackTrack = playbackTrack;
     try {
-      await audio.play();
+      activePlaybackTrack = await playAudioWithNetworkFallback(audio, playbackTrack, initialVolume);
+      currentTrack.value = activePlaybackTrack;
       playbackClock.reset(audio, performance.now());
       isPlaying.value = true;
       isPlaybackStarting.value = false;
       scanError.value = "";
       startPlaybackClock();
-      startListeningScrobbleSession(playbackTrack);
-      recordCurrentTrackPlayStart(playbackTrack);
-      void recordPlayedTrack(playbackTrack);
+      startListeningScrobbleSession(activePlaybackTrack);
+      recordCurrentTrackPlayStart(activePlaybackTrack);
+      void recordPlayedTrack(activePlaybackTrack);
       void persistPlaybackState();
       if (shouldFadeIn && transitionToken !== undefined) {
         const availableSeconds = Number.isFinite(audio.duration) && audio.duration > 0
           ? audio.duration
-          : playbackTrack.duration;
+          : activePlaybackTrack.duration;
         const fadeDuration = boundFadeDurationMs(playbackFadeDurationMs.value, availableSeconds);
         void fadeAudioVolume(audio, () => volume.value / 100, fadeDuration, transitionToken, "in");
       }
@@ -5168,9 +5235,9 @@ async function playTrack(track: Track, options: PlayTrackOptions = {}) {
       activePlaybackFade = null;
       isPlaybackStarting.value = false;
       isPlaying.value = false;
-      const loginExpired = await refreshAccountsAfterPlaybackFailure(playbackTrack);
+      const loginExpired = await refreshAccountsAfterPlaybackFailure(activePlaybackTrack);
       if (!loginExpired) {
-        scanError.value = playbackTrack.source === "netease"
+        scanError.value = activePlaybackTrack.source === "netease"
           ? "网易云音频暂时无法播放，可能是版权或地区限制，请换一首歌曲。"
           : "音频无法播放，请确认后端正在运行。";
       }
@@ -6089,6 +6156,10 @@ watch(playbackFadeDurationMs, (durationMs) => {
   window.localStorage.setItem(PLAYBACK_FADE_DURATION_STORAGE_KEY, String(normalizedDuration));
 });
 
+watch(preferLocalDownloadPlayback, (enabled) => {
+  window.localStorage.setItem(PREFER_LOCAL_DOWNLOAD_PLAYBACK_STORAGE_KEY, String(enabled));
+});
+
 watch(taskbarThumbnailButtonsEnabled, (enabled) => {
   window.localStorage.setItem(TASKBAR_THUMBNAIL_BUTTONS_STORAGE_KEY, String(enabled));
   if (taskbarThumbnailButtonsSupported) {
@@ -6716,7 +6787,28 @@ function handleAudioEnded() {
   nextTrack();
 }
 
-function handleAudioError() {
+async function handleAudioError() {
+  const audio = audioElement.value;
+  if (!isPlaybackStarting.value && audio && currentTrack.value.preferredLocalPlayback) {
+    stopPlaybackClock();
+    isPlaying.value = false;
+    try {
+      const fallbackTrack = await playAudioWithNetworkFallback(
+        audio,
+        currentTrack.value,
+        volume.value / 100,
+        true
+      );
+      currentTrack.value = fallbackTrack;
+      playbackClock.reset(audio, performance.now());
+      isPlaying.value = true;
+      scanError.value = "";
+      startPlaybackClock();
+      return;
+    } catch {
+      // Continue into the normal playback error state when the network source also fails.
+    }
+  }
   stopPlaybackClock();
   resetListeningSample();
   listeningScrobbleSession = undefined;
@@ -7813,6 +7905,18 @@ onBeforeUnmount(() => {
                     <span>{{ playbackFadeEnabled ? "已开启" : "已关闭" }}</span>
                   </label>
                 </div>
+              </div>
+
+              <div class="settings-toggle-field">
+                <div>
+                  <strong>优先播放本地下载品质</strong>
+                  <span>开启后，网络环境下播放已下载歌曲时，将优先选择本地高品质文件播放。</span>
+                </div>
+                <label class="settings-switch">
+                  <input v-model="preferLocalDownloadPlayback" type="checkbox" />
+                  <i aria-hidden="true"></i>
+                  <span>{{ preferLocalDownloadPlayback ? "已开启" : "已关闭" }}</span>
+                </label>
               </div>
 
               <template v-if="taskbarThumbnailButtonsSupported">
@@ -10488,11 +10592,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 
 .settings-fade-field {
   gap: 28px;
-  border-top: 0;
-  border-left: 3px solid #8fb4ff;
-  border-radius: 9px;
-  padding: 16px 14px;
-  background: #f1f3f7;
+  border-top: 1px solid #edf0f5;
+  padding-top: 20px;
 }
 
 .settings-fade-copy {

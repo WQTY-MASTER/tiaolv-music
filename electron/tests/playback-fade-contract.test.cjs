@@ -40,7 +40,8 @@ assert.ok(
   playbackSettingsBlock.indexOf("settings-fade-field") < playbackSettingsBlock.indexOf("系统托盘图标"),
   "淡入淡出应位于系统播放入口设置之前"
 );
-assert.match(app, /\.settings-fade-field\s*\{[^}]*background:/, "淡入淡出设置应采用参考图的独立横向表面");
+assert.match(app, /\.settings-fade-field\s*\{[^}]*border-top:\s*1px solid #edf0f5[^}]*padding-top:\s*20px/, "淡入淡出设置应与其他播放设置使用相同分隔线和间距");
+assert.doesNotMatch(app, /\.settings-fade-field\s*\{[^}]*(?:background|border-left):/, "淡入淡出设置不应使用独立灰底或左侧强调边");
 assert.match(app, /\.settings-fade-slider:disabled\s*\{[^}]*opacity:/, "关闭状态需要清晰的置灰样式");
 
 console.log("播放渐进渐出触发契约通过");
