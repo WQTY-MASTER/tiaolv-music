@@ -228,6 +228,28 @@ class LibraryServiceTest {
         verify(tracks).removeLocalTracksByIds(List.of("local-duplicate"));
     }
 
+    @Test
+    void removingLibraryRootKeepsTracksCoveredByAnotherRoot() {
+        TrackRepository tracks = mock(TrackRepository.class);
+        LocalLibraryRepository localLibrary = mock(LocalLibraryRepository.class);
+        Path root = Path.of("G:/music").toAbsolutePath().normalize();
+        Path nestedRoot = root.resolve("kept");
+        Track removed = localTrack("local-removed", root.resolve("removed.flac"));
+        Track kept = localTrack("local-kept", nestedRoot.resolve("kept.flac"));
+        when(localLibrary.findRoots()).thenReturn(List.of(nestedRoot.toString()));
+        when(tracks.findLocalTracks()).thenReturn(List.of(removed, kept), List.of(kept));
+        LibraryService service = new LibraryService(
+            tracks, mock(PlaylistRepository.class), mock(MusicScanService.class),
+            mock(UserDataRepository.class), mock(LocalLyricsCache.class), localLibrary
+        );
+
+        List<Track> result = service.removeLibraryRoot(root.toString());
+
+        assertEquals(List.of(kept), result);
+        verify(localLibrary).removeRoot(root);
+        verify(tracks).removeLocalTracksByIds(List.of("local-removed"));
+    }
+
     private Track localTrack(String id, Path file) {
         return new Track(
             id, "歌曲", "歌手", "专辑", 180L, "local", file.toString(),

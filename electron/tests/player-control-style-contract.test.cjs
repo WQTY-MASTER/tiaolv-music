@@ -29,7 +29,7 @@ assert.match(playerBar, /class="player-tool-button"[^>]*kind="queue"|kind="queue
 assert.match(playerBar, /\.player-tools\s*\{[^}]*gap:\s*4px/, "工具按钮应使用参考图的轻量间距");
 assert.match(playerBar, /\.player-volume-wrap\s*\{[^}]*display:\s*grid/, "底部播放器应显示音量按钮");
 assert.match(playerBar, /class="lyrics-icon">词<\/span>/, "歌词按钮应使用独立的小方框图标");
-assert.match(playerBar, /\.player-tools\s+:deep\(\.player-like-icon\),[\s\S]*?\.player-hifi-icon\s*\{[^}]*width:\s*var\(--player-tool-icon-size\)[^}]*height:\s*var\(--player-tool-icon-size\)/, "右侧全部图标应使用统一的 18px 视觉容器");
+assert.match(playerBar, /<SlidersHorizontal\s+:size="18"/, "音质按钮应使用统一的 18px Lucide 图标");
 assert.match(playerBar, /\.lyrics-icon\s*\{[^}]*border:\s*1px\s+solid\s+currentColor[^}]*border-radius:\s*3px/, "歌词图标应匹配参考图的小型方框样式");
 assert.doesNotMatch(playerBar, /\.lyrics-button\s*\{[^}]*!important/, "歌词按钮不应再使用独立尺寸或边框覆盖");
 

@@ -117,6 +117,7 @@ function parseWordTimedContent(
   parseTokens: (body: string) => KaraokeToken[]
 ): LyricLine[] {
   const lines: LyricLine[] = [];
+  const title = raw.match(/^\[ti:([^\]\r\n]+)\]/mu)?.[1]?.trim();
 
   for (const rawLine of raw.split(/\r?\n/)) {
     const yrcMatch = rawLine.match(yrcHeaderPattern);
@@ -137,7 +138,9 @@ function parseWordTimedContent(
     const trimmedCharacters = trimCharacterData(characters);
     const text = trimmedCharacters.map((character) => character.text).join("");
 
-    if (!text || isLyricMetadataText(text) || (duration > 0 && duration < 0.1)) {
+    const isOpeningTitle = lineTime < 2 && title
+      && (text === title || text.startsWith(`${title} - `));
+    if (!text || isOpeningTitle || isLyricAnnotation(text) || isLyricMetadataText(text) || (duration > 0 && duration < 0.1)) {
       continue;
     }
 
@@ -183,7 +186,7 @@ export function parseLrcContent(raw: string): LyricLine[] {
 
     const rawText = rawLine.replace(timestampPattern, "").trim();
     const text = rawText.replace(inlineTimestampPattern, "").trim();
-    if (!text || isLyricMetadataText(text)) {
+    if (!text || isLyricAnnotation(text) || isLyricMetadataText(text)) {
       continue;
     }
 
@@ -294,6 +297,11 @@ function splitInlineTranslation(text: string) {
     text: match[1].trim(),
     translation: match[2].trim()
   };
+}
+
+function isLyricAnnotation(text: string) {
+  return /^[/／\s]+$/u.test(text)
+    || /^(?:duet|solo|verse|chorus|bridge|intro|outro)\s*[:：]\s*$/iu.test(text);
 }
 
 function isLyricMetadataText(text: string) {

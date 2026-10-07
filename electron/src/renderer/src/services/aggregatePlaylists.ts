@@ -1,4 +1,6 @@
 export const AGGREGATE_PLAYLIST_STORAGE_KEY = "tiaolv-music-aggregate-playlists";
+export const LEGACY_AGGREGATE_PLAYLIST_STORAGE_KEY = "listen-music-aggregate-playlists";
+export const LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY = "tiaolv-music-aggregate-playlists-legacy-migrated-v1";
 
 export interface AggregateTrackSource {
   id: string;
@@ -99,7 +101,8 @@ function isAggregatePlaylist(value: unknown): value is AggregatePlaylist {
 
 export function readAggregatePlaylists(storage: Pick<Storage, "getItem"> = window.localStorage): AggregatePlaylist[] {
   try {
-    const raw = storage.getItem(AGGREGATE_PLAYLIST_STORAGE_KEY);
+    const raw = storage.getItem(AGGREGATE_PLAYLIST_STORAGE_KEY)
+      ?? storage.getItem(LEGACY_AGGREGATE_PLAYLIST_STORAGE_KEY);
     if (!raw) {
       return [];
     }
@@ -108,6 +111,20 @@ export function readAggregatePlaylists(storage: Pick<Storage, "getItem"> = windo
   } catch {
     return [];
   }
+}
+
+export function mergeAggregatePlaylistCollections(
+  current: AggregatePlaylist[],
+  legacyValue: unknown
+): AggregatePlaylist[] {
+  const legacy = Array.isArray(legacyValue)
+    ? legacyValue.filter(isAggregatePlaylist)
+    : [];
+  const existingIds = new Set(current.map((playlist) => playlist.id));
+  return [
+    ...current,
+    ...legacy.filter((playlist) => !existingIds.has(playlist.id))
+  ];
 }
 
 export function writeAggregatePlaylists(

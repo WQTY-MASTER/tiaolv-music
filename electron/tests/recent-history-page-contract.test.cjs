@@ -37,8 +37,16 @@ assert.match(app, /localTrackAudioInfo\(track\)/, "歌曲时长下方应展示�
 assert.match(app, /class="recent-history-empty"/, "最近播放页需要空状态");
 assert.match(app, /activeView !== 'history'[\s\S]*class="section-block track-section"/, "最近播放页不应再渲染通用歌曲区");
 assert.match(app, /\.recent-history-row:hover[\s\S]*background:/, "歌曲行需要 hover 高亮");
-assert.match(app, /\.recent-history-table-head span:nth-child\(3\),\.recent-history-table-head span:nth-child\(4\)\s*\{[^}]*text-align:\s*right/, "专辑和时长表头应与对应内容右对齐");
+assert.match(app, /\.recent-history-table-head span:nth-child\(3\)\s*\{[^}]*text-align:\s*left/, "专辑表头应向中部对齐，不应贴近右侧");
+assert.match(app, /\.recent-history-table-head span:nth-child\(4\)\s*\{[^}]*text-align:\s*right/, "时长表头应与时长内容右对齐");
+assert.match(app, /\.recent-history-table-head span:nth-child\(3\),\s*\.recent-history-table-head span:nth-child\(4\)\s*\{[^}]*color:\s*#66635f/, "最近播放的专辑和时长表头应使用中性灰");
+assert.match(app, /\.recent-history-table-head\s*\{[^}]*padding:\s*0 56px 14px 14px/, "最近播放表头右侧应留出呼吸空间");
+assert.match(app, /\.recent-history-row\s*\{[^}]*padding:\s*8px 56px 8px 14px/, "最近播放歌曲行右侧应留出呼吸空间");
 assert.match(app, /\.recent-history-album\s*\{[^}]*min-height:\s*36px/, "专辑名称应占用与两行时长信息相同的高度以对齐首行");
+assert.match(app, /\.recent-history-album\s*\{[^}]*text-align:\s*left/, "专辑名称应左对齐到更靠中部的位置");
+assert.match(app, /\.recent-history-album\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "最近播放的专辑应使用统一正文样式");
+assert.match(app, /\.recent-history-duration strong\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "最近播放的时长应使用统一正文样式");
+assert.match(app, /\.recent-history-table-head,\.recent-history-row\s*\{[^}]*padding-inline:\s*8px/, "窄窗口下表头和歌曲行应恢复一致的内边距");
 assert.match(packageJson, /recent-history-page-contract\.test\.cjs/, "测试脚本需要包含最近播放页面契约");
 
 console.log("最近播放页面契约通过");

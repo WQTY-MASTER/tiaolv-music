@@ -7,6 +7,10 @@ const playerBar = fs.readFileSync(path.join(root, "src/renderer/src/components/P
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
 
 assert.match(playerBar, /class=\"player-bar\"\s*:class=\"\{[^}]*is-sidebar-collapsed/, "播放器需要知道侧栏是否收起");
+assert.match(playerBar, /import type \{ PlayerBarPresentation \}/, "播放器应复用持久化设置中的形态类型");
+assert.match(playerBar, /presentation:\s*PlayerBarPresentation/, "播放器缺少形态属性");
+assert.match(playerBar, /'is-presentation-capsule':\s*props\.presentation\s*===\s*["']capsule["']/, "迷你胶囊选择应切换真实布局类");
+assert.match(playerBar, /'is-presentation-compact':\s*props\.presentation\s*===\s*["']compact["']/, "紧凑模式选择应切换真实布局类");
 assert.match(playerBar, /sidebarCollapsed\??:\s*boolean/, "播放器缺少侧栏状态属性");
 assert.match(playerBar, /ambient\??:\s*boolean/, "播放器应提供仅详情页启用的环境色属性");
 assert.match(playerBar, /is-ambient[^}]*props\.ambient/, "播放器应按环境色属性切换样式类");
@@ -39,9 +43,9 @@ assert.match(playerBar, /\.transport-controls \.play-button:hover\s*\{[^}]*backg
 assert.match(playerBar, /playMode:\s*\"shuffle\"\s*\|\s*\"sequence\"\s*\|\s*\"single\"\s*\|\s*\"loop\"/, "底部播放器需要读取全局播放模式");
 assert.match(playerBar, /mode:\s*\[\]/, "底部播放器播放模式按钮需要触发切换事件");
 assert.match(playerBar, /mini:\s*\[\]/, "底部播放器需要提供迷你播放器事件");
-assert.match(playerBar, /hifi:\s*\[\]/, "底部播放器需要提供 HiFi 控制台事件");
+assert.match(playerBar, /qualityChange:\s*\[value:\s*string\]/, "底部播放器需要提供音质切换事件");
 assert.doesNotMatch(playerBar, /connection-state/, "底部播放器右侧不应显示后端连接状态");
-assert.match(playerBar, /kind="like"[\s\S]*player-mode-button[\s\S]*player-volume-wrap[\s\S]*kind="queue"[\s\S]*player-mini-button[\s\S]*lyrics-button[\s\S]*player-hifi-button/, "右侧功能区应按参考图排列并显示音量入口");
+assert.match(playerBar, /kind="like"[\s\S]*player-mode-button[\s\S]*player-volume-wrap[\s\S]*kind="queue"[\s\S]*player-mini-button[\s\S]*lyrics-button[\s\S]*player-quality-wrap/, "右侧功能区应按参考图排列并显示音量与音质入口");
 assert.match(playerBar, /linear-gradient\(90deg,\s*#2f6df6\s*0%,\s*#14a88d\s*var\(--progress\),\s*#dfe6ef\s*var\(--progress\)\s*100%\)/, "底部播放器进度条已播放部分应使用蓝绿渐变");
 assert.match(playerBar, /\.progress-input::-(?:webkit-slider-runnable-track|moz-range-track)\s*\{[^}]*height:\s*4px/, "底部播放器进度轨道应随高度同步压缩");
 assert.match(playerBar, /\.progress-input::-webkit-slider-thumb\s*\{[^}]*background:\s*transparent[^}]*box-shadow:\s*none/, "底部播放器不应显示 WebKit 黑色进度滑块");
@@ -49,10 +53,14 @@ assert.match(playerBar, /\.progress-input::-moz-range-thumb\s*\{[^}]*background:
 assert.doesNotMatch(playerBar, /\.progress-slider-wrap\.is-preview::after\s*\{/, "底部播放器不应额外绘制黑色试听终点圆点");
 assert.match(playerBar, /progress-times/, "底部播放器进度时间应独立显示在进度条下方");
 assert.match(playerBar, /\.player-bar\.is-sidebar-collapsed\s*\{[^}]*left:\s*50%[^}]*width:\s*min\(1180px,\s*calc\(100vw\s*-\s*48px\)\)/, "侧栏收起后播放器仍应保持窗口居中和相同宽度");
+assert.match(playerBar, /\.player-bar\.is-presentation-capsule\s*\{[^}]*width:\s*min\(920px,[^}]*--player-bar-height:\s*60px[^}]*border-radius:\s*999px/, "迷你胶囊应使用更窄、更低的胶囊布局");
+assert.match(playerBar, /\.player-bar\.is-presentation-capsule\s+\.progress-row\s*\{[^}]*display:\s*none/, "迷你胶囊应隐藏独立进度行以保持紧凑");
+assert.match(playerBar, /\.player-bar\.is-presentation-compact\s*\{[^}]*right:\s*0[^}]*bottom:\s*0[^}]*width:\s*calc\(100vw\s*-\s*224px\)[^}]*border-radius:\s*0/, "紧凑模式应贴合主内容底边并使用通栏布局");
 assert.match(playerBar, /transition:[^}]*left\s+280ms\s+ease[^}]*width\s+280ms\s+ease/, "播放器应与侧栏使用相同的 280ms 位移动画");
 assert.match(playerBar, /@media\s*\(max-width:\s*980px\)[\s\S]*?\.player-bar\s*\{[^}]*left:\s*calc\(72px\s*\+\s*\(100vw\s*-\s*72px\)\s*\/\s*2\)[^}]*width:\s*min\(1180px,\s*calc\(100vw\s*-\s*72px\s*-\s*44px\)\)/, "窄侧栏下播放器应在 72px 之外的内容区居中");
 assert.match(playerBar, /@media\s*\(max-width:\s*720px\)[\s\S]*?\.player-bar\s*\{[^}]*right:\s*12px[^}]*bottom:\s*12px[^}]*left:\s*84px[^}]*width:\s*auto[^}]*transform:\s*none/, "手机宽度下播放器应避开 72px 侧栏并保留 12px 间距");
 assert.match(playerBar, /@media\s*\(max-width:\s*720px\)[\s\S]*?\.player-bar\.is-sidebar-collapsed\s*\{[^}]*left:\s*12px[^}]*width:\s*auto/, "手机宽度侧栏收起后播放器应恢复全窗口边距");
 assert.match(app, /<PlayerBar[\s\S]*:sidebar-collapsed=\"sidebarCollapsed\"/, "App 未向播放器传递侧栏状态");
+assert.match(app, /<PlayerBar[\s\S]*:presentation=\"appearancePreferences\.playerControls\.presentation\"/, "App 应把持久化形态传给真实播放栏");
 
 console.log("播放器悬浮布局契约通过");

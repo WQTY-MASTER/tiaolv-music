@@ -23,7 +23,7 @@ const providers: Array<{
   description: string;
 }> = [
   { id: "netease", name: "网易云音乐", shortName: "易", description: "扫码登录" },
-  { id: "qq", name: "QQ 音乐", shortName: "Q", description: "Cookie 登录" }
+  { id: "qq", name: "QQ 音乐", shortName: "Q", description: "扫码登录" }
 ];
 
 function accountFor(provider: AccountProvider) {

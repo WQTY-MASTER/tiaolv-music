@@ -7,6 +7,7 @@ import com.listenmusic.provider.HomepageData;
 import com.listenmusic.provider.MusicProvider;
 import com.listenmusic.provider.PlaylistCategoryData;
 import com.listenmusic.provider.PlaylistDiscoveryPage;
+import com.listenmusic.provider.PlaybackQuality;
 import com.listenmusic.provider.SearchResultPage;
 import com.listenmusic.provider.SearchType;
 import com.listenmusic.provider.ArtistAlbum;
@@ -17,18 +18,22 @@ import org.springframework.stereotype.Service;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 @Service
 public class OnlineCatalogService {
     private final List<MusicProvider> providers;
     private final String activeProvider;
+    private final ProviderResourceCache resourceCache;
 
     public OnlineCatalogService(
         List<MusicProvider> providers,
-        @Value("${listenmusic.catalog.provider:netease}") String providerName
+        @Value("${listenmusic.catalog.provider:netease}") String providerName,
+        ProviderResourceCache resourceCache
     ) {
         this.providers = providers;
         this.activeProvider = providerName.toLowerCase();
+        this.resourceCache = resourceCache;
     }
 
     public List<Track> search(String query) {
@@ -40,15 +45,31 @@ public class OnlineCatalogService {
     }
 
     public Optional<Track> find(String trackId) {
-        return providerForTrack(trackId).flatMap(provider -> provider.find(trackId));
+        return providerForTrack(trackId).flatMap(provider -> cached(
+            ProviderResourceCache.Category.METADATA,
+            provider,
+            trackId,
+            Track.class,
+            () -> provider.find(trackId)
+        ));
     }
 
     public Optional<String> resolveAudioUrl(String trackId) {
-        return providerForTrack(trackId).flatMap(provider -> provider.resolveAudioUrl(trackId));
+        return resolveAudioUrl(trackId, PlaybackQuality.AUTO);
+    }
+
+    public Optional<String> resolveAudioUrl(String trackId, PlaybackQuality quality) {
+        return providerForTrack(trackId).flatMap(provider -> provider.resolveAudioUrl(trackId, quality));
     }
 
     public Optional<LyricData> loadLyrics(String trackId) {
-        return providerForTrack(trackId).flatMap(provider -> provider.loadLyrics(trackId));
+        return providerForTrack(trackId).flatMap(provider -> cached(
+            ProviderResourceCache.Category.LYRICS,
+            provider,
+            trackId,
+            LyricData.class,
+            () -> provider.loadLyrics(trackId)
+        ));
     }
 
     public List<Track> loadPlaylist(String playlistId) {
@@ -74,7 +95,13 @@ public class OnlineCatalogService {
     }
 
     public Optional<CoverData> loadCover(String trackId) {
-        return providerForTrack(trackId).flatMap(provider -> provider.loadCover(trackId));
+        return providerForTrack(trackId).flatMap(provider -> cached(
+            ProviderResourceCache.Category.COVER,
+            provider,
+            trackId,
+            CoverData.class,
+            () -> provider.loadCover(trackId)
+        ));
     }
 
     public HomepageData loadHomepage(boolean refresh, String cursor) {
@@ -144,5 +171,21 @@ public class OnlineCatalogService {
         return providers.stream()
             .filter(provider -> provider.id().equalsIgnoreCase(source))
             .findFirst();
+    }
+
+    private <T> Optional<T> cached(
+        ProviderResourceCache.Category category,
+        MusicProvider provider,
+        String resourceId,
+        Class<T> type,
+        Supplier<Optional<T>> loader
+    ) {
+        Optional<T> stored = resourceCache.read(category, provider.id(), resourceId, type);
+        if (stored.isPresent()) {
+            return stored;
+        }
+        Optional<T> loaded = loader.get();
+        loaded.ifPresent(value -> resourceCache.write(category, provider.id(), resourceId, value));
+        return loaded;
     }
 }

@@ -17,7 +17,11 @@ class LocalLyricsCacheTest {
 
     @Test
     void writesAndReadsMatchedLyrics() {
-        LocalLyricsCache cache = new LocalLyricsCache(new ObjectMapper(), tempDirectory.toString());
+        ProviderResourceCache resourceCache = new ProviderResourceCache(
+            new ObjectMapper(),
+            tempDirectory.resolve("cache-settings.json")
+        );
+        LocalLyricsCache cache = new LocalLyricsCache(resourceCache);
         LyricData expected = new LyricData("[1,500](1,500,0)你", "翻译", "YRC", "netease", List.of());
 
         cache.save("local:test/path", expected);

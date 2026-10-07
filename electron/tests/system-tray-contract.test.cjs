@@ -25,7 +25,8 @@ for (const action of ["previous", "toggle", "next", "favorite", "mini-player", "
   assert.match(main, new RegExp(`tray-media-action[\\s\\S]{0,240}"${action}"`), `托盘菜单缺少 ${action} 动作`);
 }
 assert.match(main, /label:\s*"桌面歌词"[\s\S]{0,180}toggleDesktopLyricsWindow\(\)/, "托盘桌面歌词应直接控制独立窗口");
-assert.match(main, /Ctrl\+Alt\+L 解锁/, "托盘应提示桌面歌词全局解锁快捷键");
+assert.match(main, /"解锁桌面歌词"/, "托盘应提供可用的歌词解锁入口");
+assert.match(main, /locked: !desktopLyricsConfig\.preferences\.locked/, "托盘锁定入口应支持反向解锁");
 for (const mode of ["sequence", "loop", "single", "shuffle"]) {
   assert.match(main, new RegExp(`play-mode:${mode}`), `托盘菜单缺少 ${mode} 播放模式`);
 }

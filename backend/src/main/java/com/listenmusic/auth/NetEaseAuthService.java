@@ -15,6 +15,10 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
 import java.time.OffsetDateTime;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -124,6 +128,62 @@ public class NetEaseAuthService {
         return new QrLoginStartResponse(sessionId, PROVIDER, "WAITING", qrimg, qrurl, QR_LIFETIME_SECONDS);
     }
 
+    public synchronized String sendSmsCode(String rawPhone) {
+        String phone = requirePhone(rawPhone);
+        JsonNode root = get("/captcha/sent", uriBuilder -> uriBuilder
+            .path("/captcha/sent")
+            .queryParam("phone", phone)
+            .queryParam("timestamp", System.currentTimeMillis())
+            .build(), null);
+        requireSuccessfulResponse(root, "验证码发送失败，请稍后重试");
+        return message(root, "验证码已发送");
+    }
+
+    public synchronized AccountView loginWithSms(String rawPhone, String rawCaptcha) {
+        ensureProviderAvailableForLogin();
+        String phone = requirePhone(rawPhone);
+        String captcha = requireCaptcha(rawCaptcha);
+        ResponseEntity<JsonNode> response = getEntity("/login/cellphone", uriBuilder -> uriBuilder
+            .path("/login/cellphone")
+            .queryParam("phone", phone)
+            .queryParam("captcha", captcha)
+            .queryParam("timestamp", System.currentTimeMillis())
+            .build(), null);
+        return completeDirectLogin(response, "短信验证码登录失败");
+    }
+
+    public synchronized AccountView loginWithPassword(String rawAccount, String rawPassword) {
+        ensureProviderAvailableForLogin();
+        String loginAccount = rawAccount == null ? "" : rawAccount.trim();
+        String password = rawPassword == null ? "" : rawPassword;
+        if (loginAccount.isBlank()) {
+            throw new IllegalArgumentException("请输入网易云手机号或邮箱");
+        }
+        if (password.isBlank()) {
+            throw new IllegalArgumentException("请输入网易云账号密码");
+        }
+        String passwordHash = md5(password);
+        ResponseEntity<JsonNode> response;
+        if (loginAccount.matches("^1\\d{10}$")) {
+            response = getEntity("/login/cellphone", uriBuilder -> uriBuilder
+                .path("/login/cellphone")
+                .queryParam("phone", loginAccount)
+                .queryParam("md5_password", passwordHash)
+                .queryParam("timestamp", System.currentTimeMillis())
+                .build(), null);
+        } else if (loginAccount.matches("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")) {
+            response = getEntity("/login", uriBuilder -> uriBuilder
+                .path("/login")
+                .queryParam("email", loginAccount)
+                .queryParam("md5_password", passwordHash)
+                .queryParam("timestamp", System.currentTimeMillis())
+                .build(), null);
+        } else {
+            throw new IllegalArgumentException("请输入正确的网易云手机号或邮箱");
+        }
+        return completeDirectLogin(response, "账号或密码登录失败");
+    }
+
     public synchronized QrLoginStatusResponse checkQrLogin(String sessionId) {
         OffsetDateTime now = OffsetDateTime.now();
         // Read the requested session before bulk cleanup so an expired QR code
@@ -224,6 +284,70 @@ public class NetEaseAuthService {
             session.sessionId(), PROVIDER, "SUCCESS", identity.userId(), identity.nickname(),
             blankToNull(identity.avatarUrl()), "登录成功"
         );
+    }
+
+    private AccountView completeDirectLogin(ResponseEntity<JsonNode> response, String fallbackMessage) {
+        JsonNode root = response.getBody() == null ? OBJECT_MAPPER.createObjectNode() : response.getBody();
+        requireSuccessfulResponse(root, fallbackMessage);
+        String cookie = firstText(
+            root.path("cookie"),
+            root.path("data").path("cookie"),
+            root.path("data").path("cookies")
+        );
+        if (cookie.isBlank()) {
+            cookie = cookieHeader(response.getHeaders());
+        }
+        if (cookie.isBlank()) {
+            throw new IllegalStateException("网易云登录成功，但没有返回会话凭据");
+        }
+
+        JsonNode status = loadLoginStatus(cookie);
+        LoginIdentity identity = loginIdentity(status);
+        if (!identity.valid()) {
+            throw new IllegalArgumentException("网易云登录状态无效，请检查账号信息后重试");
+        }
+        String credentialReference = credentialStore.put(PROVIDER, cookie);
+        saveAccount(identity, credentialReference);
+        sessionStore.save(identity.userId(), cookie);
+        return new AccountView(PROVIDER, identity.userId(), identity.nickname(), blankToNull(identity.avatarUrl()));
+    }
+
+    private void ensureProviderAvailableForLogin() {
+        accountRepository.findActive(PROVIDER).ifPresent(account -> {
+            throw new AccountAlreadyActiveException(account.provider());
+        });
+    }
+
+    private static void requireSuccessfulResponse(JsonNode root, String fallbackMessage) {
+        if (root.path("code").asInt(-1) != 200) {
+            throw new IllegalArgumentException(message(root, fallbackMessage));
+        }
+    }
+
+    private static String requirePhone(String rawPhone) {
+        String phone = rawPhone == null ? "" : rawPhone.replaceAll("\\s+", "");
+        if (!phone.matches("^1\\d{10}$")) {
+            throw new IllegalArgumentException("请输入正确的 11 位手机号");
+        }
+        return phone;
+    }
+
+    private static String requireCaptcha(String rawCaptcha) {
+        String captcha = rawCaptcha == null ? "" : rawCaptcha.trim();
+        if (!captcha.matches("^\\d{4,8}$")) {
+            throw new IllegalArgumentException("请输入正确的短信验证码");
+        }
+        return captcha;
+    }
+
+    private static String md5(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                MessageDigest.getInstance("MD5").digest(value.getBytes(StandardCharsets.UTF_8))
+            );
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("当前系统不支持网易云密码登录", exception);
+        }
     }
 
     private JsonNode loadLoginStatus(String cookie) {

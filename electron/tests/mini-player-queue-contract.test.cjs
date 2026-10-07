@@ -17,7 +17,9 @@ assert.match(mini, /'is-queue-open':\s*props\.queueShellOpen/, "队列退场与�
 assert.match(mini, /class="mini-queue-panel"[\s\S]*v-for="\(track, index\) in props\.queue"/, "迷你播放器下方应显示播放列表");
 assert.doesNotMatch(mini, /class="mini-queue-header"/, "迷你播放列表不应保留标题、数量和收起提示栏");
 assert.match(mini, /class="mini-queue-track"[\s\S]*class="mini-queue-copy"[\s\S]*class="mini-queue-actions"[\s\S]*mini-queue-play[\s\S]*mini-queue-like[\s\S]*mini-queue-more/, "播放、收藏和更多按钮应统一位于歌曲右侧");
-assert.match(mini, /import \{ CircleEllipsis, Heart, Pause, Play \} from "lucide-vue-next"/, "队列操作应复用统一线宽的 Lucide 图标");
+for (const icon of ["CircleEllipsis", "Heart", "Pause", "Play"]) {
+  assert.match(mini, new RegExp(`import \\{[^}]*${icon}[^}]*\\} from "lucide-vue-next"`), "队列操作应复用统一线宽的 Lucide 图标");
+}
 assert.match(mini, /<Play[^>]*:size="16"[^>]*:stroke-width="1\.6"/, "未播放歌曲应显示细线空心播放图标");
 assert.match(mini, /<Pause[^>]*:size="16"[^>]*:stroke-width="1\.6"/, "当前播放歌曲应显示同规格暂停图标");
 assert.match(mini, /<Heart[^>]*:size="16"[^>]*:stroke-width="1\.6"[^>]*:fill="track\.liked \? 'currentColor' : 'none'"/, "爱心应使用同规格描边并仅在收藏时填充");

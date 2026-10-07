@@ -6,6 +6,7 @@ export interface TrackListeningStat {
   playCount: number;
   listenedSeconds: number;
   lastListenedAt: string;
+  lastListenedDate: string;
 }
 
 export interface DayListeningStat {
@@ -14,6 +15,7 @@ export interface DayListeningStat {
 }
 
 export interface ListeningStatsState {
+  revision: number;
   tracks: Record<string, TrackListeningStat>;
   days: Record<string, DayListeningStat>;
 }
@@ -28,7 +30,7 @@ function browserStorage(): StorageLike | undefined {
 }
 
 export function createEmptyListeningStats(): ListeningStatsState {
-  return { tracks: {}, days: {} };
+  return { revision: 0, tracks: {}, days: {} };
 }
 
 export function readListeningStats(storage: StorageLike | undefined = browserStorage()): ListeningStatsState {
@@ -39,10 +41,11 @@ export function readListeningStats(storage: StorageLike | undefined = browserSto
 
   try {
     const parsed = JSON.parse(raw) as Partial<ListeningStatsState>;
-    return {
+    return normalizeListeningStats({
+      revision: safeRevision(parsed.revision),
       tracks: parsed.tracks && typeof parsed.tracks === "object" ? parsed.tracks : {},
       days: parsed.days && typeof parsed.days === "object" ? parsed.days : {}
-    };
+    });
   } catch {
     return createEmptyListeningStats();
   }
@@ -53,6 +56,98 @@ export function writeListeningStats(
   storage: StorageLike | undefined = browserStorage()
 ) {
   storage?.setItem(STORAGE_KEY, JSON.stringify(stats));
+}
+
+export function mergeListeningStats(
+  local: ListeningStatsState,
+  persisted: ListeningStatsState
+): ListeningStatsState {
+  const localRevision = safeRevision(local?.revision);
+  const persistedRevision = safeRevision(persisted?.revision);
+  if (persistedRevision > localRevision) {
+    return normalizeListeningStats(persisted);
+  }
+  if (localRevision > persistedRevision) {
+    return normalizeListeningStats(local);
+  }
+  const tracks: Record<string, TrackListeningStat> = {};
+  for (const trackId of new Set([
+    ...Object.keys(local?.tracks ?? {}),
+    ...Object.keys(persisted?.tracks ?? {})
+  ])) {
+    const left = local?.tracks?.[trackId];
+    const right = persisted?.tracks?.[trackId];
+    const lastListenedAt = latestTimestamp(left?.lastListenedAt, right?.lastListenedAt);
+    const latest = lastListenedAt === left?.lastListenedAt ? left : right;
+    tracks[trackId] = {
+      trackId,
+      playCount: Math.max(safeNumber(left?.playCount), safeNumber(right?.playCount)),
+      listenedSeconds: Math.max(
+        safeNumber(left?.listenedSeconds),
+        safeNumber(right?.listenedSeconds)
+      ),
+      lastListenedAt,
+      lastListenedDate: latest?.lastListenedDate || dateKeyFromTimestamp(lastListenedAt)
+    };
+  }
+
+  const days: Record<string, DayListeningStat> = {};
+  for (const date of new Set([
+    ...Object.keys(local?.days ?? {}),
+    ...Object.keys(persisted?.days ?? {})
+  ])) {
+    days[date] = {
+      date,
+      listenedSeconds: Math.max(
+        safeNumber(local?.days?.[date]?.listenedSeconds),
+        safeNumber(persisted?.days?.[date]?.listenedSeconds)
+      )
+    };
+  }
+  return { revision: localRevision, tracks, days };
+}
+
+function normalizeListeningStats(stats: ListeningStatsState): ListeningStatsState {
+  const tracks = Object.fromEntries(Object.entries(stats?.tracks ?? {}).map(([trackId, stat]) => [
+    trackId,
+    {
+      trackId,
+      playCount: safeNumber(stat?.playCount),
+      listenedSeconds: safeNumber(stat?.listenedSeconds),
+      lastListenedAt: stat?.lastListenedAt || new Date(0).toISOString(),
+      lastListenedDate: stat?.lastListenedDate || dateKeyFromTimestamp(stat?.lastListenedAt)
+    }
+  ]));
+  const days = Object.fromEntries(Object.entries(stats?.days ?? {}).map(([date, stat]) => [
+    date,
+    { date, listenedSeconds: safeNumber(stat?.listenedSeconds) }
+  ]));
+  return { revision: safeRevision(stats?.revision), tracks, days };
+}
+
+function safeRevision(value: number | undefined) {
+  return Number.isInteger(value) && Number(value) >= 0 ? Number(value) : 0;
+}
+
+function dateKeyFromTimestamp(value: string | undefined) {
+  const parsed = new Date(value ?? "");
+  return Number.isFinite(parsed.getTime()) ? toLocalDateKey(parsed) : "1970-01-01";
+}
+
+function safeNumber(value: number | undefined) {
+  return Number.isFinite(value) ? Math.max(0, Number(value)) : 0;
+}
+
+function latestTimestamp(left: string | undefined, right: string | undefined) {
+  const leftTime = Date.parse(left ?? "");
+  const rightTime = Date.parse(right ?? "");
+  if (Number.isFinite(leftTime) && (!Number.isFinite(rightTime) || leftTime >= rightTime)) {
+    return left as string;
+  }
+  if (Number.isFinite(rightTime)) {
+    return right as string;
+  }
+  return left || right || new Date(0).toISOString();
 }
 
 export function toLocalDateKey(date: Date) {
@@ -68,6 +163,7 @@ export function recordListeningPlay(
   at = new Date()
 ): ListeningStatsState {
   const previous = stats.tracks[trackId];
+  const date = toLocalDateKey(at);
   return {
     ...stats,
     tracks: {
@@ -76,7 +172,8 @@ export function recordListeningPlay(
         trackId,
         playCount: (previous?.playCount ?? 0) + 1,
         listenedSeconds: previous?.listenedSeconds ?? 0,
-        lastListenedAt: at.toISOString()
+        lastListenedAt: at.toISOString(),
+        lastListenedDate: date
       }
     }
   };
@@ -97,13 +194,15 @@ export function addListeningSeconds(
   const previousTrack = stats.tracks[trackId];
   const previousDay = stats.days[date];
   return {
+    revision: stats.revision,
     tracks: {
       ...stats.tracks,
       [trackId]: {
         trackId,
         playCount: previousTrack?.playCount ?? 0,
         listenedSeconds: Math.round(((previousTrack?.listenedSeconds ?? 0) + safeSeconds) * 100) / 100,
-        lastListenedAt: at.toISOString()
+        lastListenedAt: at.toISOString(),
+        lastListenedDate: date
       }
     },
     days: {

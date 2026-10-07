@@ -18,7 +18,9 @@ assert.match(main, /requestSingleInstanceLock\(\)/, "应用应阻止多个实例
 assert.match(main, /app\.on\("second-instance"[\s\S]*focus\(\)/, "重复启动时应聚焦已有窗口");
 assert.match(main, /interface MiniWindowState[\s\S]*bounds:[\s\S]*wasMaximized:[\s\S]*wasFullScreen:[\s\S]*wasAlwaysOnTop:[\s\S]*wasMenuBarVisible:[\s\S]*minimumSize:/, "进入前应保存窗口尺寸、位置、最大化、全屏、置顶、菜单栏和最小尺寸状态");
 assert.match(main, /getNormalBounds\(\)/, "最大化窗口应保存可恢复的普通窗口边界");
-assert.match(main, /setAlwaysOnTop\(true\)/, "迷你模式窗口应置顶");
+assert.match(main, /setSkipTaskbar\(!options\.showInTaskbar\)/, "迷你模式应按引导选项决定是否显示在任务栏");
+assert.match(main, /setAlwaysOnTop\(options\.alwaysOnTop\)/, "迷你模式应按引导选项决定是否置顶");
+assert.match(main, /alwaysOnTop:\s*options\?\.alwaysOnTop\s*!==\s*false/, "未设置新选项时应保留原迷你播放器默认置顶行为");
 assert.match(main, /setMenuBarVisibility\(false\)/, "迷你模式应隐藏占用空间的应用菜单栏");
 assert.match(main, /animateWindowBounds/, "窗口尺寸切换应使用平滑边界动画");
 assert.match(main, /if \(win\.isMinimized\(\)\) win\.restore\(\)/, "切换迷你模式时应恢复 Windows 意外最小化的窗口");
@@ -27,11 +29,12 @@ assert.match(main, /setMinimumSize\(MINI_WINDOW_WIDTH, MINI_WINDOW_HEIGHT\)/, "�
 assert.match(main, /setAlwaysOnTop\(state\.wasAlwaysOnTop\)/, "退出时应恢复原置顶状态");
 assert.match(main, /setMenuBarVisibility\(state\.wasMenuBarVisible\)/, "退出时应恢复原菜单栏状态");
 assert.match(main, /state\.wasMaximized[\s\S]*maximize\(\)/, "退出时应恢复最大化状态");
-assert.doesNotMatch(main, /\.on\("(?:close|minimize)"/, "迷你模式不应劫持系统关闭或最小化事件");
+assert.doesNotMatch(main, /\.on\("minimize"/, "迷你模式不应劫持系统最小化事件");
+assert.match(main, /win\.on\("close"[\s\S]{0,900}closeBehavior === "mini"|win\.on\("close"[\s\S]{0,900}webContents\.send\("window-close-behavior", closeBehavior\)/, "仅在用户明确选择时，关闭窗口才应切换迷你播放器");
 
-assert.match(preload, /enterMiniMode:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("enter-mini-mode"\)/, "preload 应暴露进入迷你模式方法");
+assert.match(preload, /enterMiniMode:\s*\(options[^)]*\)\s*=>\s*ipcRenderer\.invoke\("enter-mini-mode",\s*options\)/, "preload 应把迷你窗口选项传给主进程");
 assert.match(preload, /exitMiniMode:\s*\(\)\s*=>\s*ipcRenderer\.invoke\("exit-mini-mode"\)/, "preload 应暴露退出迷你模式方法");
-assert.match(env, /enterMiniMode\(\): Promise<boolean>/, "渲染层应声明进入迷你模式桥接类型");
+assert.match(env, /enterMiniMode\(options:[\s\S]*showInTaskbar:[\s\S]*alwaysOnTop:[\s\S]*\): Promise<boolean>/, "渲染层应声明迷你窗口选项桥接类型");
 assert.match(env, /exitMiniMode\(\): Promise<boolean>/, "渲染层应声明退出迷你模式桥接类型");
 
 assert.match(app, /const nativeMiniMode = ref\(false\)/, "渲染层应区分原生迷你窗口与网页悬浮模式");

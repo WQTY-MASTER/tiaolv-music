@@ -4,6 +4,8 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
+const streamingDetail = fs.readFileSync(path.join(root, "src/renderer/src/components/StreamingDailyMixPage.vue"), "utf8");
+const aggregateDetail = fs.readFileSync(path.join(root, "src/renderer/src/components/AggregatePlaylistPage.vue"), "utf8");
 const api = fs.readFileSync(path.join(root, "src/renderer/src/services/api.ts"), "utf8");
 const main = fs.readFileSync(path.join(root, "src/main/main.ts"), "utf8");
 const preload = fs.readFileSync(path.join(root, "src/preload/preload.ts"), "utf8");
@@ -50,6 +52,13 @@ assert.match(app, /PLAYLIST_TRACK_ORDER_STORAGE_KEY[\s\S]*persistPlaylistTrackOr
 assert.match(app, /class="playlist-track-table-head"[\s\S]*#\s*<\/span>[\s\S]*标题[\s\S]*专辑[\s\S]*时长/, "歌单详情歌曲列表应有贴近页面背景的表头");
 assert.match(app, /\.playlist-track-container \{[^}]*background: var\(--app-card-background\);[^}]*box-shadow: var\(--app-card-shadow\);/, "歌单详情歌曲列表应使用白色卡片层级");
 assert.match(app, /\.playlist-track-card\.active \{[^}]*background: var\(--app-playing-background\);/, "当前播放行应使用全局浅米色高亮");
+assert.match(app, /\.playlist-track-album,\s*\.playlist-track-duration\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "专辑和时长应使用清晰的中性灰正文样式");
+assert.match(app, /\.playlist-track-table-head span:nth-child\(3\),\s*\.playlist-track-table-head span:nth-child\(4\)\s*\{[^}]*color:\s*#66635f;/, "专辑和时长表头应使用中性灰文字");
+assert.match(streamingDetail, /\.daily-detail-album\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "在线歌单专辑应使用统一正文样式");
+assert.match(streamingDetail, /\.daily-detail-duration\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "在线歌单时长应使用统一正文样式");
+assert.match(streamingDetail, /\.daily-detail-table-head span:nth-child\(3\),\s*\.daily-detail-table-head span:last-child\s*\{[^}]*color:\s*#66635f;/, "在线歌单专辑和时长表头应使用中性灰");
+assert.match(aggregateDetail, /\.aggregate-track-duration\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "聚合歌单时长应使用统一正文样式");
+assert.match(aggregateDetail, /\.aggregate-track-head span:nth-child\(4\)\s*\{[^}]*color:\s*#66635f;/, "聚合歌单时长表头应使用中性灰");
 assert.match(app, /class="playlist-track-card"/, "有歌曲时应展示歌单歌曲行列表");
 assert.match(app, /class="playlist-empty-state"[\s\S]*暂无内容[\s\S]*通过左侧菜单「歌单 → 添加文件夹」导入音乐/, "无歌曲时应展示指定空态文案");
 assert.match(app, /class="playlist-name-dialog"/, "重命名应复用创建歌单弹窗风格");

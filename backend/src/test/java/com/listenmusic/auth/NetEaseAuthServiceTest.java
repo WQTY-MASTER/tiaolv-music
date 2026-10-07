@@ -54,6 +54,68 @@ class NetEaseAuthServiceTest {
     }
 
     @Test
+    void sendsSmsCodeThroughTheNeteaseProvider() {
+        server.expect(requestTo(startsWith("http://api.test/captcha/sent?phone=13800138000&timestamp=")))
+            .andRespond(withSuccess("{\"code\":200,\"message\":\"发送成功\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertEquals("发送成功", service.sendSmsCode("13800138000"));
+        server.verify();
+    }
+
+    @Test
+    void logsInWithSmsAndPersistsTheValidatedSession() {
+        when(accountRepository.findActive("netease")).thenReturn(Optional.empty());
+        when(credentialStore.put("netease", "MUSIC_U=sms-secret")).thenReturn("credential-sms");
+        server.expect(requestTo(startsWith("http://api.test/login/cellphone?phone=13800138000&captcha=123456&timestamp=")))
+            .andRespond(withSuccess("{\"code\":200,\"cookie\":\"MUSIC_U=sms-secret\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/login/status?cookie=MUSIC_U%3Dsms-secret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=sms-secret"))
+            .andRespond(withSuccess("{\"code\":200,\"data\":{\"account\":{\"id\":100},\"profile\":{\"nickname\":\"短信用户\"}}}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        AccountView account = service.loginWithSms("13800138000", "123456");
+
+        assertEquals("短信用户", account.nickname());
+        verify(credentialStore).put("netease", "MUSIC_U=sms-secret");
+        verify(sessionStore).save("100", "MUSIC_U=sms-secret");
+        verify(accountRepository).saveAccount(any());
+        server.verify();
+    }
+
+    @Test
+    void hashesPasswordBeforeCallingThePhoneLoginEndpoint() {
+        when(accountRepository.findActive("netease")).thenReturn(Optional.empty());
+        when(credentialStore.put("netease", "MUSIC_U=password-secret")).thenReturn("credential-password");
+        server.expect(requestTo(startsWith("http://api.test/login/cellphone?phone=13800138000&md5_password=5ebe2294ecd0e0f08eab7690d2a6ee69&timestamp=")))
+            .andRespond(withSuccess("{\"code\":200,\"cookie\":\"MUSIC_U=password-secret\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/login/status?cookie=MUSIC_U%3Dpassword-secret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=password-secret"))
+            .andRespond(withSuccess("{\"code\":200,\"data\":{\"account\":{\"id\":101},\"profile\":{\"nickname\":\"密码用户\"}}}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        AccountView account = service.loginWithPassword("13800138000", "secret");
+
+        assertEquals("密码用户", account.nickname());
+        verify(sessionStore).save("101", "MUSIC_U=password-secret");
+        server.verify();
+    }
+
+    @Test
+    void usesTheEmailEndpointForACloudMusicEmailAccount() {
+        when(accountRepository.findActive("netease")).thenReturn(Optional.empty());
+        when(credentialStore.put("netease", "MUSIC_U=email-secret")).thenReturn("credential-email");
+        server.expect(requestTo(startsWith("http://api.test/login?email=music@example.com&md5_password=5ebe2294ecd0e0f08eab7690d2a6ee69&timestamp=")))
+            .andRespond(withSuccess("{\"code\":200,\"cookie\":\"MUSIC_U=email-secret\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/login/status?cookie=MUSIC_U%3Demail-secret&timestamp=")))
+            .andExpect(header("Cookie", "MUSIC_U=email-secret"))
+            .andRespond(withSuccess("{\"code\":200,\"data\":{\"account\":{\"id\":102},\"profile\":{\"nickname\":\"邮箱用户\"}}}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        AccountView account = service.loginWithPassword("music@example.com", "secret");
+
+        assertEquals("邮箱用户", account.nickname());
+        verify(sessionStore).save("102", "MUSIC_U=email-secret");
+        server.verify();
+    }
+
+    @Test
     void mapsWaitingAndSuccessAndStoresCookieOutsideTheResponse() {
         when(accountRepository.findQrSession("session-1")).thenReturn(Optional.of(new QrLoginSession(
             "session-1", "netease", "key-1", "WAITING",

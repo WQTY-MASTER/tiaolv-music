@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
@@ -28,6 +29,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.method;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
 class QqMusicProviderTest {
     private MockRestServiceServer server;
@@ -61,6 +63,41 @@ class QqMusicProviderTest {
         assertEquals(1, tracks.size());
         assertEquals("qq:mid-1", tracks.getFirst().id());
         assertEquals("推荐歌曲", tracks.getFirst().title());
+        server.verify();
+    }
+
+    @Test
+    void findsSongThroughTheCurrentQqMusicApiRoute() {
+        server.expect(requestTo("http://qq-api.test/getSongInfo?songmid=mid-detail-1"))
+            .andExpect(method(HttpMethod.GET))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"songinfo":{"code":0,"data":{"track_info":{
+                  "mid":"mid-detail-1","title":"歌曲详情","singer":[{"name":"测试歌手"}],
+                  "album":{"mid":"album-detail-1","name":"测试专辑"},"interval":245
+                }}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        Track track = provider.find("qq:mid-detail-1").orElseThrow();
+
+        assertEquals("qq:mid-detail-1", track.id());
+        assertEquals("歌曲详情", track.title());
+        assertEquals("测试歌手", track.artist());
+        assertEquals("测试专辑", track.album());
+        assertEquals(245, track.duration());
+        server.verify();
+    }
+
+    @Test
+    void reportsAnIncompatibleQqMusicApiRouteSeparatelyFromAnOfflineService() {
+        server.expect(requestTo("http://qq-api.test/getSongInfo?songmid=mid-missing-route"))
+            .andRespond(withStatus(HttpStatus.NOT_FOUND).body("Not Found"));
+
+        IllegalStateException error = assertThrows(
+            IllegalStateException.class,
+            () -> provider.find("qq:mid-missing-route")
+        );
+
+        assertEquals("QQMusicAPI 接口返回 HTTP 404，请确认本地 API 版本与接口路径兼容", error.getMessage());
         server.verify();
     }
 
@@ -101,13 +138,15 @@ class QqMusicProviderTest {
                 {"response":{"code":0,
                  "lyric":"[00:01.00]普通歌词",
                  "qrc":"[1000,1000]逐(1000,500)字(1500,500)",
-                 "trans":"[00:01.00]translation"}}
+                 "trans":"[00:01.00]translation",
+                 "roma":"[00:01.00]zhú zì"}}
                 """, MediaType.APPLICATION_JSON));
 
         LyricData lyrics = provider.loadLyrics("qq:mid-lyric-1").orElseThrow();
 
         assertEquals("[1000,1000]逐(1000,500)字(1500,500)", lyrics.lyrics());
         assertEquals("[00:01.00]translation", lyrics.translation());
+        assertEquals("[00:01.00]zhú zì", lyrics.phonetic());
         assertEquals("QRC", lyrics.format());
         assertEquals("qq", lyrics.source());
         server.verify();
@@ -572,7 +611,7 @@ class QqMusicProviderTest {
             "qq", "200", "QQ 用户", null, "qq-ref", true, "now", "now"
         )));
         when(credentialStore.get("qq-ref")).thenReturn(Optional.of(cookie));
-        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-1&quality=128")))
+        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-1&quality=flac")))
             .andExpect(header(HttpHeaders.COOKIE, cookie))
             .andRespond(withSuccess("""
                 {"data":{"playUrl":{"mid-1":{"url":"https://audio.test/song.mp3"}}}}
@@ -592,7 +631,7 @@ class QqMusicProviderTest {
         );
         when(accountRepository.findActive("qq")).thenReturn(Optional.of(account));
         when(credentialStore.get("qq-ref")).thenReturn(Optional.of(cookie));
-        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-locked&quality=128")))
+        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-locked&quality=flac")))
             .andExpect(header(HttpHeaders.COOKIE, cookie))
             .andRespond(withSuccess("""
                 {"data":{"playUrl":{"mid-locked":{"url":"","error":"Cookie 已失效或 uin 缺失"}}}}
@@ -602,5 +641,49 @@ class QqMusicProviderTest {
         verify(credentialStore, never()).delete("qq-ref");
         verify(accountRepository, never()).deactivateProvider("qq");
         server.verify();
+    }
+
+    @Test
+    void fallsBackThroughQqMusicQualitiesInOrder() {
+        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-1&quality=flac")))
+            .andRespond(withSuccess("""
+                {"data":{"playUrl":{"mid-1":{"url":""}}}}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-1&quality=320")))
+            .andRespond(withSuccess("""
+                {"data":{"playUrl":{"mid-1":{"url":"https://audio.test/song-320.mp3"}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        assertEquals(
+            "https://audio.test/song-320.mp3",
+            provider.resolveAudioUrl("qq:mid-1", PlaybackQuality.AUTO).orElseThrow()
+        );
+        server.verify();
+    }
+
+    @Test
+    void startsManualQqMusicFallbackAtHighQuality() {
+        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-1&quality=320")))
+            .andRespond(withSuccess("""
+                {"data":{"playUrl":{"mid-1":{"url":""}}}}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/getMusicPlay?songmid=mid-1&quality=128")))
+            .andRespond(withSuccess("""
+                {"data":{"playUrl":{"mid-1":{"url":"https://audio.test/song-128.mp3"}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        assertEquals(
+            "https://audio.test/song-128.mp3",
+            provider.resolveAudioUrl("qq:mid-1", PlaybackQuality.HIGH).orElseThrow()
+        );
+        server.verify();
+    }
+
+    @Test
+    void rejectsUnsupportedQqMusicQuality() {
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> provider.resolveAudioUrl("qq:mid-1", PlaybackQuality.HIRES)
+        );
     }
 }

@@ -1,8 +1,13 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../shared/shortcuts";
+import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../shared/about";
+import type { CloseBehavior } from "../shared/desktopIntegration";
 import type {
   DesktopLyricsAction,
+  DesktopLyricsBounds,
   DesktopLyricsPlaybackState,
-  DesktopLyricsPreferences
+  DesktopLyricsPreferences,
+  DesktopLyricsSnapshot
 } from "../shared/desktopLyrics";
 
 type TaskbarMediaAction = "previous" | "toggle" | "next";
@@ -35,7 +40,29 @@ async function request(path: string, init?: RequestInit) {
 
 contextBridge.exposeInMainWorld("listenMusic", {
   isWindows: process.platform === "win32",
-  ping: () => request("/health"),
+  getShortcuts: (): Promise<ShortcutSnapshot> => ipcRenderer.invoke("get-shortcuts"),
+  updateShortcuts: (patch: ShortcutPatch, reset = false): Promise<ShortcutSnapshot> => ipcRenderer.invoke("update-shortcuts", patch, reset),
+  setShortcutRecording: (recording: boolean): Promise<ShortcutSnapshot> => ipcRenderer.invoke("set-shortcut-recording", recording),
+  onShortcutsChanged: (listener: (snapshot: ShortcutSnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: ShortcutSnapshot) => listener(snapshot);
+    ipcRenderer.on("shortcuts-changed", handler);
+    return () => ipcRenderer.removeListener("shortcuts-changed", handler);
+  },
+  onShortcutAction: (listener: (action: ShortcutAction) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: ShortcutAction) => listener(action);
+    ipcRenderer.on("shortcut-action", handler);
+    return () => ipcRenderer.removeListener("shortcut-action", handler);
+  },
+  ping: (): Promise<BackendHealth> => request("/health"),
+  getAboutSnapshot: (): Promise<AboutSnapshot> => ipcRenderer.invoke("get-about-snapshot"),
+  checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke("check-for-updates"),
+  setAutoUpdateCheck: (enabled: boolean): Promise<AboutSnapshot> => ipcRenderer.invoke("set-auto-update-check", enabled),
+  openExternalLink: (url: string): Promise<boolean> => ipcRenderer.invoke("open-external-link", url),
+  onUpdateCheckResult: (listener: (result: UpdateCheckResult) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, result: UpdateCheckResult) => listener(result);
+    ipcRenderer.on("update-check-result", handler);
+    return () => ipcRenderer.removeListener("update-check-result", handler);
+  },
   getLibrary: () => request("/library/tracks"),
   getPlaylists: () => request("/library/playlists"),
   search: (query: string) =>
@@ -61,11 +88,17 @@ contextBridge.exposeInMainWorld("listenMusic", {
     const result = await ipcRenderer.invoke("select-playlist-cover-image");
     return typeof result === "string" ? result : null;
   },
+  readAppearanceBackground: (imagePath: string): Promise<string> => (
+    ipcRenderer.invoke("read-appearance-background", imagePath)
+  ),
+  getBackgroundCacheStatistics: () => ipcRenderer.invoke("background-cache-statistics"),
+  clearBackgroundCache: () => ipcRenderer.invoke("clear-background-cache"),
+  getLegacyAggregatePlaylists: () => ipcRenderer.invoke("get-legacy-aggregate-playlists"),
   uploadCloudAudio: () => ipcRenderer.invoke("upload-cloud-audio"),
   downloadCloudTrack: (audioUrl: string, fileName: string) => (
     ipcRenderer.invoke("download-cloud-track", audioUrl, fileName)
   ),
-  enterMiniMode: () => ipcRenderer.invoke("enter-mini-mode"),
+  enterMiniMode: (options: { showInTaskbar: boolean; alwaysOnTop: boolean }) => ipcRenderer.invoke("enter-mini-mode", options),
   exitMiniMode: () => ipcRenderer.invoke("exit-mini-mode"),
   setMiniQueueExpanded: (expanded: boolean) => ipcRenderer.invoke("set-mini-queue-expanded", expanded),
   setTaskbarThumbnailButtons: (enabled: boolean, isPlaying: boolean) => (
@@ -90,17 +123,34 @@ contextBridge.exposeInMainWorld("listenMusic", {
     ipcRenderer.on("tray-media-action", handler);
     return () => ipcRenderer.removeListener("tray-media-action", handler);
   },
+  setCloseBehavior: (behavior: CloseBehavior): Promise<CloseBehavior> => (
+    ipcRenderer.invoke("set-close-behavior", behavior)
+  ),
+  onWindowCloseBehavior: (listener: (behavior: CloseBehavior) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, behavior: CloseBehavior) => listener(behavior);
+    ipcRenderer.on("window-close-behavior", handler);
+    return () => ipcRenderer.removeListener("window-close-behavior", handler);
+  },
+  getLaunchAtStartup: (): Promise<boolean> => ipcRenderer.invoke("get-launch-at-startup"),
+  setLaunchAtStartup: (enabled: boolean): Promise<boolean> => (
+    ipcRenderer.invoke("set-launch-at-startup", enabled)
+  ),
   toggleDesktopLyricsWindow: () => ipcRenderer.invoke("toggle-desktop-lyrics-window"),
   closeDesktopLyricsWindow: () => ipcRenderer.invoke("close-desktop-lyrics-window"),
-  getDesktopLyricsSnapshot: () => ipcRenderer.invoke("get-desktop-lyrics-snapshot"),
+  getDesktopLyricsSnapshot: (): Promise<DesktopLyricsSnapshot | null> => (
+    ipcRenderer.invoke("get-desktop-lyrics-snapshot")
+  ),
   updateDesktopLyricsPlaybackState: (state: DesktopLyricsPlaybackState) => {
     ipcRenderer.send("update-desktop-lyrics-playback-state", state);
   },
-  updateDesktopLyricsTime: (currentTime: number) => {
-    ipcRenderer.send("update-desktop-lyrics-time", currentTime);
+  updateDesktopLyricsTime: (currentTime: number, allowRewind = false) => {
+    ipcRenderer.send("update-desktop-lyrics-time", currentTime, allowRewind);
   },
   updateDesktopLyricsPreferences: (patch: Partial<DesktopLyricsPreferences>) => (
     ipcRenderer.invoke("update-desktop-lyrics-preferences", patch)
+  ),
+  updateDesktopLyricsBounds: (bounds: Pick<DesktopLyricsBounds, "width" | "height">) => (
+    ipcRenderer.invoke("update-desktop-lyrics-bounds", bounds)
   ),
   sendDesktopLyricsAction: (action: DesktopLyricsAction) => {
     ipcRenderer.send("desktop-lyrics-action", action);
@@ -110,8 +160,10 @@ contextBridge.exposeInMainWorld("listenMusic", {
     ipcRenderer.on("desktop-lyrics-playback-state", handler);
     return () => ipcRenderer.removeListener("desktop-lyrics-playback-state", handler);
   },
-  onDesktopLyricsTime: (listener: (currentTime: number) => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, currentTime: number) => listener(currentTime);
+  onDesktopLyricsTime: (listener: (currentTime: number, allowRewind: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, currentTime: number, allowRewind: boolean) => (
+      listener(currentTime, Boolean(allowRewind))
+    );
     ipcRenderer.on("desktop-lyrics-time", handler);
     return () => ipcRenderer.removeListener("desktop-lyrics-time", handler);
   },
@@ -119,6 +171,21 @@ contextBridge.exposeInMainWorld("listenMusic", {
     const handler = (_event: Electron.IpcRendererEvent, preferences: DesktopLyricsPreferences) => listener(preferences);
     ipcRenderer.on("desktop-lyrics-preferences", handler);
     return () => ipcRenderer.removeListener("desktop-lyrics-preferences", handler);
+  },
+  onDesktopLyricsBoundsChanged: (listener: (bounds: DesktopLyricsBounds) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bounds: DesktopLyricsBounds) => listener(bounds);
+    ipcRenderer.on("desktop-lyrics-bounds-changed", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-bounds-changed", handler);
+  },
+  onDesktopLyricsHoverState: (listener: (pointerInside: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, pointerInside: boolean) => listener(Boolean(pointerInside));
+    ipcRenderer.on("desktop-lyrics-hover-state", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-hover-state", handler);
+  },
+  onDesktopLyricsUnlockHotspot: (listener: (active: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, active: boolean) => listener(Boolean(active));
+    ipcRenderer.on("desktop-lyrics-unlock-hotspot", handler);
+    return () => ipcRenderer.removeListener("desktop-lyrics-unlock-hotspot", handler);
   },
   onDesktopLyricsVisibilityChanged: (listener: (visible: boolean) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, visible: boolean) => listener(Boolean(visible));

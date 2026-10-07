@@ -348,6 +348,8 @@ onBeforeUnmount(() => {
 .daily-detail-table-head span:first-child { text-align: center; }
 .daily-detail-table-head span:nth-child(3) { padding-left: 37px; }
 .daily-detail-table-head span:last-child { text-align: right; }
+.daily-detail-table-head span:nth-child(3),
+.daily-detail-table-head span:last-child { color: #66635f; }
 .daily-detail-list { position: relative; }
 .daily-detail-row { min-height: 64px; border-bottom: 1px solid #f0efec; border-radius: 12px; padding: 6px 18px; outline: 0; background: #fff; cursor: pointer; transition: background 160ms ease, box-shadow 160ms ease, color 160ms ease; }
 .daily-detail-row:last-child { border-bottom: 0; }
@@ -368,11 +370,11 @@ onBeforeUnmount(() => {
 .daily-detail-track strong { color: #171b24; font-size: 12px; }
 .daily-detail-row.active .daily-detail-track strong { color: #11776f; }
 .daily-detail-track small { color: #84909f; font-size: 10px; }
-.daily-detail-album { display: grid; min-width: 0; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 7px; color: #586476; font-size: 11px; }
+.daily-detail-album { display: grid; min-width: 0; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 7px; color: #5f5d59; font-size: 13px; font-weight: 500; }
 .daily-detail-album button { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 50%; background: transparent; color: #9ba4af; cursor: pointer; }
 .daily-detail-album button:hover { background: #f1f3f5; color: #e55562; }
 .daily-detail-album button.liked { color: #ef5a66; }
-.daily-detail-duration { color: #7d8795; font-size: 11px; text-align: right; }
+.daily-detail-duration { color: #5f5d59; font-size: 13px; font-weight: 500; text-align: right; }
 .daily-detail-empty { padding: 70px 20px; color: #8994a3; font-size: 12px; text-align: center; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @media (max-width: 820px) {

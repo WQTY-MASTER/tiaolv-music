@@ -328,7 +328,7 @@ assert.match(app, /!isPlaying\.value\s*\|\|\s*manualLyricsScroll\.value/, "暂�
 assert.match(app, /lyricEndSpacerHeight/, "歌词末尾应根据定位线保留可滚动缓冲区");
 assert.match(app, /lyricStartSpacerHeight/, "歌曲信息开头应根据定位线保留动态对齐空间");
 assert.match(app, /const firstTimelineItem = firstSongInfoLine \?\? lyricLineElements\.item\(0\)/, "短前奏不生成歌曲信息时，第一句歌词仍应获得定位线顶部缓冲区");
-assert.match(app, /LYRIC_START_VISUAL_OFFSET\s*=\s*14/, "开头歌曲信息应轻微上移以匹配定位按钮的视觉中心");
+assert.match(app, /firstLyricTextCenter\(firstTimelineItem\)/, "开头应按第一行文字对齐而非整段文字的中心");
 assert.match(app, /class="lyric-start-spacer"/, "歌曲信息前应渲染开头定位缓冲区");
 assert.match(
   app,
@@ -342,7 +342,7 @@ assert.match(
 );
 assert.match(app, /class="lyric-end-spacer"/, "歌词列表末尾应渲染定位缓冲区");
 assert.match(app, /root\.clientHeight\s*-\s*anchorOffset/, "最后一句歌词应获得足够空间滚动到固定定位线");
-assert.match(app, /lastLyricLine\.offsetHeight/, "末尾缓冲区应扣除最后一句歌词自身高度");
+assert.match(app, /lastLyricLine\.getBoundingClientRect\(\)\.bottom - firstLyricTextCenter\(lastLyricLine\)/, "末尾缓冲区应扣除首行文字中心之后的高度");
 assert.match(app, /paddingBottom/, "末尾缓冲区应扣除歌词列表原有的底部留白");
 assert.doesNotMatch(app, /root\.clientHeight\s*-\s*anchorOffset\s*\+\s*28/, "末尾不应保留额外空白，最后一句应在定位线处停止");
 assert.match(app, /class="song-detail-lyrics-pane"/, "右侧详情区域应提供固定头部与滚动歌词的共同容器");
@@ -368,7 +368,7 @@ assert.doesNotMatch(
 );
 assert.match(
   app,
-  /\.lyric-anchor-controls\s*\{[^}]*position:\s*sticky[^}]*top:\s*calc\(38%\s*-\s*42px\)[^}]*left:\s*0[^}]*transform:\s*translateX\(calc\(var\(--lyric-gutter\)\s*\*\s*-0\.9\)\)/,
+  /\.lyric-anchor-controls\s*\{[^}]*position:\s*sticky[^}]*top:\s*var\(--lyric-anchor-offset,[^}]*left:\s*0[^}]*transform:\s*translateX\(calc\(var\(--lyric-gutter\)\s*\*\s*-0\.9\)\)/,
   "歌曲信息定位按钮应与第一行前奏信息对齐"
 );
 assert.match(app, /data-song-info-line/, "歌曲信息应按行分组以便上一行恢复原色");
@@ -380,6 +380,16 @@ assert.match(
   app,
   /\.song-detail-lyrics-list p\.lyric-line\s*\{(?=[^}]*display:\s*block)(?=[^}]*position:\s*relative)[^}]*\}/,
   "歌词行应使用与歌曲信息相同的左对齐单列布局"
+);
+assert.match(
+  app,
+  /\.app-shell \.song-detail-lyrics-list\s*\{[^}]*text-align:\s*left/,
+  "外观样式覆盖后歌词列表仍应与歌曲信息左对齐"
+);
+assert.match(
+  app,
+  /\.app-shell \.song-detail-lyrics-list p\.lyric-line\s*\{[^}]*text-align:\s*left[^}]*transform-origin:\s*left center/,
+  "外观样式覆盖后每行歌词应保持左对齐和左侧缩放基点"
 );
 assert.match(
   app,

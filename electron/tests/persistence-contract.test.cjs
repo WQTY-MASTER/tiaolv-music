@@ -17,7 +17,9 @@ for (const apiName of [
   "loadPlaybackQueue",
   "savePlaybackQueue",
   "loadPlaybackState",
-  "savePlaybackState"
+  "savePlaybackState",
+  "loadListeningStats",
+  "saveListeningStats"
 ]) {
   assert.match(api, new RegExp(`export function ${apiName}\\b`), `缺少持久化接口：${apiName}`);
   assert.match(app, new RegExp(`\\b${apiName}\\b`), `App.vue 尚未使用持久化接口：${apiName}`);
@@ -32,6 +34,11 @@ assert.match(app, /restorePersistedSession/, "启动时应恢复播放状态和�
 assert.match(app, /persistPlaybackState/, "暂停、拖动或设置变化后应保存播放状态");
 assert.match(app, /stateSaveChain/, "播放状态保存应串行执行，避免旧进度覆盖新状态");
 assert.match(app, /persistPlaybackQueue/, "播放队列发生变化后应保存");
+assert.match(app, /mergeListeningStats/, "启动时应合并 SQLite 与旧本地聆听统计");
+assert.match(app, /persistListeningStats/, "播放过程中应持续保存聆听统计");
+assert.match(app, /listeningStatsSaveChain/, "聆听统计保存应串行执行，避免旧快照覆盖新统计");
+assert.match(app, /window\.addEventListener\("focus", handleListeningStatsReconnect\)/, "窗口重新获得焦点时应重试同步聆听统计");
+assert.match(app, /window\.addEventListener\("online", handleListeningStatsReconnect\)/, "后端恢复连接后应重试同步聆听统计");
 assert.match(app, /class="queue-panel"/, "播放队列按钮应打开真实队列面板");
 assert.match(
   app,

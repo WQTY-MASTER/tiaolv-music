@@ -59,6 +59,21 @@ assert.match(app, /localFeaturedAlbums/, "专辑精选需要从本地专辑数�
 assert.match(app, /localAlbums/, "专辑精选需要从本地曲库聚合专辑表");
 assert.match(app, /openLocalAlbum/, "专辑卡片缺少进入专辑详情逻辑");
 assert.match(app, /selectedLocalAlbum/, "专辑详情缺少选中专辑状态");
+assert.match(app, /class="local-album-detail-page"/, "专辑详情应使用独立页面布局");
+assert.match(app, /activeView !== 'albums'[\s\S]{0,900}class="section-block track-section"/, "专辑总览和详情下方都不应渲染通用歌曲区");
+assert.match(app, /class="local-album-detail-back"[\s\S]*返回/, "专辑详情应提供返回按钮");
+assert.match(app, /selectedLocalAlbumSummary/, "专辑标题旁应显示歌曲数和总时长");
+assert.match(app, /class="local-album-detail-actions"[\s\S]*播放全部[\s\S]*随机播放/, "专辑详情应提供播放全部和随机播放");
+assert.match(app, /v-model="localAlbumSearchKeyword"[\s\S]*placeholder="搜索歌曲、歌手、专辑或文件夹"/, "专辑详情应提供歌曲搜索");
+assert.match(app, /v-model="localAlbumSortMode"[\s\S]*默认顺序[\s\S]*标题 A-Z[\s\S]*时长/, "专辑详情筛选器应提供排序方式");
+assert.match(app, /class="local-album-track-status"[\s\S]*class="track-playback-indicator"[\s\S]*class="track-playback-bars"[\s\S]*<Pause/, "专辑歌曲左侧状态应跟随播放与暂停状态");
+assert.match(app, /class="local-library-index"[\s\S]*class="track-playback-indicator"[\s\S]*class="track-playback-bars"[\s\S]*<Pause/, "所有歌曲当前行应使用统一的播放和暂停状态图标");
+assert.match(app, /@keyframes track-playback-pulse/, "播放状态图标应提供动态柱动画");
+assert.match(app, /\.local-album-detail-page\s*\{[^}]*width:\s*min\(1288px,\s*calc\(100vw - 224px - 36px\)\)[^}]*transition:\s*width 280ms ease,\s*margin-left 280ms ease/, "专辑详情展开侧栏时应保持固定顶部并仅横向布局");
+assert.match(app, /\.app-shell\.is-sidebar-collapsed \.local-album-detail-page\s*\{[^}]*width:\s*min\(1288px,\s*calc\(100vw - 36px\)\)/, "侧栏收起时专辑详情应只扩展并横向居中");
+assert.match(app, /\.local-album-track-cover\s*\{[^}]*width:\s*42px;[^}]*height:\s*42px;/, "专辑详情歌曲封面应限制为 42px 方形");
+assert.match(app, /\.local-album-track-head span:nth-child\(3\),\.local-album-track-head span:nth-child\(4\)\s*\{[^}]*color:\s*#6b7280;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "专辑详情的专辑与时长表头应使用中性灰 13px 字体");
+assert.match(app, /\.local-album-track-album,\.local-album-track-duration strong\s*\{[^}]*color:\s*#5f5d59;[^}]*font-size:\s*13px;[^}]*font-weight:\s*500;/, "专辑详情的专辑与时长内容应使用中性深灰 13px 字体");
 assert.match(app, /\.local-featured-albums\s*\{[^}]*background:\s*transparent/, "专辑精选外层背景应与主页大背景融合");
 assert.match(app, /\.local-album-card:hover\s+\.[\s\S]*transform:\s*translateY\(-4px\)/, "专辑封面需要 hover 上浮动画");
 for (const item of ["首歌曲", "张专辑", "位艺术家", "喜欢总时长"]) {

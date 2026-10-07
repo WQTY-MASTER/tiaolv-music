@@ -4,6 +4,9 @@ import com.listenmusic.auth.AccountAlreadyActiveException;
 import com.listenmusic.auth.AccountAuthService;
 import com.listenmusic.auth.AccountView;
 import com.listenmusic.auth.NetEaseAuthService;
+import com.listenmusic.auth.NetEasePasswordLoginRequest;
+import com.listenmusic.auth.NetEaseSmsCodeRequest;
+import com.listenmusic.auth.NetEaseSmsLoginRequest;
 import com.listenmusic.auth.QqCookieLoginRequest;
 import com.listenmusic.auth.QrLoginSessionNotFoundException;
 import com.listenmusic.auth.QrLoginStartResponse;
@@ -63,6 +66,27 @@ public class AuthController {
     @GetMapping("/accounts")
     public List<AccountView> accounts() {
         return accountAuthService.accounts();
+    }
+
+    @PostMapping("/netease/sms/send")
+    public Map<String, Object> sendNeteaseSmsCode(
+        @org.springframework.web.bind.annotation.RequestBody NetEaseSmsCodeRequest request
+    ) {
+        return Map.of("ok", true, "message", authService.sendSmsCode(request.phone()));
+    }
+
+    @PostMapping("/netease/sms/login")
+    public AccountView loginNeteaseWithSms(
+        @org.springframework.web.bind.annotation.RequestBody NetEaseSmsLoginRequest request
+    ) {
+        return authService.loginWithSms(request.phone(), request.captcha());
+    }
+
+    @PostMapping("/netease/password/login")
+    public AccountView loginNeteaseWithPassword(
+        @org.springframework.web.bind.annotation.RequestBody NetEasePasswordLoginRequest request
+    ) {
+        return authService.loginWithPassword(request.account(), request.password());
     }
 
     @PostMapping("/qq/cookie")

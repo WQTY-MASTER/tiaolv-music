@@ -14,6 +14,11 @@ async function run() {
     splitLyricCharacters
   } = await import(pathToFileUrl(sourcePath));
   const { getLyricHighlightState } = await import(pathToFileUrl(syncPath));
+  const fixture = require("./fixtures/qrc-preface.cjs");
+  const singingLines = parseLyricContent(fixture.lyrics, fixture.translation, "QRC");
+  assert.deepEqual(singingLines.map(line => line.text), ["First original", "Second original", "Third original"],
+    "QRC title, vocal roles and separators must not become sung lines or hide the prelude");
+  assert.equal(singingLines[0].time, 12.131);
 
   assert.deepEqual(
     parseYrcTokens("(1000,700,0)你(1700,800,0)好"),

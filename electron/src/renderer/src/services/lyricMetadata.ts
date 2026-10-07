@@ -6,6 +6,8 @@ export interface LyricCredit {
 
 const timingPattern = /\[(?:\d+,\d+|\d{1,3}:\d{2}(?:[.:]\d{1,3})?(?:,\d+)?)\]/gu;
 const clockTimingPattern = /^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?(?:,\d+)?\]/u;
+const wordLineTimingPattern = /^\[(\d+),(\d+)\]/u;
+const wordTimingPattern = /\(\d+,\d+(?:,\d+)?\)/gu;
 const creditPattern = /^(.+?)\s*[:：]\s*(.*)$/u;
 const creditHints = [
   "作词", "作曲", "编曲", "制作人", "监制", "混音", "母带", "企划", "录音",
@@ -30,7 +32,7 @@ export function parseLyricCredits(raw: string | undefined): LyricCredit[] {
 
     const credit = line.startsWith("{")
       ? parseMetadataJson(line)
-      : parseCreditText(line.replace(timingPattern, "").trim(), parseClockTime(line));
+      : parseCreditText(line.replace(timingPattern, "").replace(wordTimingPattern, "").trim(), parseClockTime(line));
     if (!credit) {
       continue;
     }
@@ -107,6 +109,8 @@ function parseCreditText(text: string, time?: number): LyricCredit | null {
 }
 
 function parseClockTime(line: string) {
+  const wordLine = line.match(wordLineTimingPattern);
+  if (wordLine) return Number(wordLine[1]) / 1000;
   const match = line.match(clockTimingPattern);
   if (!match) {
     return undefined;

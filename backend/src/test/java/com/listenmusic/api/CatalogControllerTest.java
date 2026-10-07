@@ -8,6 +8,7 @@ import com.listenmusic.provider.HomepagePlaylist;
 import com.listenmusic.provider.DailyRecommendationsLoginRequiredException;
 import com.listenmusic.provider.PlaylistCategoryData;
 import com.listenmusic.provider.PlaylistDiscoveryPage;
+import com.listenmusic.provider.PlaybackQuality;
 import com.listenmusic.provider.ProviderLoginRequiredException;
 import com.listenmusic.provider.SearchResultPage;
 import com.listenmusic.provider.SearchType;
@@ -27,6 +28,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.mockito.BDDMockito.given;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -52,17 +54,47 @@ class CatalogControllerTest {
 
     @Test
     void redirectsAudioRequestsToTheProviderPlaybackUrl() throws Exception {
-        given(onlineCatalogService.resolveAudioUrl("netease:123"))
+        given(onlineCatalogService.resolveAudioUrl("netease:123", PlaybackQuality.AUTO))
             .willReturn(Optional.of("https://audio.test/song.mp3"));
 
         mockMvc.perform(get("/catalog/tracks/netease:123/audio"))
             .andExpect(status().isFound())
             .andExpect(header().string("Location", "https://audio.test/song.mp3"));
+
+        verify(onlineCatalogService).resolveAudioUrl("netease:123", PlaybackQuality.AUTO);
+    }
+
+    @Test
+    void disablesAudioCachingWhenRequested() throws Exception {
+        given(onlineCatalogService.resolveAudioUrl("netease:123", PlaybackQuality.AUTO))
+            .willReturn(Optional.of("https://audio.test/song.mp3"));
+
+        mockMvc.perform(get("/catalog/tracks/netease:123/audio").param("cachePolicy", "none"))
+            .andExpect(status().isFound())
+            .andExpect(header().string("Cache-Control", "no-store"));
+    }
+
+    @Test
+    void passesTheRequestedPlaybackQualityToTheProvider() throws Exception {
+        given(onlineCatalogService.resolveAudioUrl("netease:123", PlaybackQuality.LOSSLESS))
+            .willReturn(Optional.of("https://audio.test/song.flac"));
+
+        mockMvc.perform(get("/catalog/tracks/netease:123/audio").param("quality", "lossless"))
+            .andExpect(status().isFound())
+            .andExpect(header().string("Location", "https://audio.test/song.flac"));
+
+        verify(onlineCatalogService).resolveAudioUrl("netease:123", PlaybackQuality.LOSSLESS);
+    }
+
+    @Test
+    void rejectsUnsupportedPlaybackQuality() throws Exception {
+        mockMvc.perform(get("/catalog/tracks/netease:123/audio").param("quality", "studio"))
+            .andExpect(status().isBadRequest());
     }
 
     @Test
     void returnsUnauthorizedWhenTheProviderPlaybackCredentialHasExpired() throws Exception {
-        given(onlineCatalogService.resolveAudioUrl("qq:mid-locked"))
+        given(onlineCatalogService.resolveAudioUrl("qq:mid-locked", PlaybackQuality.AUTO))
             .willThrow(new ProviderLoginRequiredException());
 
         mockMvc.perform(get("/catalog/tracks/qq:mid-locked/audio"))

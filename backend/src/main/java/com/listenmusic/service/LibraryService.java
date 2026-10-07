@@ -2,6 +2,8 @@ package com.listenmusic.service;
 
 import com.listenmusic.domain.Playlist;
 import com.listenmusic.domain.Track;
+import com.listenmusic.domain.ListeningStats;
+import com.listenmusic.domain.ListeningStatsSummary;
 import com.listenmusic.provider.LyricData;
 import com.listenmusic.repository.LocalLibraryRepository;
 import com.listenmusic.repository.PlaylistRepository;
@@ -13,6 +15,7 @@ import java.awt.GraphicsEnvironment;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -77,6 +80,26 @@ public class LibraryService {
 
     public void recordHistory(Track track) {
         userDataRepository.recordHistory(LOCAL_PROFILE_ID, track);
+    }
+
+    public ListeningStats loadListeningStats() {
+        return userDataRepository.findListeningStats(LOCAL_PROFILE_ID);
+    }
+
+    public void saveListeningStats(ListeningStats stats) {
+        userDataRepository.mergeListeningStats(LOCAL_PROFILE_ID, stats);
+    }
+
+    public ListeningStatsSummary summarizeListeningStats(LocalDate from, LocalDate to) {
+        return userDataRepository.summarizeListeningStats(LOCAL_PROFILE_ID, from, to);
+    }
+
+    public ListeningStats deleteListeningStats(LocalDate from, LocalDate to) {
+        return userDataRepository.deleteListeningStats(LOCAL_PROFILE_ID, from, to);
+    }
+
+    public ListeningStats deleteAllListeningStats() {
+        return userDataRepository.deleteAllListeningStats(LOCAL_PROFILE_ID);
     }
 
     public List<Track> scanDirectory(String directory) {
@@ -212,6 +235,21 @@ public class LibraryService {
 
     public List<String> listLibraryRoots() {
         return localLibraryRepository.findRoots();
+    }
+
+    public List<Track> removeLibraryRoot(String directory) {
+        Path removedRoot = Path.of(directory).toAbsolutePath().normalize();
+        localLibraryRepository.removeRoot(removedRoot);
+        List<Path> remainingRoots = localLibraryRepository.findRoots().stream()
+            .map(root -> Path.of(root).toAbsolutePath().normalize())
+            .toList();
+        List<String> removedTrackIds = trackRepository.findLocalTracks().stream()
+            .filter(track -> belongsToDirectory(track, removedRoot))
+            .filter(track -> remainingRoots.stream().noneMatch(root -> belongsToDirectory(track, root)))
+            .map(Track::id)
+            .toList();
+        trackRepository.removeLocalTracksByIds(removedTrackIds);
+        return trackRepository.findLocalTracks();
     }
 
     public List<String> listIgnoredLocalFiles() {

@@ -3,6 +3,7 @@ const backendBaseUrl = "http://127.0.0.1:17890";
 export interface CatalogLyrics {
   lyrics: string;
   translation?: string;
+  phonetic?: string;
   format: string;
   source: string;
   credits?: Array<{
@@ -23,6 +24,10 @@ export interface PersistedTrack {
   url?: string;
   coverUrl?: string;
   lyrics?: string;
+  translation?: string;
+  phonetic?: string;
+  credits?: CatalogLyrics["credits"];
+  lyricsPhonetic?: string;
   lyricsSource?: string;
   lyricsFormat?: string;
   metaSource?: "embedded" | "filename";
@@ -32,6 +37,7 @@ export interface LocalLyricsMatchResponse {
   matched: boolean;
   track: PersistedTrack;
   message: string;
+  lyricData?: CatalogLyrics;
 }
 
 export interface LibraryScanResult {
@@ -190,6 +196,65 @@ export interface CatalogArtistSongPage {
   hasMore: boolean;
 }
 
+export interface CacheSettings {
+  directory: string;
+  coverEnabled: boolean;
+  lyricsEnabled: boolean;
+  metadataEnabled: boolean;
+}
+
+export interface CacheCategoryStatistics {
+  bytes: number;
+  entries: number;
+}
+
+export interface CacheStatistics {
+  totalBytes: number;
+  totalEntries: number;
+  cover: CacheCategoryStatistics;
+  lyrics: CacheCategoryStatistics;
+  metadata: CacheCategoryStatistics;
+}
+
+export interface CacheSnapshot {
+  settings: CacheSettings;
+  statistics: CacheStatistics;
+}
+
+export interface ListeningStatsPayload {
+  revision: number;
+  tracks: Record<string, {
+    trackId: string;
+    playCount: number;
+    listenedSeconds: number;
+    lastListenedAt: string;
+    lastListenedDate: string;
+  }>;
+  days: Record<string, {
+    date: string;
+    listenedSeconds: number;
+  }>;
+}
+
+export interface ListeningStatsSummaryPayload {
+  revision: number;
+  trackCount: number;
+  activeDays: number;
+  listenedSeconds: number;
+  years: number[];
+  months: string[];
+  rangeTrackCount: number;
+  rangeActiveDays: number;
+  rangeListenedSeconds: number;
+}
+
+export class ApiRequestError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 const jsonHeaders = { "Content-Type": "application/json" };
 const REQUEST_TIMEOUT_MS = 12_000;
 
@@ -235,7 +300,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_
     } catch {
       // Keep the HTTP status when the server did not return JSON.
     }
-    throw new Error(message || `Request failed: ${response.status}`);
+    throw new ApiRequestError(message || `Request failed: ${response.status}`, response.status);
   }
   return response.json() as Promise<T>;
 }
@@ -254,6 +319,11 @@ export function loadLibrary() {
 
 export function loadLocalLibraryRoots() {
   return request<string[]>("/library/roots");
+}
+
+export function removeLocalLibraryRoot(directory: string) {
+  const query = new URLSearchParams({ directory });
+  return request<unknown[]>(`/library/roots?${query}`, { method: "DELETE" });
 }
 
 export function loadIgnoredLocalFiles() {
@@ -468,6 +538,35 @@ export function recordHistory(track: PersistedTrack) {
   });
 }
 
+export function loadListeningStats() {
+  return request<ListeningStatsPayload>("/library/listening-stats");
+}
+
+export function saveListeningStats(stats: ListeningStatsPayload) {
+  return request<{ ok: boolean }>("/library/listening-stats", {
+    method: "PUT",
+    headers: jsonHeaders,
+    body: JSON.stringify(stats)
+  });
+}
+
+export function loadListeningStatsSummary(from?: string, to?: string) {
+  const query = new URLSearchParams();
+  if (from) query.set("from", from);
+  if (to) query.set("to", to);
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return request<ListeningStatsSummaryPayload>(`/library/listening-stats/summary${suffix}`);
+}
+
+export function deleteListeningStatsRange(from: string, to: string) {
+  const query = new URLSearchParams({ from, to });
+  return request<ListeningStatsPayload>(`/library/listening-stats?${query}`, { method: "DELETE" });
+}
+
+export function deleteAllListeningStats() {
+  return request<ListeningStatsPayload>("/library/listening-stats?all=true", { method: "DELETE" });
+}
+
 export function loadPlaybackQueue() {
   return request<unknown[]>("/playback/queue");
 }
@@ -564,8 +663,9 @@ export function loadCatalogPlaylist(id: string) {
   return request<unknown[]>(`/catalog/playlists/${encodeURIComponent(id)}`);
 }
 
-export function loadCatalogAudio(id: string) {
-  return `${backendBaseUrl}/catalog/tracks/${encodeURIComponent(id)}/audio`;
+export function loadCatalogAudio(id: string, quality = "auto") {
+  const params = new URLSearchParams({ quality });
+  return `${backendBaseUrl}/catalog/tracks/${encodeURIComponent(id)}/audio?${params.toString()}`;
 }
 
 export function loadCatalogLyrics(id: string) {
@@ -644,6 +744,26 @@ export async function selectMusicDirectory() {
     : null;
 }
 
+export async function loadCacheSnapshot() {
+  return request<CacheSnapshot>("/cache");
+}
+
+export async function updateCacheSettings(settings: CacheSettings) {
+  return request<CacheSnapshot>("/cache/settings", {
+    method: "PUT",
+    headers: jsonHeaders,
+    body: JSON.stringify(settings)
+  });
+}
+
+export async function restoreDefaultCacheDirectory() {
+  return request<CacheSnapshot>("/cache/default-directory", { method: "POST" });
+}
+
+export async function clearManagedCache() {
+  return request<CacheSnapshot>("/cache", { method: "DELETE" });
+}
+
 function selectPlaylistCoverImageFromBrowser() {
   return new Promise<string | null>((resolve) => {
     const input = document.createElement("input");
@@ -695,6 +815,30 @@ export function loginQqWithCookie(cookie: string) {
     method: "POST",
     headers: jsonHeaders,
     body: JSON.stringify({ cookie })
+  });
+}
+
+export function sendNeteaseSmsCode(phone: string) {
+  return request<{ ok: boolean; message: string }>("/auth/netease/sms/send", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ phone })
+  });
+}
+
+export function loginNeteaseWithSms(phone: string, captcha: string) {
+  return request<AccountView>("/auth/netease/sms/login", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ phone, captcha })
+  });
+}
+
+export function loginNeteaseWithPassword(account: string, password: string) {
+  return request<AccountView>("/auth/netease/password/login", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify({ account, password })
   });
 }
 

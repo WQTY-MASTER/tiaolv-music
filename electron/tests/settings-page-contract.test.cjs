@@ -4,6 +4,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
+const startupHome = fs.readFileSync(path.join(root, "src/renderer/src/services/startupHome.ts"), "utf8");
 const api = fs.readFileSync(path.join(root, "src/renderer/src/services/api.ts"), "utf8");
 
 assert.match(app, /\|\s*"settings"/, "视图类型缺少 settings");
@@ -58,10 +59,25 @@ assert.match(app, /启动后进入/, "常规设置缺少启动主页选项");
 assert.match(app, /选择每次打开应用时默认显示的主页/, "启动主页选项缺少说明");
 assert.match(app, /本地音乐主页/, "启动主页选项缺少本地音乐主页");
 assert.match(app, /流媒体主页/, "启动主页选项缺少流媒体主页");
-assert.match(app, /STARTUP_HOME_STORAGE_KEY/, "启动主页设置需要持久化");
-assert.match(app, /function readStartupHome[\s\S]{0,220}return\s+"local"/, "启动主页应默认选择本地音乐主页");
-assert.match(app, /const startupHome = ref<AppMode>\(readStartupHome\(\)\)/, "启动主页设置缺少独立状态");
-assert.match(app, /const appMode = ref<AppMode>\(startupHome\.value\)/, "应用启动模式应读取启动主页设置");
+assert.match(app, /上次使用/, "启动主页选项缺少两种来源共用时的上次使用模式");
+assert.match(startupHome, /STARTUP_HOME_STORAGE_KEY/, "启动主页设置需要持久化");
+assert.match(app, /欢迎向导/, "常规设置缺少欢迎向导入口");
+assert.match(app, /重新走一遍首次使用引导：外观、听歌偏好、曲库与声音设置。/, "欢迎向导入口缺少说明");
+assert.match(app, /class="settings-onboarding-button"[\s\S]*@click="openOnboarding"[\s\S]*重新打开/, "欢迎向导入口应提供重新打开按钮");
+assert.match(app, /function openOnboarding\(\)\s*\{[\s\S]*showFirstRunOnboarding\.value = true/, "重新打开按钮应显示欢迎向导");
+for (const label of [
+  "主播放栏形态", "完整播放栏", "迷你胶囊", "紧凑模式",
+  "播放栏可见性", "常显", "指针靠近时浮现", "隐藏播放栏",
+  "迷你播放器显示在任务栏", "迷你播放器置顶", "完成欢迎向导后打开迷你播放器"
+]) {
+  assert.match(app, new RegExp(label), `播放设置缺少 ${label}`);
+}
+assert.match(app, /function setPlayerPresentationPreference\(presentation:\s*PlayerBarPresentation\)[\s\S]{0,500}appearancePreferences\.value\.playerControls\.presentation\s*=\s*presentation/, "播放设置应修改引导页共用的播放器形态偏好");
+assert.match(app, /appearancePreferences\.playerControls\.visibility\s*=\s*'always'[\s\S]*appearancePreferences\.playerControls\.visibility\s*=\s*'hover'[\s\S]*appearancePreferences\.playerControls\.visibility\s*=\s*'hidden'/, "播放设置应修改引导页共用的可见性偏好");
+assert.match(app, /v-model="appearancePreferences\.playerControls\.miniShowInTaskbar"[\s\S]*v-model="appearancePreferences\.playerControls\.miniAlwaysOnTop"[\s\S]*v-model="appearancePreferences\.playerControls\.openMiniAfterGuide"/, "播放设置应直接绑定三个持久化迷你播放器选项");
+assert.match(app, /readStartupHome/, "启动主页应读取持久化偏好");
+assert.match(app, /const startupHome = ref<StartupHome>\(readStartupHome\(window\.localStorage\)\)/, "启动主页设置缺少独立状态");
+assert.match(app, /resolveStartupMode\(startupHome\.value, readAppMode\(\)\)/, "应用启动模式应解析固定主页或上次使用模式");
 assert.doesNotMatch(app, /watch\(startupHome[\s\S]{0,260}appMode\.value\s*=/, "修改启动主页设置时不应立即切换当前页面");
 assert.match(app, /使用文件名补全歌曲信息/, "设置页缺少文件名元信息补全开关");
 assert.match(app, /USE_FILENAME_METADATA_STORAGE_KEY/, "文件名元信息补全开关需要持久化");

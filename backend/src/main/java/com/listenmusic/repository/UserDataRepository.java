@@ -1,12 +1,19 @@
 package com.listenmusic.repository;
 
 import com.listenmusic.domain.Track;
+import com.listenmusic.domain.ListeningStats;
+import com.listenmusic.domain.ListeningStatsSummary;
+import com.listenmusic.service.StaleListeningStatsException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -134,6 +141,281 @@ public class UserDataRepository {
             state.get("playMode"),
             OffsetDateTime.now().toString()
         );
+    }
+
+    public ListeningStats findListeningStats(String profileId) {
+        ensureListeningStatsMeta(profileId);
+        Map<String, ListeningStats.TrackStat> tracks = new LinkedHashMap<>();
+        jdbcTemplate.query("""
+            select s.track_id, s.play_count, s.listened_seconds, s.last_listened_at,
+                   (select d.listen_date
+                    from listening_track_day_stats d
+                    where d.profile_id = s.profile_id and d.track_id = s.track_id
+                    order by julianday(d.last_listened_at) desc
+                    limit 1) as last_listened_date
+            from listening_track_stats s
+            where s.profile_id = ?
+            """, result -> {
+                String trackId = result.getString("track_id");
+                tracks.put(trackId, new ListeningStats.TrackStat(
+                    trackId,
+                    result.getInt("play_count"),
+                    result.getDouble("listened_seconds"),
+                    result.getString("last_listened_at"),
+                    result.getString("last_listened_date")
+                ));
+            }, profileId);
+
+        Map<String, ListeningStats.DayStat> days = new LinkedHashMap<>();
+        jdbcTemplate.query("""
+            select listen_date, listened_seconds
+            from listening_day_stats
+            where profile_id = ?
+            order by listen_date
+            """, result -> {
+                String date = result.getString("listen_date");
+                days.put(date, new ListeningStats.DayStat(
+                    date,
+                    result.getDouble("listened_seconds")
+                ));
+            }, profileId);
+        return new ListeningStats(currentListeningStatsRevision(profileId), tracks, days);
+    }
+
+    @Transactional
+    public void mergeListeningStats(String profileId, ListeningStats stats) {
+        ListeningStats safeStats = stats == null
+            ? new ListeningStats(Map.of(), Map.of())
+            : stats;
+        ensureListeningStatsMeta(profileId);
+        long currentRevision = currentListeningStatsRevision(profileId);
+        if (safeStats.revision() != currentRevision) {
+            throw new StaleListeningStatsException(safeStats.revision(), currentRevision);
+        }
+        ListeningStats current = findListeningStats(profileId);
+
+        safeStats.tracks().forEach((key, stat) -> {
+            if (stat == null) {
+                return;
+            }
+            String trackId = nonBlank(stat.trackId(), key);
+            if (trackId == null) {
+                return;
+            }
+            String lastListenedAt = nonBlank(stat.lastListenedAt(), OffsetDateTime.now().toString());
+            ListeningStats.TrackStat existing = current.tracks().get(trackId);
+            int playCount = Math.max(0, stat.playCount());
+            double listenedSeconds = finiteNonNegative(stat.listenedSeconds());
+            int playDelta = Math.max(0, playCount - (existing == null ? 0 : existing.playCount()));
+            double secondsDelta = Math.max(0, listenedSeconds - (existing == null ? 0 : existing.listenedSeconds()));
+            String listenDate = normalizeListeningDate(stat.lastListenedDate(), lastListenedAt);
+            if (playDelta > 0 || secondsDelta > 0) {
+                jdbcTemplate.update("""
+                    insert into listening_track_day_stats(
+                      profile_id, track_id, listen_date, play_count, listened_seconds, last_listened_at
+                    ) values (?, ?, ?, ?, ?, ?)
+                    on conflict(profile_id, track_id, listen_date) do update set
+                      play_count = listening_track_day_stats.play_count + excluded.play_count,
+                      listened_seconds = listening_track_day_stats.listened_seconds + excluded.listened_seconds,
+                      last_listened_at = case
+                        when coalesce(julianday(excluded.last_listened_at), 0)
+                          >= coalesce(julianday(listening_track_day_stats.last_listened_at), 0)
+                        then excluded.last_listened_at
+                        else listening_track_day_stats.last_listened_at
+                      end
+                    """, profileId, trackId, listenDate, playDelta, secondsDelta, lastListenedAt);
+                if (secondsDelta > 0) {
+                    jdbcTemplate.update("""
+                        insert into listening_day_stats(profile_id, listen_date, listened_seconds)
+                        values (?, ?, ?)
+                        on conflict(profile_id, listen_date) do update set
+                          listened_seconds = listening_day_stats.listened_seconds + excluded.listened_seconds
+                        """, profileId, listenDate, secondsDelta);
+                }
+            }
+            jdbcTemplate.update("""
+                insert into listening_track_stats(
+                  profile_id, track_id, play_count, listened_seconds, last_listened_at
+                ) values (?, ?, ?, ?, ?)
+                on conflict(profile_id, track_id) do update set
+                  play_count = max(listening_track_stats.play_count, excluded.play_count),
+                  listened_seconds = max(listening_track_stats.listened_seconds, excluded.listened_seconds),
+                  last_listened_at = case
+                    when coalesce(julianday(excluded.last_listened_at), 0)
+                      >= coalesce(julianday(listening_track_stats.last_listened_at), 0)
+                    then excluded.last_listened_at
+                    else listening_track_stats.last_listened_at
+                  end
+                """,
+                profileId,
+                trackId,
+                playCount,
+                listenedSeconds,
+                lastListenedAt
+            );
+        });
+        safeStats.days().forEach((key, stat) -> {
+            if (stat == null) {
+                return;
+            }
+            String date = nonBlank(stat.date(), key);
+            if (date == null) {
+                return;
+            }
+            jdbcTemplate.update("""
+                insert into listening_day_stats(profile_id, listen_date, listened_seconds)
+                values (?, ?, ?)
+                on conflict(profile_id, listen_date) do update set
+                  listened_seconds = max(listening_day_stats.listened_seconds, excluded.listened_seconds)
+                """, profileId, date, finiteNonNegative(stat.listenedSeconds()));
+        });
+    }
+
+    public ListeningStatsSummary summarizeListeningStats(String profileId, LocalDate from, LocalDate to) {
+        ListeningStats stats = findListeningStats(profileId);
+        List<Integer> years = jdbcTemplate.query("""
+            select distinct cast(substr(listen_date, 1, 4) as integer) as year
+            from listening_day_stats where profile_id = ? order by year desc
+            """, (rs, rowNum) -> rs.getInt("year"), profileId);
+        List<String> months = jdbcTemplate.query("""
+            select distinct substr(listen_date, 1, 7) as month
+            from listening_day_stats where profile_id = ? order by month desc
+            """, (rs, rowNum) -> rs.getString("month"), profileId);
+        int trackCount = stats.tracks().size();
+        int activeDays = stats.days().size();
+        double totalSeconds = stats.days().values().stream()
+            .mapToDouble(ListeningStats.DayStat::listenedSeconds)
+            .sum();
+        if (from == null || to == null) {
+            return new ListeningStatsSummary(
+                stats.revision(), trackCount, activeDays, totalSeconds, years, months,
+                trackCount, activeDays, totalSeconds
+            );
+        }
+        String fromDate = from.toString();
+        String toDate = to.toString();
+        int rangeTrackCount = jdbcTemplate.queryForObject("""
+            select count(distinct track_id) from listening_track_day_stats
+            where profile_id = ? and listen_date between ? and ?
+            """, Integer.class, profileId, fromDate, toDate);
+        Map<String, Object> range = jdbcTemplate.queryForMap("""
+            select count(*) as active_days, coalesce(sum(listened_seconds), 0) as listened_seconds
+            from listening_day_stats where profile_id = ? and listen_date between ? and ?
+            """, profileId, fromDate, toDate);
+        return new ListeningStatsSummary(
+            stats.revision(), trackCount, activeDays, totalSeconds, years, months,
+            rangeTrackCount,
+            ((Number) range.get("active_days")).intValue(),
+            ((Number) range.get("listened_seconds")).doubleValue()
+        );
+    }
+
+    @Transactional
+    public ListeningStats deleteListeningStats(String profileId, LocalDate from, LocalDate to) {
+        ensureListeningStatsMeta(profileId);
+        int deletedDetails = jdbcTemplate.update("""
+            delete from listening_track_day_stats
+            where profile_id = ? and listen_date between ? and ?
+            """, profileId, from.toString(), to.toString());
+        int deletedDays = jdbcTemplate.update("""
+            delete from listening_day_stats
+            where profile_id = ? and listen_date between ? and ?
+            """, profileId, from.toString(), to.toString());
+        if (deletedDetails == 0 && deletedDays == 0) {
+            return findListeningStats(profileId);
+        }
+        rebuildListeningStats(profileId);
+        incrementListeningStatsRevision(profileId);
+        return findListeningStats(profileId);
+    }
+
+    @Transactional
+    public ListeningStats deleteAllListeningStats(String profileId) {
+        ensureListeningStatsMeta(profileId);
+        long storedRows = jdbcTemplate.queryForObject("""
+            select
+              (select count(*) from listening_track_day_stats where profile_id = ?)
+              + (select count(*) from listening_track_stats where profile_id = ?)
+              + (select count(*) from listening_day_stats where profile_id = ?)
+            """, Long.class, profileId, profileId, profileId);
+        jdbcTemplate.update("delete from listening_track_day_stats where profile_id = ?", profileId);
+        jdbcTemplate.update("delete from listening_track_stats where profile_id = ?", profileId);
+        jdbcTemplate.update("delete from listening_day_stats where profile_id = ?", profileId);
+        if (storedRows > 0) {
+            incrementListeningStatsRevision(profileId);
+        }
+        return findListeningStats(profileId);
+    }
+
+    private void rebuildListeningStats(String profileId) {
+        jdbcTemplate.update("delete from listening_track_stats where profile_id = ?", profileId);
+        jdbcTemplate.update("""
+            insert into listening_track_stats(
+              profile_id, track_id, play_count, listened_seconds, last_listened_at
+            )
+            select profile_id, track_id, sum(play_count), sum(listened_seconds), max(last_listened_at)
+            from listening_track_day_stats
+            where profile_id = ?
+            group by profile_id, track_id
+            """, profileId);
+        jdbcTemplate.update("""
+            insert into listening_day_stats(profile_id, listen_date, listened_seconds)
+            select profile_id, listen_date, sum(listened_seconds)
+            from listening_track_day_stats
+            where profile_id = ?
+            group by profile_id, listen_date
+            on conflict(profile_id, listen_date) do update set
+              listened_seconds = excluded.listened_seconds
+            """, profileId);
+    }
+
+    private void ensureListeningStatsMeta(String profileId) {
+        jdbcTemplate.update("""
+            insert into listening_stats_meta(profile_id, revision) values (?, 0)
+            on conflict(profile_id) do nothing
+            """, profileId);
+    }
+
+    private long currentListeningStatsRevision(String profileId) {
+        return jdbcTemplate.queryForObject(
+            "select revision from listening_stats_meta where profile_id = ?",
+            Long.class,
+            profileId
+        );
+    }
+
+    private void incrementListeningStatsRevision(String profileId) {
+        jdbcTemplate.update(
+            "update listening_stats_meta set revision = revision + 1 where profile_id = ?",
+            profileId
+        );
+    }
+
+    private static String normalizeListeningDate(String preferred, String timestamp) {
+        if (preferred != null && !preferred.isBlank()) {
+            try {
+                return LocalDate.parse(preferred.trim()).toString();
+            } catch (DateTimeParseException ignored) {
+                // Fall back to the timestamp for legacy clients.
+            }
+        }
+        try {
+            return OffsetDateTime.parse(timestamp)
+                .atZoneSameInstant(ZoneId.systemDefault())
+                .toLocalDate()
+                .toString();
+        } catch (DateTimeParseException ignored) {
+            return LocalDate.now().toString();
+        }
+    }
+
+    private static String nonBlank(String preferred, String fallback) {
+        String value = preferred == null || preferred.isBlank() ? fallback : preferred;
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    private static double finiteNonNegative(double value) {
+        return Double.isFinite(value) ? Math.max(0, value) : 0;
     }
 
     private void saveTrack(String profileId, Track track) {

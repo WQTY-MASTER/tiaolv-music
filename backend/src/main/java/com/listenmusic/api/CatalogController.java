@@ -6,6 +6,7 @@ import com.listenmusic.provider.HomepageData;
 import com.listenmusic.provider.DailyRecommendationsLoginRequiredException;
 import com.listenmusic.provider.PlaylistCategoryData;
 import com.listenmusic.provider.PlaylistDiscoveryPage;
+import com.listenmusic.provider.PlaybackQuality;
 import com.listenmusic.provider.ProviderLoginRequiredException;
 import com.listenmusic.provider.SearchResultPage;
 import com.listenmusic.provider.SearchType;
@@ -127,17 +128,26 @@ public class CatalogController {
     }
 
     @GetMapping("/tracks/{id}/audio")
-    public ResponseEntity<Void> audio(@PathVariable String id) {
+    public ResponseEntity<Void> audio(
+        @PathVariable String id,
+        @RequestParam(required = false) String quality,
+        @RequestParam(required = false) String cachePolicy
+    ) {
         try {
-            return onlineCatalogService.resolveAudioUrl(id)
+            return onlineCatalogService.resolveAudioUrl(id, PlaybackQuality.parse(quality))
                 .map(url -> {
                     HttpHeaders headers = new HttpHeaders();
                     headers.setLocation(URI.create(url));
+                    if ("none".equalsIgnoreCase(cachePolicy)) {
+                        headers.setCacheControl("no-store");
+                    }
                     return new ResponseEntity<Void>(headers, HttpStatus.FOUND);
                 })
                 .orElseGet(() -> ResponseEntity.<Void>notFound().build());
         } catch (ProviderLoginRequiredException exception) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        } catch (IllegalArgumentException exception) {
+            return ResponseEntity.badRequest().build();
         }
     }
 

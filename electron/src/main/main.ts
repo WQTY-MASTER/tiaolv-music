@@ -7,26 +7,51 @@ import {
   ipcMain,
   Menu,
   nativeImage,
+  net,
+  protocol,
   screen,
+  shell,
   Tray,
   type MenuItemConstructorOptions,
   type Rectangle
 } from "electron";
 import path from "node:path";
-import { mkdirSync, openAsBlob, readFileSync } from "node:fs";
+import os from "node:os";
+import { mkdirSync, openAsBlob, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
+import { BackgroundImageCache } from "./backgroundImageCache";
 import {
   DEFAULT_DESKTOP_LYRICS_PLAYBACK_STATE,
   DEFAULT_DESKTOP_LYRICS_PREFERENCES,
-  DESKTOP_LYRICS_UNLOCK_SHORTCUT,
+  MIN_DESKTOP_LYRICS_HEIGHT,
+  MIN_DESKTOP_LYRICS_WIDTH,
+  clampDesktopLyricsBounds,
   normalizeDesktopLyricsPreferences,
   type DesktopLyricsAction,
   type DesktopLyricsBounds,
   type DesktopLyricsPlaybackState,
   type DesktopLyricsPreferences
 } from "../shared/desktopLyrics";
+import { readLegacyAggregatePlaylists } from "./legacyAggregatePlaylists";
+import { ShortcutManager } from "./shortcutManager";
+import {
+  acceleratorFromInput, defaultShortcutConfig,
+  type ShortcutAction, type ShortcutPatch
+} from "../shared/shortcuts";
+import {
+  compareReleaseVersions,
+  type AboutSnapshot,
+  type AboutSystemInfo,
+  type UpdateCheckResult
+} from "../shared/about";
+import type { CloseBehavior } from "../shared/desktopIntegration";
 
 const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+protocol.registerSchemesAsPrivileged([
+  { scheme: "tiaolv-background", privileges: { standard: true, secure: true, supportFetchAPI: true } }
+]);
+let backgroundImageCache: BackgroundImageCache;
 const MINI_WINDOW_WIDTH = 412;
 const MINI_WINDOW_HEIGHT = 184;
 const MINI_QUEUE_WINDOW_HEIGHT = 396;
@@ -34,8 +59,10 @@ const WINDOW_ANIMATION_DURATION = 220;
 const BACKEND_BASE_URL = "http://127.0.0.1:17890";
 const DESKTOP_LYRICS_DEFAULT_WIDTH = 960;
 const DESKTOP_LYRICS_DEFAULT_HEIGHT = 220;
-const DESKTOP_LYRICS_MIN_WIDTH = 560;
-const DESKTOP_LYRICS_MIN_HEIGHT = 140;
+const DESKTOP_LYRICS_UNLOCK_HOTSPOT_HEIGHT = 36;
+const DESKTOP_LYRICS_UNLOCK_POLL_INTERVAL = 80;
+const GITHUB_REPOSITORY_URL = "https://github.com/WQTY-MASTER/tiaolv-music";
+const GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/WQTY-MASTER/tiaolv-music/releases/latest";
 const TASKBAR_ICON_DATA = {
   previous: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAClSURBVDhP7ZOxDcJADEUzAiUjMEJKxmAExqCjpWMcSkahZIP3kaW76M5xIqeigNecZH89yV+6YfjzVSTt/axD0lHSxV6/a5F0AB6W9buOIjPCoKQdcC2ZxdzEmhA4Aa9GFuY6ImFzXkReGJwXkRMCt+C8iJzQXmAEnk7gyQvrDDgDbyeqbBeWufV5d7JZbsaSsBLUEOYmsj+lqWFduIVSw+jnP8gHHomavl1TT/UAAAAASUVORK5CYII=",
   play: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACqSURBVDhP7ZMhDsJAEEUrkUgkEolEIjkGx0DiOAJHqURyBI6AROLeI5t0EzLQdtsqEp7a7Px5yWZmq+pPQl3Gu0moR+CqrmJtFEmoCjyb8yxmBpGFGeAGbGKumCjMAGd1HvO9tAkTwB3YxZ5OuoQZoFYXsfcrJcIE8FDXsf+DEuGgp/cJgdOg4bQJR69PFDYLfoi5Yt6FwGXyF2z+cprgPtZGoW6Ld+zneAEWLHgrYCmGvwAAAABJRU5ErkJggg==",
@@ -66,12 +93,25 @@ interface MiniWindowState {
   queueExpanded: boolean;
 }
 
+interface MiniWindowOptions {
+  showInTaskbar: boolean;
+  alwaysOnTop: boolean;
+}
+
 interface DesktopLyricsConfig {
   bounds?: DesktopLyricsBounds;
   preferences: DesktopLyricsPreferences;
 }
 
 let mainWindow: BrowserWindow | null = null;
+let shortcutManager: ShortcutManager | null = null;
+let shortcutRecordingTimer: ReturnType<typeof setTimeout> | null = null;
+let autoCheckUpdates = false;
+let updateCheckTask: Promise<UpdateCheckResult> | null = null;
+let updateCheckResult: UpdateCheckResult = {
+  status: "idle",
+  currentVersion: app.getVersion()
+};
 let desktopLyricsWindow: BrowserWindow | null = null;
 let miniWindowState: MiniWindowState | null = null;
 let windowAnimationId = 0;
@@ -79,7 +119,12 @@ let taskbarThumbnailButtonsEnabled = false;
 let taskbarPlaybackIsPlaying = false;
 let systemTray: Tray | null = null;
 let systemTrayEnabled = false;
+let closeBehavior: CloseBehavior = "exit";
+let appQuitting = false;
 let desktopLyricsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let desktopLyricsUnlockPollTimer: ReturnType<typeof setInterval> | null = null;
+let desktopLyricsUnlockHotspotActive = false;
+let desktopLyricsPointerInside = false;
 let desktopLyricsPlaybackState: DesktopLyricsPlaybackState = {
   ...DEFAULT_DESKTOP_LYRICS_PLAYBACK_STATE
 };
@@ -121,6 +166,205 @@ function applicationIcon() {
   return nativeImage.createFromPath(applicationIconPath());
 }
 
+function aboutConfigPath() {
+  return path.join(app.getPath("userData"), "about.json");
+}
+
+function readAboutConfig() {
+  try {
+    const stored = JSON.parse(readFileSync(aboutConfigPath(), "utf8")) as { autoCheckUpdates?: unknown };
+    autoCheckUpdates = stored.autoCheckUpdates === true;
+  } catch {
+    autoCheckUpdates = false;
+  }
+}
+
+function saveAboutConfig() {
+  const configPath = aboutConfigPath();
+  mkdirSync(path.dirname(configPath), { recursive: true });
+  writeFileSync(`${configPath}.tmp`, JSON.stringify({ autoCheckUpdates }, null, 2), "utf8");
+  renameSync(`${configPath}.tmp`, configPath);
+}
+
+function windowsName() {
+  if (process.platform !== "win32") return `${os.type()} ${os.release()}`;
+  const build = Number(os.release().split(".")[2]);
+  return Number.isFinite(build) && build >= 22000 ? "Windows 11" : "Windows 10";
+}
+
+function aboutSystemInfo(): AboutSystemInfo {
+  return {
+    appVersion: app.getVersion(),
+    electronVersion: process.versions.electron,
+    chromeVersion: process.versions.chrome,
+    nodeVersion: process.versions.node,
+    osName: windowsName(),
+    osVersion: os.release(),
+    osArch: os.arch()
+  };
+}
+
+function aboutSnapshot(): AboutSnapshot {
+  return {
+    system: aboutSystemInfo(),
+    autoCheckUpdates,
+    update: updateCheckResult
+  };
+}
+
+function broadcastUpdateResult() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("update-check-result", updateCheckResult);
+  }
+}
+
+interface GitHubRelease {
+  tag_name?: unknown;
+  name?: unknown;
+  body?: unknown;
+  published_at?: unknown;
+  html_url?: unknown;
+  assets?: Array<{ name?: unknown; browser_download_url?: unknown }>;
+}
+
+async function performUpdateCheck(): Promise<UpdateCheckResult> {
+  updateCheckResult = { status: "checking", currentVersion: app.getVersion() };
+  broadcastUpdateResult();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12_000);
+  try {
+    const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Tiaolv-Music-Updater"
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(response.status === 404
+        ? "项目暂未发布可检查的正式版本。"
+        : `更新服务返回 ${response.status}，请稍后重试。`);
+    }
+    const release = await response.json() as GitHubRelease;
+    const tag = typeof release.tag_name === "string" ? release.tag_name : "";
+    const comparison = compareReleaseVersions(tag, app.getVersion());
+    if (comparison === null) throw new Error("最新版本号格式无法识别。");
+    const releaseUrl = typeof release.html_url === "string" ? release.html_url : GITHUB_REPOSITORY_URL;
+    const asset = release.assets?.find((item) => (
+      typeof item.name === "string"
+      && /\.(?:exe|msi)$/i.test(item.name)
+      && typeof item.browser_download_url === "string"
+    ));
+    updateCheckResult = {
+      status: comparison > 0 ? "available" : "latest",
+      currentVersion: app.getVersion(),
+      latestVersion: tag.replace(/^v/i, ""),
+      releaseName: typeof release.name === "string" ? release.name : undefined,
+      releaseNotes: typeof release.body === "string" ? release.body.slice(0, 6000) : undefined,
+      publishedAt: typeof release.published_at === "string" ? release.published_at : undefined,
+      releaseUrl,
+      downloadUrl: typeof asset?.browser_download_url === "string" ? asset.browser_download_url : releaseUrl,
+      message: comparison > 0 ? "发现新版本。" : "当前已是最新版本。"
+    };
+  } catch (error) {
+    updateCheckResult = {
+      status: "error",
+      currentVersion: app.getVersion(),
+      message: error instanceof Error && error.name === "AbortError"
+        ? "检查更新超时，请确认网络连接后重试。"
+        : (error instanceof Error ? error.message : "检查更新失败，请稍后重试。")
+    };
+  } finally {
+    clearTimeout(timeout);
+    broadcastUpdateResult();
+  }
+  return updateCheckResult;
+}
+
+function checkForUpdates() {
+  if (!updateCheckTask) {
+    updateCheckTask = performUpdateCheck().finally(() => {
+      updateCheckTask = null;
+    });
+  }
+  return updateCheckTask;
+}
+
+function isAllowedExternalUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "github.com";
+  } catch {
+    return false;
+  }
+}
+
+function dispatchShortcut(action: ShortcutAction) {
+  switch (action) {
+    case "main-window":
+      if (mainWindow?.isVisible() && !mainWindow.isMinimized()) mainWindow.minimize();
+      else showMainWindow();
+      break;
+    case "desktop-lyrics":
+      toggleDesktopLyricsWindow();
+      break;
+    case "unlock-lyrics":
+      updateDesktopLyricsPreferences({ locked: false });
+      break;
+    case "translation":
+      updateDesktopLyricsPreferences({ translationEnabled: !desktopLyricsConfig.preferences.translationEnabled });
+      break;
+    case "lyrics-on-top":
+      updateDesktopLyricsPreferences({ alwaysOnTop: !desktopLyricsConfig.preferences.alwaysOnTop });
+      break;
+    default:
+      mainWindow?.webContents.send("shortcut-action", action);
+  }
+}
+
+function initializeShortcuts() {
+  const configPath = path.join(app.getPath("userData"), "shortcuts.json");
+  let stored: unknown;
+  try { stored = JSON.parse(readFileSync(configPath, "utf8")); } catch { stored = undefined; }
+  shortcutManager = new ShortcutManager(globalShortcut, stored, dispatchShortcut, (config) => {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    writeFileSync(`${configPath}.tmp`, JSON.stringify(config, null, 2), "utf8");
+    renameSync(`${configPath}.tmp`, configPath);
+  });
+}
+
+function broadcastShortcuts() {
+  const snapshot = shortcutManager?.snapshot();
+  for (const win of [mainWindow, desktopLyricsWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.setIgnoreMenuShortcuts(Boolean(snapshot?.recording));
+      win.webContents.send("shortcuts-changed", snapshot);
+    }
+  }
+}
+
+function finishShortcutRecording() {
+  if (shortcutRecordingTimer) clearTimeout(shortcutRecordingTimer);
+  shortcutRecordingTimer = null;
+  if (!shortcutManager?.snapshot().recording) return;
+  shortcutManager.setRecording(false);
+  broadcastShortcuts();
+}
+
+function attachWindowShortcuts(win: BrowserWindow) {
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || input.isComposing) return;
+    const accelerator = acceleratorFromInput(input);
+    if (accelerator && shortcutManager?.handleLocal(accelerator, input.isAutoRepeat)) event.preventDefault();
+  });
+  if (win === mainWindow) {
+    win.on("blur", finishShortcutRecording);
+    win.webContents.on("did-start-loading", finishShortcutRecording);
+    win.webContents.on("render-process-gone", finishShortcutRecording);
+    win.on("closed", finishShortcutRecording);
+  }
+}
+
 function desktopLyricsConfigPath() {
   return path.join(app.getPath("userData"), "desktop-lyrics.json");
 }
@@ -156,8 +400,9 @@ function getDesktopLyricsBounds(): DesktopLyricsBounds {
   }
 
   const display = screen.getDisplayMatching(stored).workArea;
-  const width = clamp(stored.width, DESKTOP_LYRICS_MIN_WIDTH, display.width);
-  const height = clamp(stored.height, DESKTOP_LYRICS_MIN_HEIGHT, display.height);
+  const size = clampDesktopLyricsBounds(stored);
+  const width = clamp(size.width, MIN_DESKTOP_LYRICS_WIDTH, display.width);
+  const height = clamp(size.height, MIN_DESKTOP_LYRICS_HEIGHT, display.height);
   return {
     width,
     height,
@@ -187,11 +432,31 @@ function scheduleDesktopLyricsConfigSave() {
 }
 
 function sendDesktopLyricsPreferences() {
-  if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
-  desktopLyricsWindow.webContents.send(
-    "desktop-lyrics-preferences",
-    desktopLyricsConfig.preferences
-  );
+  if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
+    desktopLyricsWindow.webContents.send(
+      "desktop-lyrics-preferences",
+      desktopLyricsConfig.preferences
+    );
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(
+      "desktop-lyrics-preferences",
+      desktopLyricsConfig.preferences
+    );
+  }
+}
+
+function sendDesktopLyricsBounds() {
+  const bounds = desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()
+    ? desktopLyricsWindow.getBounds()
+    : getDesktopLyricsBounds();
+  desktopLyricsConfig.bounds = bounds;
+  if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
+    desktopLyricsWindow.webContents.send("desktop-lyrics-bounds-changed", bounds);
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("desktop-lyrics-bounds-changed", bounds);
+  }
 }
 
 function sendDesktopLyricsPlaybackState() {
@@ -209,29 +474,63 @@ function notifyDesktopLyricsVisibility(visible: boolean) {
   mainWindow.webContents.send("desktop-lyrics-visibility-changed", visible);
 }
 
+function stopDesktopLyricsUnlockMonitor() {
+  if (desktopLyricsUnlockPollTimer) clearInterval(desktopLyricsUnlockPollTimer);
+  desktopLyricsUnlockPollTimer = null;
+  desktopLyricsUnlockHotspotActive = false;
+  desktopLyricsPointerInside = false;
+  const win = desktopLyricsWindow;
+  if (!win || win.isDestroyed()) return;
+  win.setIgnoreMouseEvents(false);
+  win.webContents.send("desktop-lyrics-hover-state", false);
+  win.webContents.send("desktop-lyrics-unlock-hotspot", false);
+}
+
+function startDesktopLyricsUnlockMonitor() {
+  const win = desktopLyricsWindow;
+  if (!win || win.isDestroyed()) return;
+  if (desktopLyricsUnlockPollTimer) clearInterval(desktopLyricsUnlockPollTimer);
+  desktopLyricsUnlockHotspotActive = false;
+  desktopLyricsPointerInside = false;
+  win.webContents.send("desktop-lyrics-hover-state", false);
+  win.webContents.send("desktop-lyrics-unlock-hotspot", false);
+
+  desktopLyricsUnlockPollTimer = setInterval(() => {
+    const currentWindow = desktopLyricsWindow;
+    if (!currentWindow || currentWindow.isDestroyed()) {
+      if (desktopLyricsUnlockPollTimer) clearInterval(desktopLyricsUnlockPollTimer);
+      desktopLyricsUnlockPollTimer = null;
+      return;
+    }
+    const bounds = currentWindow.getBounds();
+    const cursor = screen.getCursorScreenPoint();
+    const pointerInside = cursor.x >= bounds.x
+      && cursor.x < bounds.x + bounds.width
+      && cursor.y >= bounds.y
+      && cursor.y < bounds.y + bounds.height;
+    if (pointerInside !== desktopLyricsPointerInside) {
+      desktopLyricsPointerInside = pointerInside;
+      currentWindow.webContents.send("desktop-lyrics-hover-state", pointerInside);
+    }
+    const hotspotActive = desktopLyricsConfig.preferences.locked
+      && pointerInside
+      && cursor.y < bounds.y + DESKTOP_LYRICS_UNLOCK_HOTSPOT_HEIGHT;
+    if (hotspotActive === desktopLyricsUnlockHotspotActive) return;
+    desktopLyricsUnlockHotspotActive = hotspotActive;
+    if (desktopLyricsConfig.preferences.locked) {
+      currentWindow.setIgnoreMouseEvents(!hotspotActive, { forward: true });
+    }
+    currentWindow.webContents.send("desktop-lyrics-unlock-hotspot", hotspotActive);
+  }, DESKTOP_LYRICS_UNLOCK_POLL_INTERVAL);
+}
+
 function applyDesktopLyricsLock(locked: boolean) {
   const win = desktopLyricsWindow;
   if (!win || win.isDestroyed()) return false;
 
-  if (locked) {
-    globalShortcut.unregister(DESKTOP_LYRICS_UNLOCK_SHORTCUT);
-    const registered = globalShortcut.register(DESKTOP_LYRICS_UNLOCK_SHORTCUT, () => {
-      updateDesktopLyricsPreferences({ locked: false });
-    });
-    if (!registered) {
-      desktopLyricsConfig.preferences = {
-        ...desktopLyricsConfig.preferences,
-        locked: false
-      };
-      win.setIgnoreMouseEvents(false);
-      sendDesktopLyricsPreferences();
-      scheduleDesktopLyricsConfigSave();
-      return false;
-    }
-  } else {
-    globalShortcut.unregister(DESKTOP_LYRICS_UNLOCK_SHORTCUT);
-  }
-
+  if (!desktopLyricsUnlockPollTimer) startDesktopLyricsUnlockMonitor();
+  desktopLyricsUnlockHotspotActive = false;
+  win.webContents.send("desktop-lyrics-unlock-hotspot", false);
   win.setIgnoreMouseEvents(locked, { forward: true });
   return true;
 }
@@ -242,13 +541,37 @@ function updateDesktopLyricsPreferences(patch: Partial<DesktopLyricsPreferences>
     ...patch
   });
   desktopLyricsConfig.preferences = next;
-  if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
-    applyDesktopLyricsLock(next.locked);
-    sendDesktopLyricsPreferences();
+  if (next.enabled && (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed())) {
+    createDesktopLyricsWindow();
+  } else if (!next.enabled && desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
+    desktopLyricsWindow.close();
   }
+  if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
+    desktopLyricsWindow.setAlwaysOnTop(next.alwaysOnTop, "floating");
+    applyDesktopLyricsLock(next.locked);
+  }
+  sendDesktopLyricsPreferences();
   scheduleDesktopLyricsConfigSave();
   if (systemTrayEnabled) refreshSystemTray();
   return desktopLyricsConfig.preferences;
+}
+
+function updateDesktopLyricsBounds(bounds: Pick<DesktopLyricsBounds, "width" | "height">) {
+  const size = clampDesktopLyricsBounds(bounds);
+  const current = desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()
+    ? desktopLyricsWindow.getBounds()
+    : getDesktopLyricsBounds();
+  const nextBounds = { ...current, ...size };
+  desktopLyricsConfig.bounds = nextBounds;
+  if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
+    desktopLyricsWindow.setBounds({
+      ...desktopLyricsWindow.getBounds(),
+      ...clampDesktopLyricsBounds(size)
+    });
+  }
+  sendDesktopLyricsBounds();
+  scheduleDesktopLyricsConfigSave();
+  return desktopLyricsConfig.bounds;
 }
 
 function createDesktopLyricsWindow() {
@@ -259,11 +582,11 @@ function createDesktopLyricsWindow() {
 
   const win = new BrowserWindow({
     ...getDesktopLyricsBounds(),
-    minWidth: DESKTOP_LYRICS_MIN_WIDTH,
-    minHeight: DESKTOP_LYRICS_MIN_HEIGHT,
+    minWidth: MIN_DESKTOP_LYRICS_WIDTH,
+    minHeight: MIN_DESKTOP_LYRICS_HEIGHT,
     frame: false,
     transparent: true,
-    alwaysOnTop: true,
+    alwaysOnTop: desktopLyricsConfig.preferences.alwaysOnTop,
     skipTaskbar: true,
     hasShadow: false,
     backgroundColor: "#00000000",
@@ -275,12 +598,25 @@ function createDesktopLyricsWindow() {
     }
   });
   desktopLyricsWindow = win;
-  desktopLyricsWindow.setAlwaysOnTop(true, "floating");
-  desktopLyricsWindow.on("move", scheduleDesktopLyricsConfigSave);
-  desktopLyricsWindow.on("resize", scheduleDesktopLyricsConfigSave);
+  attachWindowShortcuts(win);
+  desktopLyricsWindow.setAlwaysOnTop(desktopLyricsConfig.preferences.alwaysOnTop, "floating");
+  desktopLyricsWindow.on("move", () => {
+    sendDesktopLyricsBounds();
+    scheduleDesktopLyricsConfigSave();
+  });
+  desktopLyricsWindow.on("resize", () => {
+    sendDesktopLyricsBounds();
+    scheduleDesktopLyricsConfigSave();
+  });
   desktopLyricsWindow.on("closed", () => {
-    globalShortcut.unregister(DESKTOP_LYRICS_UNLOCK_SHORTCUT);
+    stopDesktopLyricsUnlockMonitor();
     desktopLyricsWindow = null;
+    desktopLyricsConfig.preferences = normalizeDesktopLyricsPreferences({
+      ...desktopLyricsConfig.preferences,
+      enabled: false
+    });
+    sendDesktopLyricsPreferences();
+    scheduleDesktopLyricsConfigSave();
     notifyDesktopLyricsVisibility(false);
   });
   win.webContents.on("did-finish-load", () => {
@@ -307,11 +643,16 @@ function createDesktopLyricsWindow() {
 
 function toggleDesktopLyricsWindow() {
   if (desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()) {
-    desktopLyricsWindow.close();
+    updateDesktopLyricsPreferences({ enabled: false });
     return false;
   }
-  createDesktopLyricsWindow();
+  updateDesktopLyricsPreferences({ enabled: true });
   return true;
+}
+
+function isTrustedDesktopLyricsSender(event: Electron.IpcMainInvokeEvent) {
+  const sender = BrowserWindow.fromWebContents(event.sender);
+  return sender === mainWindow || sender === desktopLyricsWindow;
 }
 
 function applyTaskbarThumbnailButtons(win: BrowserWindow) {
@@ -417,12 +758,12 @@ function buildSystemTrayMenu(state: SystemTrayState) {
     },
     {
       label: desktopLyricsConfig.preferences.locked
-        ? "桌面歌词已锁定（Ctrl+Alt+L 解锁）"
+        ? "解锁桌面歌词"
         : "锁定桌面歌词",
       type: "checkbox",
       checked: desktopLyricsConfig.preferences.locked,
-      enabled: state.desktopLyricsVisible && !desktopLyricsConfig.preferences.locked,
-      click: () => updateDesktopLyricsPreferences({ locked: true })
+      enabled: state.desktopLyricsVisible,
+      click: () => updateDesktopLyricsPreferences({ locked: !desktopLyricsConfig.preferences.locked })
     },
     { type: "separator" },
     {
@@ -486,6 +827,17 @@ function createWindow() {
     }
   });
   mainWindow = win;
+  attachWindowShortcuts(win);
+  win.on("close", (event) => {
+    if (appQuitting || closeBehavior === "exit") return;
+    event.preventDefault();
+    if (closeBehavior === "tray") {
+      setSystemTrayEnabled(true);
+      win.hide();
+      return;
+    }
+    win.webContents.send("window-close-behavior", closeBehavior);
+  });
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
     if (miniWindowState?.windowId === win.id) miniWindowState = null;
@@ -554,7 +906,7 @@ async function stabilizeRestoredWindow(win: BrowserWindow) {
   await new Promise((resolve) => setTimeout(resolve, 32));
 }
 
-async function enterMiniMode(win: BrowserWindow) {
+async function enterMiniMode(win: BrowserWindow, options: MiniWindowOptions) {
   if (miniWindowState?.windowId === win.id) return true;
   if (miniWindowState) return false;
 
@@ -577,7 +929,8 @@ async function enterMiniMode(win: BrowserWindow) {
   if (win.isMaximized()) win.unmaximize();
   win.setMenuBarVisibility(false);
   await stabilizeRestoredWindow(win);
-  win.setAlwaysOnTop(true);
+  win.setSkipTaskbar(!options.showInTaskbar);
+  win.setAlwaysOnTop(options.alwaysOnTop);
   await animateWindowBounds(win, target);
   win.setResizable(false);
   if (!win.isDestroyed()) win.focus();
@@ -617,6 +970,7 @@ async function exitMiniMode(win: BrowserWindow) {
 
   win.setMinimumSize(...state.minimumSize);
   win.setResizable(state.wasResizable);
+  win.setSkipTaskbar(false);
   win.setAlwaysOnTop(state.wasAlwaysOnTop);
   win.setMenuBarVisibility(state.wasMenuBarVisible);
   if (state.wasMaximized) win.maximize();
@@ -637,10 +991,24 @@ ipcMain.handle("select-playlist-cover-image", async () => {
   const result = await dialog.showOpenDialog({
     properties: ["openFile"],
     filters: [
-      { name: "Images", extensions: ["jpg", "jpeg", "png"] }
+      { name: "Images", extensions: ["jpg", "jpeg", "png", "webp"] }
     ]
   });
   return result.canceled ? null : result.filePaths[0] ?? null;
+});
+
+ipcMain.handle("read-appearance-background", async (_event, imagePath: unknown) => {
+  if (typeof imagePath !== "string") throw new Error("Invalid background path");
+  if (imagePath.startsWith("tiaolv-background:")) {
+    await backgroundImageCache.resolve(imagePath);
+    return imagePath;
+  }
+  return backgroundImageCache.importImage(imagePath);
+});
+ipcMain.handle("background-cache-statistics", () => backgroundImageCache.statistics());
+ipcMain.handle("clear-background-cache", async () => {
+  await backgroundImageCache.clear();
+  return backgroundImageCache.statistics();
 });
 
 ipcMain.handle("upload-cloud-audio", async (event) => {
@@ -696,9 +1064,12 @@ ipcMain.handle("download-cloud-track", async (event, audioUrl: string, fileName:
   return true;
 });
 
-ipcMain.handle("enter-mini-mode", async (event) => {
+ipcMain.handle("enter-mini-mode", async (event, options?: Partial<MiniWindowOptions>) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  return win ? enterMiniMode(win) : false;
+  return win ? enterMiniMode(win, {
+    showInTaskbar: options?.showInTaskbar !== false,
+    alwaysOnTop: options?.alwaysOnTop !== false
+  }) : false;
 });
 
 ipcMain.handle("exit-mini-mode", async (event) => {
@@ -737,6 +1108,35 @@ ipcMain.handle("update-system-tray-state", (_event, state: SystemTrayState) => {
   return systemTrayEnabled;
 });
 
+ipcMain.handle("set-close-behavior", (event, behavior: CloseBehavior) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return closeBehavior;
+  closeBehavior = behavior === "tray" || behavior === "mini" ? behavior : "exit";
+  return closeBehavior;
+});
+
+function launchAtStartupOptions() {
+  return {
+    path: process.execPath,
+    args: app.isPackaged ? [] : [app.getAppPath()]
+  };
+}
+
+ipcMain.handle("get-launch-at-startup", (event) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return false;
+  return app.getLoginItemSettings(launchAtStartupOptions()).openAtLogin;
+});
+
+ipcMain.handle("set-launch-at-startup", (event, enabled: boolean) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return false;
+  app.setLoginItemSettings({ ...launchAtStartupOptions(), openAtLogin: Boolean(enabled) });
+  return app.getLoginItemSettings(launchAtStartupOptions()).openAtLogin;
+});
+
+ipcMain.handle("get-legacy-aggregate-playlists", (event) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return [];
+  return readLegacyAggregatePlaylists(app.getPath("appData"));
+});
+
 ipcMain.handle("toggle-desktop-lyrics-window", (event) => {
   if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return false;
   return toggleDesktopLyricsWindow();
@@ -744,13 +1144,17 @@ ipcMain.handle("toggle-desktop-lyrics-window", (event) => {
 
 ipcMain.handle("close-desktop-lyrics-window", (event) => {
   if (BrowserWindow.fromWebContents(event.sender) !== desktopLyricsWindow) return false;
-  desktopLyricsWindow?.close();
+  updateDesktopLyricsPreferences({ enabled: false });
   return true;
 });
 
 ipcMain.handle("get-desktop-lyrics-snapshot", (event) => {
-  if (BrowserWindow.fromWebContents(event.sender) !== desktopLyricsWindow) return null;
+  if (!isTrustedDesktopLyricsSender(event)) return null;
   return {
+    visible: Boolean(desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()),
+    bounds: desktopLyricsWindow && !desktopLyricsWindow.isDestroyed()
+      ? desktopLyricsWindow.getBounds()
+      : getDesktopLyricsBounds(),
     playback: desktopLyricsPlaybackState,
     preferences: desktopLyricsConfig.preferences
   };
@@ -766,24 +1170,90 @@ ipcMain.on("update-desktop-lyrics-playback-state", (event, state: DesktopLyricsP
   sendDesktopLyricsPlaybackState();
 });
 
-ipcMain.on("update-desktop-lyrics-time", (event, currentTime: number) => {
+ipcMain.on("update-desktop-lyrics-time", (event, currentTime: number, allowRewind = false) => {
   if (BrowserWindow.fromWebContents(event.sender) !== mainWindow || !Number.isFinite(currentTime)) return;
   desktopLyricsPlaybackState.currentTime = Math.max(0, currentTime);
   if (!desktopLyricsWindow || desktopLyricsWindow.isDestroyed()) return;
-  desktopLyricsWindow.webContents.send("desktop-lyrics-time", desktopLyricsPlaybackState.currentTime);
+  desktopLyricsWindow.webContents.send(
+    "desktop-lyrics-time",
+    desktopLyricsPlaybackState.currentTime,
+    Boolean(allowRewind)
+  );
 });
 
 ipcMain.handle("update-desktop-lyrics-preferences", (event, patch: Partial<DesktopLyricsPreferences>) => {
-  if (BrowserWindow.fromWebContents(event.sender) !== desktopLyricsWindow) {
+  if (!isTrustedDesktopLyricsSender(event)) {
     return desktopLyricsConfig.preferences;
   }
   return updateDesktopLyricsPreferences(patch ?? {});
+});
+
+ipcMain.handle("update-desktop-lyrics-bounds", (event, bounds: Pick<DesktopLyricsBounds, "width" | "height">) => {
+  if (!isTrustedDesktopLyricsSender(event)) return getDesktopLyricsBounds();
+  return updateDesktopLyricsBounds(bounds ?? getDesktopLyricsBounds());
 });
 
 ipcMain.on("desktop-lyrics-action", (event, action: DesktopLyricsAction) => {
   if (BrowserWindow.fromWebContents(event.sender) !== desktopLyricsWindow) return;
   if (!["previous", "toggle", "next", "cycle-mode"].includes(action)) return;
   mainWindow?.webContents.send("desktop-lyrics-action", action);
+});
+
+ipcMain.handle("get-shortcuts", (event) => {
+  if (!isTrustedDesktopLyricsSender(event)) throw new Error("不允许读取快捷键配置");
+  return shortcutManager?.snapshot();
+});
+
+ipcMain.handle("update-shortcuts", (event, patch: ShortcutPatch, reset = false) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) throw new Error("不允许修改快捷键配置");
+  finishShortcutRecording();
+  try {
+    return shortcutManager?.update(reset ? defaultShortcutConfig() : (patch ?? {}), Boolean(reset));
+  } finally {
+    broadcastShortcuts();
+  }
+});
+
+ipcMain.handle("set-shortcut-recording", (event, recording: boolean) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) throw new Error("不允许录制快捷键");
+  finishShortcutRecording();
+  if (recording && mainWindow?.isFocused()) {
+    shortcutManager?.setRecording(true);
+    shortcutRecordingTimer = setTimeout(finishShortcutRecording, 30000);
+    broadcastShortcuts();
+  }
+  return shortcutManager?.snapshot();
+});
+
+ipcMain.handle("get-about-snapshot", (event) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) throw new Error("不允许读取关于信息");
+  return aboutSnapshot();
+});
+
+ipcMain.handle("check-for-updates", (event) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) throw new Error("不允许检查更新");
+  return checkForUpdates();
+});
+
+ipcMain.handle("set-auto-update-check", (event, enabled: boolean) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) throw new Error("不允许修改更新设置");
+  const previous = autoCheckUpdates;
+  autoCheckUpdates = Boolean(enabled);
+  try {
+    saveAboutConfig();
+  } catch (error) {
+    autoCheckUpdates = previous;
+    throw error;
+  }
+  return aboutSnapshot();
+});
+
+ipcMain.handle("open-external-link", async (event, url: string) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow || !isAllowedExternalUrl(url)) {
+    throw new Error("不允许打开此外部链接");
+  }
+  await shell.openExternal(url);
+  return true;
 });
 
 ipcMain.handle("copy-text", (_event, value: string) => {
@@ -802,11 +1272,25 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(() => {
+    backgroundImageCache = new BackgroundImageCache(path.join(app.getPath("userData"), "cache", "backgrounds"));
+    protocol.handle("tiaolv-background", async (request) => {
+      try {
+        return await net.fetch(pathToFileURL(await backgroundImageCache.resolve(request.url)).href);
+      } catch {
+        return new Response("Background not found", { status: 404 });
+      }
+    });
     if (process.platform === "win32") {
       app.setAppUserModelId("com.tiaolvmusic.desktop");
     }
     readDesktopLyricsConfig();
+    readAboutConfig();
+    initializeShortcuts();
     createWindow();
+    if (autoCheckUpdates) void checkForUpdates();
+    if (desktopLyricsConfig.preferences.enabled) {
+      createDesktopLyricsWindow();
+    }
 
     app.on("activate", () => {
       if (BrowserWindow.getAllWindows().length === 0) {
@@ -823,8 +1307,11 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
-  globalShortcut.unregister(DESKTOP_LYRICS_UNLOCK_SHORTCUT);
+  appQuitting = true;
+  if (shortcutRecordingTimer) clearTimeout(shortcutRecordingTimer);
+  shortcutManager?.dispose();
   if (desktopLyricsSaveTimer) clearTimeout(desktopLyricsSaveTimer);
+  if (desktopLyricsUnlockPollTimer) clearInterval(desktopLyricsUnlockPollTimer);
   saveDesktopLyricsConfig();
   systemTray?.destroy();
   systemTray = null;

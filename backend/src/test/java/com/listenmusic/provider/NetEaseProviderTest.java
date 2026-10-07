@@ -7,6 +7,8 @@ import com.listenmusic.repository.AccountRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpMethod;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.web.client.MockRestServiceServer;
 import org.springframework.web.client.RestClient;
 
@@ -24,6 +26,7 @@ import static org.springframework.test.web.client.match.MockRestRequestMatchers.
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.queryParam;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withSuccess;
+import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 import static org.hamcrest.Matchers.startsWith;
 
 class NetEaseProviderTest {
@@ -49,7 +52,11 @@ class NetEaseProviderTest {
         );
         when(accountRepository.findActive("netease")).thenReturn(Optional.of(account));
         when(credentialStore.get("credential-ref")).thenReturn(Optional.of(cookie));
-        server.expect(requestTo(startsWith("http://api.test/song/url/v1?id=123&level=standard")))
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header("Cookie", cookie))
+            .andRespond(withSuccess("{\"success\":true,\"message\":\"ok\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=hires"))
             .andExpect(method(HttpMethod.GET))
             .andExpect(header("Cookie", cookie))
             .andRespond(withSuccess("{\"data\":[{\"url\":\"https://audio.test/song.mp3\"}]}", org.springframework.http.MediaType.APPLICATION_JSON));
@@ -66,7 +73,10 @@ class NetEaseProviderTest {
         );
         when(accountRepository.findActive("netease")).thenReturn(Optional.of(account));
         when(credentialStore.get("credential-ref")).thenReturn(Optional.of(cookie));
-        server.expect(requestTo(startsWith("http://api.test/song/url/v1?id=123&level=standard")))
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andExpect(header("Cookie", cookie))
+            .andRespond(withSuccess("{\"success\":true}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=hires"))
             .andExpect(header("Cookie", cookie))
             .andRespond(withSuccess("{\"code\":301,\"message\":\"需要登录\"}", org.springframework.http.MediaType.APPLICATION_JSON));
 
@@ -208,7 +218,10 @@ class NetEaseProviderTest {
 
     @Test
     void resolvesPlaybackUrlFromTheNeteaseApi() {
-        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=standard"))
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andExpect(method(HttpMethod.GET))
+            .andRespond(withSuccess("{\"success\":true}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=hires"))
             .andExpect(method(HttpMethod.GET))
             .andRespond(withSuccess("""
                 {"data":[{"id":123,"url":"https://audio.test/song.mp3"}]}
@@ -217,6 +230,90 @@ class NetEaseProviderTest {
         assertEquals(
             "https://audio.test/song.mp3",
             provider.resolveAudioUrl("netease:123").orElseThrow()
+        );
+        server.verify();
+    }
+
+    @Test
+    void fallsBackThroughNeteaseQualitiesInOrder() {
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andRespond(withSuccess("{\"success\":true}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=hires"))
+            .andRespond(withSuccess("{\"data\":[{\"url\":null}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=lossless"))
+            .andRespond(withSuccess("{\"data\":[{\"url\":\"https://audio.test/song.flac\"}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertEquals(
+            "https://audio.test/song.flac",
+            provider.resolveAudioUrl("netease:123", PlaybackQuality.AUTO).orElseThrow()
+        );
+        server.verify();
+    }
+
+    @Test
+    void continuesQualityFallbackWhenTheRedirectBackupHasNoUrl() {
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andRespond(withSuccess("{\"success\":true}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=hires"))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1/302?id=123&level=hires"))
+            .andRespond(withSuccess());
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=lossless"))
+            .andRespond(withSuccess("{\"data\":[{\"url\":\"https://audio.test/song.flac\"}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertEquals(
+            "https://audio.test/song.flac",
+            provider.resolveAudioUrl("netease:123", PlaybackQuality.AUTO).orElseThrow()
+        );
+        server.verify();
+    }
+
+    @Test
+    void startsManualNeteaseFallbackAtTheSelectedQuality() {
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andRespond(withSuccess("{\"success\":true}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=lossless"))
+            .andRespond(withSuccess("{\"data\":[{\"url\":null}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=exhigh"))
+            .andRespond(withSuccess("{\"data\":[{\"url\":\"https://audio.test/song.mp3\"}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertEquals(
+            "https://audio.test/song.mp3",
+            provider.resolveAudioUrl("netease:123", PlaybackQuality.LOSSLESS).orElseThrow()
+        );
+        server.verify();
+    }
+
+    @Test
+    void stopsBeforeResolvingAnUnavailableNeteaseTrack() {
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andRespond(withSuccess("{\"success\":false,\"message\":\"暂无版权\"}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        assertTrue(provider.resolveAudioUrl("netease:123", PlaybackQuality.AUTO).isEmpty());
+        server.verify();
+    }
+
+    @Test
+    void rejectsUnsupportedNeteaseQuality() {
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> provider.resolveAudioUrl("netease:123", PlaybackQuality.HIGH)
+        );
+    }
+
+    @Test
+    void usesTheV1RedirectEndpointOnlyWhenTheJsonResponseIsMalformed() {
+        server.expect(requestTo("http://api.test/check/music?id=123"))
+            .andRespond(withSuccess("{\"success\":true}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1?id=123&level=standard"))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://api.test/song/url/v1/302?id=123&level=standard"))
+            .andRespond(withStatus(HttpStatus.FOUND)
+                .header(HttpHeaders.LOCATION, "https://audio.test/backup.mp3"));
+
+        assertEquals(
+            "https://audio.test/backup.mp3",
+            provider.resolveAudioUrl("netease:123", PlaybackQuality.STANDARD).orElseThrow()
         );
         server.verify();
     }
@@ -274,6 +371,7 @@ class NetEaseProviderTest {
                 {
                   "lrc": {"lyric": "[00:01.00]晴天"},
                   "tlyric": {"lyric": "[00:01.00]A sunny day"},
+                  "romalrc": {"lyric": "[00:01.00]qíng tiān"},
                   "yrc": {
                     "lyric": "{\\"t\\":0,\\"c\\":[{\\"tx\\":\\"作词: \\"},{\\"tx\\":\\"Xulai\\"}]}\\n[1000,1000](1000,500,0)晴(1500,500,0)天"
                   }
@@ -285,6 +383,7 @@ class NetEaseProviderTest {
         assertTrue(lyrics.lyrics().contains("[1000,1000](1000,500,0)晴(1500,500,0)天"));
         assertTrue(lyrics.lyrics().contains("\"tx\":\"作词: \""));
         assertEquals("[00:01.00]A sunny day", lyrics.translation());
+        assertEquals("[00:01.00]qíng tiān", lyrics.phonetic());
         assertEquals("YRC", lyrics.format());
         assertTrue(lyrics.source().equals("netease"));
         assertEquals(

@@ -64,6 +64,50 @@ class AuthControllerTest {
     }
 
     @Test
+    void sendsNeteaseSmsCodeWithoutEchoingThePhone() throws Exception {
+        given(authService.sendSmsCode("13800138000")).willReturn("验证码已发送");
+
+        mockMvc.perform(post("/auth/netease/sms/send")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"13800138000\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.ok").value(true))
+            .andExpect(jsonPath("$.message").value("验证码已发送"))
+            .andExpect(jsonPath("$.phone").doesNotExist());
+    }
+
+    @Test
+    void logsInNeteaseWithSmsThroughTheSharedAccountFlow() throws Exception {
+        given(authService.loginWithSms("13800138000", "123456")).willReturn(
+            new AccountView("netease", "100", "短信用户", null)
+        );
+
+        mockMvc.perform(post("/auth/netease/sms/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"phone\":\"13800138000\",\"captcha\":\"123456\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.provider").value("netease"))
+            .andExpect(jsonPath("$.nickname").value("短信用户"))
+            .andExpect(jsonPath("$.cookie").doesNotExist());
+    }
+
+    @Test
+    void logsInNeteaseWithPasswordWithoutEchoingTheSecret() throws Exception {
+        given(authService.loginWithPassword("music@example.com", "secret-value")).willReturn(
+            new AccountView("netease", "101", "密码用户", null)
+        );
+
+        mockMvc.perform(post("/auth/netease/password/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"account\":\"music@example.com\",\"password\":\"secret-value\"}"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.provider").value("netease"))
+            .andExpect(jsonPath("$.nickname").value("密码用户"))
+            .andExpect(jsonPath("$.password").doesNotExist())
+            .andExpect(jsonPath("$.cookie").doesNotExist());
+    }
+
+    @Test
     void exposesQrStateAndOnlyPublicAccountFieldsOnSuccess() throws Exception {
         given(authService.checkQrLogin("session-1")).willReturn(new QrLoginStatusResponse(
             "session-1", "netease", "SUCCESS", "100", "测试用户", "https://img.test/avatar.jpg", ""

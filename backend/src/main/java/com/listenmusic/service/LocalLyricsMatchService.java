@@ -45,15 +45,16 @@ public class LocalLyricsMatchService {
         if (!"local".equalsIgnoreCase(track.source())) {
             throw new IllegalArgumentException("联网匹配歌词仅支持本地歌曲");
         }
-        if (hasLocalLyrics(track)) {
+        boolean localLyricsAvailable = hasLocalLyrics(track);
+        if (localLyricsAvailable && accountRepository.findActive("qq").isEmpty()) {
             return new LocalLyricsMatchResult(true, track, localLyricsMessage(track.lyricsFormat()));
         }
 
         String title = cleanTitle(track.title());
         String artist = cleanArtist(track.artist());
         String query = (title + " " + artist).trim();
-        Candidate fallback = null;
-        for (String provider : providersToTry()) {
+        // Only QQ word timing can supersede lyrics carried by the local file.
+        for (String provider : localLyricsAvailable ? List.of("qq") : List.of("qq", "netease")) {
             try {
                 Optional<Track> candidate = bestMatch(
                     catalogService.search(query, provider, SearchType.SONG, 10, 0).songs(),
@@ -68,26 +69,22 @@ public class LocalLyricsMatchService {
                     continue;
                 }
                 Candidate loaded = new Candidate(provider, lyrics.get());
-                if (isPrecise(lyrics.get().format())) {
+                if (!localLyricsAvailable || hasWordTiming(lyrics.get())) {
                     return persist(track, loaded, saveBesideAudio);
-                }
-                if (fallback == null) {
-                    fallback = loaded;
                 }
             } catch (RuntimeException ignored) {
                 // A failed provider must not interrupt local playback or the next provider fallback.
             }
         }
-        if (fallback != null) {
-            return persist(track, fallback, saveBesideAudio);
+        if (localLyricsAvailable) {
+            return new LocalLyricsMatchResult(true, track, localLyricsMessage(track.lyricsFormat()));
         }
         return new LocalLyricsMatchResult(false, track, "联网匹配歌词失败，使用本地文件");
     }
 
-    private List<String> providersToTry() {
-        return accountRepository.findActive("qq").isPresent()
-            ? List.of("netease", "qq")
-            : List.of("netease");
+    private static boolean hasWordTiming(LyricData lyrics) {
+        return isPrecise(lyrics.format())
+            && java.util.regex.Pattern.compile("\\(\\d+,\\d+(?:,\\d+)?\\)").matcher(lyrics.lyrics()).find();
     }
 
     private LocalLyricsMatchResult persist(Track original, Candidate candidate, boolean saveBesideAudio) {
@@ -110,11 +107,13 @@ public class LocalLyricsMatchService {
             lyrics.lyrics(), "online-" + candidate.provider(), lyrics.format(), original.coverMimeType(),
             original.createdAt(), original.updatedAt(), original.metaSource()
         );
-        trackRepository.upsert(updated);
+        if (!hasLocalLyrics(original)) {
+            trackRepository.upsert(updated);
+        }
         String message = isPrecise(lyrics.format())
             ? "联网匹配到逐字歌词（来自" + providerLabel(candidate.provider()) + "）"
             : "未找到逐字歌词，加载普通整行歌词";
-        return new LocalLyricsMatchResult(true, updated, message + storageMessage);
+        return new LocalLyricsMatchResult(true, updated, message + storageMessage, lyrics);
     }
 
     private static Optional<Track> bestMatch(List<Track> tracks, String title, String artist) {

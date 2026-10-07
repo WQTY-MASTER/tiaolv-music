@@ -613,10 +613,12 @@ function formatDuration(duration: number) {
 .aggregate-track-head { min-height: 38px; padding: 0 14px; border-bottom: 1px solid #e3e7ec; color: #8692a5; font-size: 10px; font-weight: 700; }
 .aggregate-track-head span:first-child { text-align: center; }
 .aggregate-track-head span:last-child { text-align: center; }
+.aggregate-track-head span:nth-child(4) { color: #66635f; }
 .aggregate-track-row { min-height: 66px; padding: 8px 14px; border-bottom: 1px solid #edf0f3; cursor: pointer; outline: none; transition: background 150ms ease, opacity 150ms ease; }
 .aggregate-track-row:hover,.aggregate-track-row:focus-visible { background: rgba(233, 239, 247, .62); }
 .aggregate-track-row.is-dragging { opacity: .45; }
-.aggregate-track-index,.aggregate-track-duration { color: #7b899e; font-size: 11px; }
+.aggregate-track-index { color: #7b899e; font-size: 11px; }
+.aggregate-track-duration { color: #5f5d59; font-size: 13px; font-weight: 500; }
 .aggregate-track-index { text-align: center; }
 .aggregate-track-copy { display: flex; min-width: 0; align-items: center; gap: 12px; }
 .aggregate-track-copy img,.aggregate-track-fallback { width: 42px; height: 42px; flex: 0 0 auto; border-radius: 7px; object-fit: cover; }

@@ -16,7 +16,7 @@ class MigrationSequenceTest {
     Path tempDir;
 
     @Test
-    void preservesPublishedMigrationVersionsAndAddsLocalLibraryDeduplicationInVersionEight() throws Exception {
+    void preservesPublishedMigrationVersionsAndAddsListeningRetentionInVersionTen() throws Exception {
         String jdbcUrl = "jdbc:sqlite:" + tempDir.resolve("migration-test.db");
         Flyway flyway = Flyway.configure()
             .dataSource(jdbcUrl, null, null)
@@ -36,7 +36,9 @@ class MigrationSequenceTest {
                 "5:cloud tracks",
                 "6:track lyrics format",
                 "7:track metadata source",
-                "8:local library deduplication"
+                "8:local library deduplication",
+                "9:listening stats",
+                "10:listening stats retention"
             );
 
         try (var connection = DriverManager.getConnection(jdbcUrl)) {
@@ -48,6 +50,54 @@ class MigrationSequenceTest {
             assertThat(tableExists(connection, "local_library_roots")).isTrue();
             assertThat(tableExists(connection, "ignored_local_files")).isTrue();
             assertThat(indexExists(connection, "idx_tracks_local_file_path_unique")).isTrue();
+            assertThat(tableExists(connection, "listening_track_stats")).isTrue();
+            assertThat(tableExists(connection, "listening_day_stats")).isTrue();
+            assertThat(tableExists(connection, "listening_track_day_stats")).isTrue();
+            assertThat(tableExists(connection, "listening_stats_meta")).isTrue();
+        }
+    }
+
+    @Test
+    void versionTenBackfillsExistingTrackTotalsToTheirLastListeningDate() throws Exception {
+        String jdbcUrl = "jdbc:sqlite:" + tempDir.resolve("legacy-listening-stats.db");
+        Flyway.configure()
+            .dataSource(jdbcUrl, null, null)
+            .locations("classpath:db/migration")
+            .target("9")
+            .load()
+            .migrate();
+
+        try (var connection = DriverManager.getConnection(jdbcUrl);
+             var statement = connection.createStatement()) {
+            statement.executeUpdate("""
+                insert into listening_track_stats(
+                  profile_id, track_id, play_count, listened_seconds, last_listened_at
+                ) values ('local', 'local:a', 4, 124.49, '2026-10-03T07:33:31.753Z')
+                """);
+            statement.executeUpdate("""
+                insert into listening_day_stats(profile_id, listen_date, listened_seconds)
+                values ('local', '2026-10-03', 124.49)
+                """);
+        }
+
+        Flyway.configure()
+            .dataSource(jdbcUrl, null, null)
+            .locations("classpath:db/migration")
+            .load()
+            .migrate();
+
+        try (var connection = DriverManager.getConnection(jdbcUrl);
+             var statement = connection.createStatement();
+             var result = statement.executeQuery("""
+                 select track_id, listen_date, play_count, listened_seconds
+                 from listening_track_day_stats
+                 where profile_id = 'local'
+                 """)) {
+            assertThat(result.next()).isTrue();
+            assertThat(result.getString("track_id")).isEqualTo("local:a");
+            assertThat(result.getString("listen_date")).isEqualTo("2026-10-03");
+            assertThat(result.getInt("play_count")).isEqualTo(4);
+            assertThat(result.getDouble("listened_seconds")).isEqualTo(124.49);
         }
     }
 

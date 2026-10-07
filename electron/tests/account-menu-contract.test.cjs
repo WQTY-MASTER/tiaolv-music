@@ -22,6 +22,7 @@ assert.match(app, /event\.key\s*===\s*"Escape"[\s\S]*?closeFloatingMenus\(\)/);
 
 assert.match(accountMenu, /网易云音乐/);
 assert.match(accountMenu, /QQ 音乐/);
+assert.doesNotMatch(accountMenu, /Cookie 登录/, "QQ 音乐入口应明确为扫码登录");
 assert.match(accountMenu, /props\.accounts/);
 assert.match(accountMenu, /avatarUrl/);
 assert.match(accountMenu, /退出登录/);

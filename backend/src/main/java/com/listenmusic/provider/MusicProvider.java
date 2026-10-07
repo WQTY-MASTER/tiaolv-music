@@ -26,6 +26,10 @@ public interface MusicProvider {
 
     Optional<String> resolveAudioUrl(String trackId);
 
+    default Optional<String> resolveAudioUrl(String trackId, PlaybackQuality quality) {
+        return resolveAudioUrl(trackId);
+    }
+
     Optional<LyricData> loadLyrics(String trackId);
 
     default List<Track> loadPlaylist(String playlistId) {

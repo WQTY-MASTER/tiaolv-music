@@ -5,12 +5,28 @@ const { pathToFileURL } = require("node:url");
 async function main() {
   const moduleUrl = pathToFileURL(path.resolve(__dirname, "../src/renderer/src/services/aggregatePlaylists.ts")).href;
   const {
+    AGGREGATE_PLAYLIST_STORAGE_KEY,
+    LEGACY_AGGREGATE_PLAYLIST_STORAGE_KEY,
     addTrackToAggregatePlaylist,
+    mergeAggregatePlaylistCollections,
     mergeAggregateTracks,
+    readAggregatePlaylists,
     removeAggregateTrackGroup,
     removeAggregateTrackSource,
     reorderAggregateTrackGroups
   } = await import(moduleUrl);
+
+  const legacyStored = [{
+    id: "aggregate-legacy",
+    name: "旧歌单",
+    identifier: "agg1",
+    tracks: [],
+    createdAt: new Date(0).toISOString()
+  }];
+  const legacyStorage = new Map([[LEGACY_AGGREGATE_PLAYLIST_STORAGE_KEY, JSON.stringify(legacyStored)]]);
+  assert.deepEqual(readAggregatePlaylists({ getItem: (key) => legacyStorage.get(key) ?? null }), legacyStored, "新键不存在时应兼容读取旧品牌存储键");
+  legacyStorage.set(AGGREGATE_PLAYLIST_STORAGE_KEY, "[]");
+  assert.deepEqual(readAggregatePlaylists({ getItem: (key) => legacyStorage.get(key) ?? null }), [], "新键已存在时不应复活旧键中已删除的歌单");
 
   const local = {
     id: "local-1",
@@ -48,6 +64,12 @@ async function main() {
     tracks: [local, netease, other],
     createdAt: new Date(0).toISOString()
   };
+
+  assert.deepEqual(
+    mergeAggregatePlaylistCollections([playlist], [legacyStored[0], { ...playlist, name: "旧名称" }]),
+    [playlist, legacyStored[0]],
+    "跨目录迁移应按 ID 合并并优先保留当前数据"
+  );
 
   const groups = mergeAggregateTracks(playlist.tracks);
   assert.equal(groups.length, 2, "歌名和歌手一致时应合并为一行");

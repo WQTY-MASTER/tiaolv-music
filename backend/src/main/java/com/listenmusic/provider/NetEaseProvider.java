@@ -927,6 +927,10 @@ public class NetEaseProvider implements MusicProvider {
             new String[]{"translation", "lyric"},
             new String[]{"transLyric", "lyric"}
         );
+        String phonetic = firstTextAt(payload,
+            new String[]{"romalrc", "lyric"},
+            new String[]{"romanization", "lyric"}
+        );
         boolean hasWordTimedLyrics = containsWordTimedLyrics(yrc);
         String lyrics = hasWordTimedLyrics ? yrc : firstNonBlank(lrc, yrc);
         if (lyrics.isBlank()) {
@@ -935,6 +939,7 @@ public class NetEaseProvider implements MusicProvider {
         return Optional.of(new LyricData(
             lyrics,
             translation.isBlank() ? null : translation,
+            phonetic.isBlank() ? null : phonetic,
             hasWordTimedLyrics ? "YRC" : "LRC",
             "netease-cloud",
             parseCredits(yrc, lrc)
@@ -1185,21 +1190,90 @@ public class NetEaseProvider implements MusicProvider {
 
     @Override
     public Optional<String> resolveAudioUrl(String trackId) {
+        return resolveAudioUrl(trackId, PlaybackQuality.AUTO);
+    }
+
+    @Override
+    public Optional<String> resolveAudioUrl(String trackId, PlaybackQuality quality) {
+        List<String> levels = neteaseQualityLevels(quality);
+        String id = rawId(trackId);
         String credential = activeCredential().orElse(null);
-        JsonNode root = get("/song/url/v1", uriBuilder -> uriBuilder
-            .path("/song/url/v1")
-            .queryParam("id", rawId(trackId))
-            .queryParam("level", "standard")
+        JsonNode availability = get("/check/music", uriBuilder -> uriBuilder
+            .path("/check/music")
+            .queryParam("id", id)
             .build(), credential);
+        ensurePlaybackCredential(availability);
+        if (!availability.path("success").asBoolean(false)) {
+            return Optional.empty();
+        }
+
+        for (String level : levels) {
+            JsonNode root;
+            try {
+                root = get("/song/url/v1", uriBuilder -> uriBuilder
+                    .path("/song/url/v1")
+                    .queryParam("id", id)
+                    .queryParam("level", level)
+                    .build(), credential);
+            } catch (IllegalStateException exception) {
+                Optional<String> redirectUrl = resolveAudioRedirect(id, level, credential);
+                if (redirectUrl.isPresent()) {
+                    return redirectUrl;
+                }
+                continue;
+            }
+            ensurePlaybackCredential(root);
+            JsonNode data = root.path("data");
+            if (!data.isArray()) {
+                Optional<String> redirectUrl = resolveAudioRedirect(id, level, credential);
+                if (redirectUrl.isPresent()) {
+                    return redirectUrl;
+                }
+                continue;
+            }
+            JsonNode url = data.path(0).path("url");
+            if (url.isTextual() && !url.asText().isBlank()) {
+                return Optional.of(url.asText());
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void ensurePlaybackCredential(JsonNode root) {
         int code = root.path("code").asInt(200);
         if (code == 301 || code == 401 || code == 403) {
             invalidateActiveCredential();
             throw new ProviderLoginRequiredException("网易云音乐登录已失效，请重新登录");
         }
-        JsonNode url = root.path("data").path(0).path("url");
-        return url.isTextual() && !url.asText().isBlank()
-            ? Optional.of(url.asText())
-            : Optional.empty();
+    }
+
+    private static List<String> neteaseQualityLevels(PlaybackQuality quality) {
+        return switch (quality == null ? PlaybackQuality.AUTO : quality) {
+            case AUTO, HIRES -> List.of("hires", "lossless", "exhigh", "standard");
+            case LOSSLESS -> List.of("lossless", "exhigh", "standard");
+            case EXHIGH -> List.of("exhigh", "standard");
+            case STANDARD -> List.of("standard");
+            case HIGH -> throw new IllegalArgumentException("Unsupported NetEase playback quality: " + quality);
+        };
+    }
+
+    private Optional<String> resolveAudioRedirect(String id, String level, String credential) {
+        try {
+            var request = restClient.get().uri(uriBuilder -> uriBuilder
+                .path("/song/url/v1/302")
+                .queryParam("id", id)
+                .queryParam("level", level)
+                .build());
+            if (credential != null && !credential.isBlank()) {
+                request.header(HttpHeaders.COOKIE, credential);
+            }
+            return request.exchange((upstreamRequest, response) -> {
+                URI location = response.getHeaders().getLocation();
+                return location == null ? Optional.empty() : Optional.of(location.toString());
+            });
+        } catch (RestClientException exception) {
+            return Optional.empty();
+        }
     }
 
     private Optional<String> activeCredential() {
@@ -1228,6 +1302,10 @@ public class NetEaseProvider implements MusicProvider {
             new String[]{"translation", "lyric"},
             new String[]{"transLyric", "lyric"}
         );
+        String phonetic = firstTextAt(root,
+            new String[]{"romalrc", "lyric"},
+            new String[]{"romanization", "lyric"}
+        );
         boolean hasWordTimedLyrics = containsWordTimedLyrics(yrc);
         String lyrics = hasWordTimedLyrics ? yrc : lrc;
         if (lyrics.isBlank()) {
@@ -1237,6 +1315,7 @@ public class NetEaseProvider implements MusicProvider {
         return Optional.of(new LyricData(
             lyrics,
             translation.isBlank() ? null : translation,
+            phonetic.isBlank() ? null : phonetic,
             hasWordTimedLyrics ? "YRC" : "LRC",
             PROVIDER_ID,
             credits

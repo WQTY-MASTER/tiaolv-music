@@ -35,6 +35,14 @@ public class LocalLibraryRepository {
         );
     }
 
+    public void removeRoot(Path directory) {
+        Path normalized = directory.toAbsolutePath().normalize();
+        jdbcTemplate.update(
+            "delete from local_library_roots where path_key = ?",
+            LocalPathKey.of(normalized)
+        );
+    }
+
     public Set<String> findIgnoredPathKeys() {
         return new LinkedHashSet<>(jdbcTemplate.queryForList(
             "select path_key from ignored_local_files order by created_at",

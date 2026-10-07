@@ -12,6 +12,8 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.client.ResourceAccessException;
 
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
@@ -344,21 +346,43 @@ public class QqMusicProvider implements MusicProvider {
     public Optional<Track> find(String trackId) {
         String id = rawId(trackId);
         JsonNode root = get(uriBuilder -> uriBuilder
-            .path("/song")
+            .path("/getSongInfo")
             .queryParam("songmid", id)
             .build(), null);
-        JsonNode song = firstObject(root, "data/track_info", "songinfo/data/track_info", "data", "songinfo");
+        JsonNode song = firstObject(
+            root,
+            "response/songinfo/data/track_info",
+            "data/track_info",
+            "songinfo/data/track_info",
+            "data",
+            "songinfo"
+        );
         return song == null ? Optional.empty() : Optional.of(toTrack(song));
     }
 
     @Override
     public Optional<String> resolveAudioUrl(String trackId) {
+        return resolveAudioUrl(trackId, PlaybackQuality.AUTO);
+    }
+
+    @Override
+    public Optional<String> resolveAudioUrl(String trackId, PlaybackQuality quality) {
         String id = rawId(trackId);
         String credential = activeCredential().orElse(null);
+        for (String nativeQuality : qqQualityLevels(quality)) {
+            Optional<String> url = resolveAudioUrl(id, nativeQuality, credential);
+            if (url.isPresent()) {
+                return url;
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<String> resolveAudioUrl(String id, String quality, String credential) {
         JsonNode root = get(uriBuilder -> uriBuilder
             .path("/getMusicPlay")
             .queryParam("songmid", id)
-            .queryParam("quality", 128)
+            .queryParam("quality", quality)
             .build(), credential);
         ensureSuccess(root);
         String url = firstText(
@@ -375,6 +399,15 @@ public class QqMusicProvider implements MusicProvider {
             throw new ProviderLoginRequiredException("QQ 音乐登录已失效，请重新登录");
         }
         return url.isBlank() ? Optional.empty() : Optional.of(url);
+    }
+
+    private static List<String> qqQualityLevels(PlaybackQuality quality) {
+        return switch (quality == null ? PlaybackQuality.AUTO : quality) {
+            case AUTO, LOSSLESS -> List.of("flac", "320", "128");
+            case HIGH -> List.of("320", "128");
+            case STANDARD -> List.of("128");
+            case HIRES, EXHIGH -> throw new IllegalArgumentException("Unsupported QQ Music playback quality: " + quality);
+        };
     }
 
     private Optional<String> activeCredential() {
@@ -416,6 +449,7 @@ public class QqMusicProvider implements MusicProvider {
         return Optional.of(new LyricData(
             lyric,
             firstText(data.path("trans"), data.path("translation"), response.path("trans")),
+            firstText(data.path("roma"), data.path("romanization"), response.path("roma")),
             qrc.isBlank() ? "LRC" : "QRC",
             PROVIDER_ID,
             List.of()
@@ -1009,7 +1043,7 @@ public class QqMusicProvider implements MusicProvider {
             JsonNode response = request.retrieve().body(JsonNode.class);
             return response == null ? OBJECT_MAPPER.createObjectNode() : response;
         } catch (RestClientException ex) {
-            throw new IllegalStateException("QQMusicAPI 调用失败，请确认 3300 端口服务已启动", ex);
+            throw qqMusicApiFailure(ex);
         }
     }
 
@@ -1024,8 +1058,22 @@ public class QqMusicProvider implements MusicProvider {
             JsonNode response = request.body(body).retrieve().body(JsonNode.class);
             return response == null ? OBJECT_MAPPER.createObjectNode() : response;
         } catch (RestClientException ex) {
-            throw new IllegalStateException("QQMusicAPI 调用失败，请确认 3300 端口服务已启动", ex);
+            throw qqMusicApiFailure(ex);
         }
+    }
+
+    private static IllegalStateException qqMusicApiFailure(RestClientException cause) {
+        if (cause instanceof RestClientResponseException responseError) {
+            return new IllegalStateException(
+                "QQMusicAPI 接口返回 HTTP " + responseError.getStatusCode().value()
+                    + "，请确认本地 API 版本与接口路径兼容",
+                cause
+            );
+        }
+        if (cause instanceof ResourceAccessException) {
+            return new IllegalStateException("无法连接 QQMusicAPI，请确认 3300 端口服务已启动", cause);
+        }
+        return new IllegalStateException("QQMusicAPI 调用失败: " + cause.getMessage(), cause);
     }
 
     private static void ensureSuccess(JsonNode root) {

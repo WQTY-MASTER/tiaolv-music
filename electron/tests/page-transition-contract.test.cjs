@@ -23,7 +23,7 @@ const transitionKeyBlock = app.match(/const pageTransitionKey = computed\(\(\) =
 assert.doesNotMatch(transitionKeyBlock, /submittedKeyword\.value/, "实时搜索不应重建页面标题与输入框");
 assert.match(
   app,
-  /<Transition :name="pageTransitionName" mode="out-in">\s*<div :key="pageTransitionKey" class="page-transition-frame">/,
+  /<Transition :name="pageTransitionName" mode="out-in" @before-enter="resetLocalPageScroll">\s*<div :key="pageTransitionKey" class="page-transition-frame">/,
   "主内容应使用统一的页面过渡容器",
 );
 assert.match(
@@ -35,8 +35,8 @@ assert.match(app, /function handleGlobalNavigationShortcut\(event: KeyboardEvent
 assert.match(app, /window\.addEventListener\("keydown",\s*handleGlobalNavigationShortcut\)/, "应用挂载时应注册全局导航快捷键");
 assert.match(app, /window\.removeEventListener\("keydown",\s*handleGlobalNavigationShortcut\)/, "应用卸载时应移除全局导航快捷键");
 assert.doesNotMatch(app, /@keydown(?:\.[^=\s]+)*\.window/, "模板不应使用无效的 window 键盘修饰符");
-assert.match(app, /event\.altKey\s*&&\s*event\.key\s*===\s*"ArrowLeft"[\s\S]*?event\.key\s*===\s*"BrowserBack"[\s\S]*?navigateBack\(\)/, "Alt+左方向键和浏览器返回键应执行应用返回");
-assert.match(app, /event\.altKey\s*&&\s*event\.key\s*===\s*"ArrowRight"[\s\S]*?event\.key\s*===\s*"BrowserForward"[\s\S]*?navigateForward\(\)/, "Alt+右方向键和浏览器前进键应执行应用前进");
+assert.match(app, /event\.altKey\s*&&\s*!event\.ctrlKey\s*&&\s*!event\.metaKey\s*&&\s*!event\.shiftKey\s*&&\s*event\.key\s*===\s*"ArrowLeft"[\s\S]*?event\.key\s*===\s*"BrowserBack"[\s\S]*?navigateBack\(\)/, "Alt+左方向键应返回，但不得抢占自定义播放组合键");
+assert.match(app, /event\.altKey\s*&&\s*!event\.ctrlKey\s*&&\s*!event\.metaKey\s*&&\s*!event\.shiftKey\s*&&\s*event\.key\s*===\s*"ArrowRight"[\s\S]*?event\.key\s*===\s*"BrowserForward"[\s\S]*?navigateForward\(\)/, "Alt+右方向键应前进，但不得抢占自定义播放组合键");
 assert.match(app, /--app-page-transition-duration:\s*250ms/, "全站页面动画时长应固定为 250ms");
 assert.match(app, /\.app-page-enter-active,[\s\S]*?\.app-page-slide-backward-leave-active\s*\{[^}]*transition:[^}]*opacity[^}]*transform/, "页面进入和离开应共用淡入淡出与位移动画");
 assert.match(app, /\.app-page-enter-from\s*\{[^}]*opacity:\s*0[^}]*translate3d\(0,\s*8px,\s*0\)/, "新页面应从下方轻微淡入");
