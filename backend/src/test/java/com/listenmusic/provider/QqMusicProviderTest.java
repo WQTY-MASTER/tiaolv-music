@@ -32,10 +32,92 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
 
 class QqMusicProviderTest {
+    @Test
+    void refusesRecentReportWhenCredentialBelongsToAnotherAccount() {
+        assertThrows(IllegalArgumentException.class, () -> provider.reportAccountRecentTrack(
+            "200", "qq:mid1", "cf3dac35-7a99-4706-9c69-11a4742486a1", 30, 180, "uin=300"));
+        server.verify();
+    }
+
+    @Test
+    void preservesRateLimitWithoutRetryingTheRecentReport() {
+        server.expect(requestTo("http://qq-api.test/user/reportRecentPlay"))
+            .andRespond(withStatus(HttpStatus.TOO_MANY_REQUESTS).contentType(MediaType.APPLICATION_JSON)
+                .body("{\"error\":\"QQ limited\"}"));
+        assertThrows(PlaylistOrderRateLimitException.class, () -> provider.reportAccountRecentTrack(
+            "200", "qq:mid1", "cf3dac35-7a99-4706-9c69-11a4742486a1", 30, 180, "uin=200"));
+        server.verify();
+    }
+
     private MockRestServiceServer server;
     private QqMusicProvider provider;
     private AccountRepository accountRepository;
     private CredentialStore credentialStore;
+
+    @Test
+    void reportsOneQualifyingQqPlaybackAndMapsOnlyConfirmedCloudTracks() {
+        String session = "cf3dac35-7a99-4706-9c69-11a4742486a1";
+        server.expect(requestTo("http://qq-api.test/user/reportRecentPlay"))
+            .andExpect(method(HttpMethod.POST)).andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"songMid\":\"mid1\",\"sessionId\":\"" + session + "\",\"listenedSeconds\":30,\"totalSeconds\":180}"))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"confirmed":true,"songList":[
+                  {"track":{"id":11,"mid":"mid1","title":"歌曲","singer":[{"name":"歌手"}],"interval":180},"lastTime":1791702000}
+                ]}}
+                """, MediaType.APPLICATION_JSON));
+        List<Track> tracks = provider.reportAccountRecentTrack("200", "qq:mid1", session, 30, 180, "uin=200");
+        assertEquals(1, tracks.size()); assertEquals("qq:mid1", tracks.getFirst().id());
+        server.verify();
+    }
+
+    @Test
+    void doesNotRetryUnconfirmedRecentReportOrTreatItAsSuccess() {
+        server.expect(requestTo("http://qq-api.test/user/reportRecentPlay"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"confirmed\":false,\"songList\":[]}}", MediaType.APPLICATION_JSON));
+        assertThrows(RecentPlayReportException.class, () -> provider.reportAccountRecentTrack(
+            "200", "qq:mid1", "cf3dac35-7a99-4706-9c69-11a4742486a1", 30, 180, "uin=200"));
+        server.verify();
+    }
+
+    @Test
+    void removesOnePlaylistTrackThroughTheOwnershipCheckedRoute() {
+        server.expect(requestTo("http://qq-api.test/user/removePlaylistTrack"))
+            .andExpect(method(HttpMethod.POST)).andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"id\":\"900\",\"songId\":\"mid1\"}"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":0,\"data\":{\"retCode\":0}}}}", MediaType.APPLICATION_JSON));
+        provider.removeAccountPlaylistTrack("200", "qq:900", "qq:mid1", "uin=200");
+        server.verify();
+    }
+
+    @Test
+    void rejectsCrossProviderPlaylistTrackRemoval() {
+        assertThrows(IllegalArgumentException.class, () -> provider.removeAccountPlaylistTrack("200", "qq:900", "netease:1", "uin=200"));
+        server.verify();
+    }
+
+    @Test
+    void postsCompleteAndPreviousOrdersForServerSideVerification() {
+        server.expect(requestTo("http://qq-api.test/user/reorderPlaylistTracks"))
+            .andExpect(method(HttpMethod.POST)).andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"id\":\"900\",\"trackIds\":[\"mid2\",\"mid1\"],\"previousTrackIds\":[\"mid1\",\"mid2\"]}"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":0,\"data\":{\"retCode\":0}}}}", MediaType.APPLICATION_JSON));
+        provider.reorderAccountPlaylistTracks("200", "qq:900", List.of("qq:mid2", "qq:mid1"), List.of("qq:mid1", "qq:mid2"), "uin=200");
+        server.verify();
+    }
+
+    @Test
+    void exposesAStalePlaylistOrderAsAConflict() {
+        server.expect(requestTo("http://qq-api.test/user/reorderPlaylistTracks"))
+            .andRespond(withStatus(HttpStatus.CONFLICT).contentType(MediaType.APPLICATION_JSON)
+                .body("{\"error\":\"歌单已在其他设备发生变化，请刷新后再排序\"}"));
+
+        assertThrows(PlaylistOrderConflictException.class, () ->
+            provider.reorderAccountPlaylistTracks(
+                "200", "qq:900", List.of("qq:mid2", "qq:mid1"), List.of("qq:mid1", "qq:mid2"), "uin=200"
+            )
+        );
+        server.verify();
+    }
 
     @BeforeEach
     void setUp() {
@@ -63,6 +145,54 @@ class QqMusicProviderTest {
         assertEquals(1, tracks.size());
         assertEquals("qq:mid-1", tracks.getFirst().id());
         assertEquals("推荐歌曲", tracks.getFirst().title());
+        server.verify();
+    }
+
+    @Test
+    void mapsQqCloudRecentTracksUsingTheAccountCookie() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo("http://qq-api.test/user/getRecentPlay"))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"req_1":{"code":0,"data":{"type":2,"code":0,"data":{"songList":[
+                  {"track":{"id":726206595,"mid":"000bjZqH448qnK","title":"心月辞·长相望",
+                   "singer":[{"name":"鸣潮先约电台"},{"name":"苏诗丁"}],
+                   "album":{"mid":"002GQ6WM3Q96hQ","name":"心月辞"},"interval":216},
+                   "lastTime":1791435337,"listenCnt":1}
+                ]}}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        List<Track> tracks = provider.loadAccountRecentTracks("200", cookie);
+
+        assertEquals(1, tracks.size());
+        assertEquals("qq:000bjZqH448qnK", tracks.getFirst().id());
+        assertEquals("心月辞·长相望", tracks.getFirst().title());
+        assertEquals("鸣潮先约电台/苏诗丁", tracks.getFirst().artist());
+        assertEquals("心月辞", tracks.getFirst().album());
+        assertEquals(216, tracks.getFirst().duration());
+        server.verify();
+    }
+
+    @Test
+    void deletesQqCloudRecentTracksAndUsesTheVerifiedSnapshot() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo("http://qq-api.test/user/deleteRecentPlay"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andExpect(content().json("{\"trackIds\":[\"mid1\"]}"))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"deletedTrackIds":["mid1"],"songList":[
+                  {"track":{"id":2,"mid":"mid2","title":"保留歌曲","singer":[{"name":"歌手"}],"interval":180}}
+                ]}}
+                """, MediaType.APPLICATION_JSON));
+
+        RecentTracksDeleteResult result = provider.deleteAccountRecentTracks(
+            "200", List.of("qq:mid1"), cookie
+        );
+
+        assertEquals(List.of("qq:mid1"), result.deletedTrackIds());
+        assertEquals(List.of("qq:mid2"), result.tracks().stream().map(Track::id).toList());
         server.verify();
     }
 
@@ -126,6 +256,51 @@ class QqMusicProviderTest {
     }
 
     @Test
+    void loadsQqLikedSongsDirectlyFromTheCurrentDirectoryResponse() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo(containsString("/user/getUserLikedSongs?uin=200&offset=0&limit=1000")))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"req_1":{"code":0,"data":{"songlist":[
+                  {"mid":"mid-liked-direct","title":"直接返回的喜欢歌曲","singer":[{"name":"歌手"}],
+                   "album":{"mid":"album-liked-direct","name":"专辑"},"interval":180}
+                ]}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        List<Track> tracks = provider.loadAccountFavorites("200", cookie);
+
+        assertEquals(1, tracks.size());
+        assertEquals("qq:mid-liked-direct", tracks.getFirst().id());
+        server.verify();
+    }
+
+    @Test
+    void fallsBackToTheCreatedFavoritePlaylistWhenTheLikedSongsRouteFails() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo(containsString("/user/getUserLikedSongs?uin=200&offset=0&limit=1000")))
+            .andRespond(withStatus(HttpStatus.BAD_GATEWAY).body("{\"error\":\"获取用户喜欢的歌曲失败\"}"));
+        server.expect(requestTo(containsString("/user/getUserPlaylists?uin=200&offset=0&limit=100")))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"data":{"list":[
+                  {"tid":"778899","dirid":201,"diss_name":"我喜欢","song_cnt":1}
+                ]}}}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/getSongListDetail?disstid=778899")))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"cdlist":[{"songlist":[
+                  {"mid":"mid-liked-1","title":"喜欢的歌","singer":[{"name":"歌手"}],"interval":180}
+                ]}]}}
+                """, MediaType.APPLICATION_JSON));
+
+        List<Track> tracks = provider.loadAccountFavorites("200", cookie);
+
+        assertEquals(1, tracks.size());
+        assertEquals("qq:mid-liked-1", tracks.getFirst().id());
+        server.verify();
+    }
+
+    @Test
     void loadsWordTimedQqLyricsFromTheSupportedRoute() {
         String cookie = "uin=o200; qm_keyst=secret";
         when(accountRepository.findActive("qq")).thenReturn(Optional.of(new ProviderAccount(
@@ -137,18 +312,23 @@ class QqMusicProviderTest {
             .andRespond(withSuccess("""
                 {"response":{"code":0,
                  "lyric":"[00:01.00]普通歌词",
-                 "qrc":"[1000,1000]逐(1000,500)字(1500,500)",
-                 "trans":"[00:01.00]translation",
+                  "qrc":"[1000,400]词(1000,100)：(1100,0)作者(1100,300)\\n[1400,400]曲(1400,100)：(1500,0)作曲者(1500,300)\\n[1800,600]管(1800,100)弦(1900,100)乐(2000,100)团(2100,100)：(2200,0)测试乐团(2200,200)\\n[3000,1000]逐(3000,500)字(3500,500)",
+                  "trans":"[00:01.00]//\\n[00:03.00]translation",
                  "roma":"[00:01.00]zhú zì"}}
                 """, MediaType.APPLICATION_JSON));
 
         LyricData lyrics = provider.loadLyrics("qq:mid-lyric-1").orElseThrow();
 
-        assertEquals("[1000,1000]逐(1000,500)字(1500,500)", lyrics.lyrics());
-        assertEquals("[00:01.00]translation", lyrics.translation());
+        assertEquals("[1000,400]词(1000,100)：(1100,0)作者(1100,300)\n[1400,400]曲(1400,100)：(1500,0)作曲者(1500,300)\n[1800,600]管(1800,100)弦(1900,100)乐(2000,100)团(2100,100)：(2200,0)测试乐团(2200,200)\n[3000,1000]逐(3000,500)字(3500,500)", lyrics.lyrics());
+        assertEquals("[00:01.00]//\n[00:03.00]translation", lyrics.translation());
         assertEquals("[00:01.00]zhú zì", lyrics.phonetic());
         assertEquals("QRC", lyrics.format());
         assertEquals("qq", lyrics.source());
+        assertEquals(List.of(
+            new LyricCredit("词", "作者", 1.0),
+            new LyricCredit("曲", "作曲者", 1.4),
+            new LyricCredit("管弦乐团", "测试乐团", 1.8)
+        ), lyrics.credits());
         server.verify();
     }
 
@@ -163,6 +343,27 @@ class QqMusicProviderTest {
 
         provider.setAccountFavorite("200", "qq:mid-liked-1", true, cookie);
 
+        server.verify();
+    }
+
+    @Test
+    void doesNotRetryAnUncertainFavoriteWriteAfterAProviderGatewayFailure() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo("http://qq-api.test/user/setSongFavorite"))
+            .andRespond(withStatus(HttpStatus.BAD_GATEWAY));
+        assertThrows(IllegalStateException.class, () -> provider.setAccountFavorite("200", "qq:mid-liked-1", true, cookie));
+
+        server.verify();
+    }
+
+    @Test
+    void preservesFavoriteBusinessRejectionForTheApiWithoutMisclassifyingLogin() {
+        server.expect(requestTo("http://qq-api.test/user/setSongFavorite"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":80105,\"data\":{\"retCode\":0}}}}", MediaType.APPLICATION_JSON));
+        IllegalStateException failure = assertThrows(IllegalStateException.class,
+            () -> provider.setAccountFavorite("200", "qq:mid-liked-1", true, "uin=200"));
+        assertEquals("FavoriteOperationException", failure.getClass().getSimpleName());
+        assertEquals("QQ 音乐接口返回错误: 80105", failure.getMessage());
         server.verify();
     }
 
@@ -238,6 +439,29 @@ class QqMusicProviderTest {
     }
 
     @Test
+    void createsQqPlaylistThroughTheAuthenticatedApiAndMapsTheVerifiedPlaylist() {
+        String cookie = "uin=200; qm_keyst=secret";
+        server.expect(requestTo("http://qq-api.test/user/createPlaylist"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andExpect(content().json("{\"name\":\"新歌单\"}"))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"data":{"playlist":{
+                  "tid":"901","dirid":3,"diss_name":"新歌单","song_cnt":0
+                }}}}
+                """, MediaType.APPLICATION_JSON));
+
+        HomepagePlaylist playlist = provider.createAccountPlaylist("200", "新歌单", cookie);
+
+        assertEquals("qq:901", playlist.id());
+        assertEquals("新歌单", playlist.title());
+        assertEquals(true, playlist.createdByAccount());
+        assertEquals(true, playlist.deletable());
+        assertEquals(false, playlist.favorite());
+        server.verify();
+    }
+
+    @Test
     void refreshesTheLoggedInQqAccountForTheLibraryProfile() {
         String cookie = "uin=o200; qm_keyst=secret";
         when(accountRepository.findActive("qq")).thenReturn(Optional.of(new ProviderAccount(
@@ -271,6 +495,45 @@ class QqMusicProviderTest {
     }
 
     @Test
+    void resolvesMissingCreatedCoverFromFirstTrackAndProtectsFavoriteDirectory() {
+        server.expect(requestTo(containsString("/user/getUserPlaylists"))).andRespond(withSuccess("""
+            {"response":{"code":0,"data":{"playlists":[
+              {"tid":"900","diss_name":"自建歌单","dirid":2,"diss_cover":"https://img.test/custom.jpg","song_cnt":1},
+              {"tid":"901","diss_name":"我喜欢","dirid":201,"diss_cover":"?n=1","song_cnt":4},
+              {"tid":"0","diss_name":"QZone背景音乐","dirid":205,"song_cnt":0},
+              {"tid":"0","diss_name":"本地上传","dirid":206,"song_cnt":0},
+              {"tid":"902","diss_name":"默认列表","dirid":1,"song_cnt":0}
+            ]}}}
+            """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/getSongListDetail?disstid=901"))).andRespond(withSuccess("""
+            {"response":{"code":0,"cdlist":[{"songlist":[
+              {"songmid":"song1","songname":"首曲","singer":[{"name":"歌手"}],"albummid":"album1"}
+            ]}]}}
+            """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/user/getUserCollectedSongLists"))).andRespond(withSuccess(
+            "{\"response\":{\"code\":0,\"data\":{\"cdlist\":[]}}}", MediaType.APPLICATION_JSON));
+        List<HomepagePlaylist> lists = provider.loadAccountPlaylists("200", "uin=200; qm_keyst=test");
+        assertEquals(2, lists.size());
+        assertEquals("https://img.test/custom.jpg", lists.get(0).imageUrl());
+        assertEquals(true, lists.get(0).deletable());
+        assertEquals(false, lists.get(1).deletable());
+        assertEquals(true, lists.get(1).favorite());
+        assertEquals(1, lists.get(1).count());
+        org.junit.jupiter.api.Assertions.assertTrue(lists.get(1).imageUrl().contains("album1"));
+        server.verify();
+    }
+
+    @Test
+    void deletesAnOwnedPlaylistThroughTheAuthenticatedApiAndRejectsUpstreamFailure() {
+        server.expect(requestTo("http://qq-api.test/user/deletePlaylist"))
+            .andExpect(method(HttpMethod.POST)).andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"id\":\"900\"}"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":80105}}}", MediaType.APPLICATION_JSON));
+        assertThrows(IllegalStateException.class, () -> provider.deleteAccountPlaylist("200", "qq:900", "uin=200"));
+        server.verify();
+    }
+
+    @Test
     void loadsFollowedQqSingersAndResolvesTheirPublicProfiles() {
         String cookie = "uin=o200; qm_keyst=secret";
         server.expect(requestTo(containsString("/user/getUserFollowSingers?uin=200&page=1&limit=100")))
@@ -300,6 +563,27 @@ class QqMusicProviderTest {
         assertEquals("artist", artist.type());
         assertEquals(84, artist.albumCount());
         assertEquals(943, artist.trackCount());
+        server.verify();
+    }
+
+    @Test
+    void loadsFollowedQqSingersFromTheCurrentRelationListShape() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo(containsString("/user/getUserFollowSingers?uin=200&page=1&limit=20")))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"req_1":{"code":0,"data":{"List":[{
+                  "MID":"002wbPaC0L9C3A","Name":"鸣潮先约电台",
+                  "AvatarUrl":"https://img.test/singer.jpg","Desc":"愿世界在你眼前展开！"
+                }]}}}}
+                """, MediaType.APPLICATION_JSON));
+
+        List<AccountSocialUser> following = provider.loadAccountFollowing("200", cookie, 20, 0);
+
+        assertEquals(1, following.size());
+        assertEquals("qq:002wbPaC0L9C3A", following.getFirst().userId());
+        assertEquals("鸣潮先约电台", following.getFirst().nickname());
+        assertEquals("https://img.test/singer.jpg", following.getFirst().avatarUrl());
         server.verify();
     }
 
@@ -358,6 +642,9 @@ class QqMusicProviderTest {
     @Test
     void mapsCuratedHomePlaylistsFromQqRecommend() {
         String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo(containsString("/getPersonalRecommend?type=1")))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"recomPlaylist\":{\"code\":0,\"data\":{\"v_playlist\":[]}}}}", MediaType.APPLICATION_JSON));
         server.expect(requestTo(containsString("/getRecommend")))
             .andExpect(header(HttpHeaders.COOKIE, cookie))
             .andRespond(withSuccess("""
@@ -374,6 +661,46 @@ class QqMusicProviderTest {
         assertEquals("90后回忆", playlists.getFirst().title());
         assertEquals("听风", playlists.getFirst().subtitle());
         assertEquals("https://img.test/list.jpg", playlists.getFirst().imageUrl());
+        assertEquals("hot", new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(playlists.getFirst())
+            .path("recommendationSource").asText());
+        server.verify();
+    }
+
+    @Test
+    void mapsAccountPersonalizedPlaylistsBeforeHotPlaylists() {
+        String cookie = "uin=o200; qm_keyst=secret";
+        server.expect(requestTo("http://qq-api.test/getPersonalRecommend?type=1"))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"recommendationContext":{"accountId":"200"},"response":{"code":0,"recomPlaylist":{"code":0,"data":{"v_playlist":[
+                  {"tid":"123","title":"推荐歌单","picurl":"https://img.test/personal.jpg","creator":{"name":"作者"}}
+                ]}}}}
+                """, MediaType.APPLICATION_JSON));
+        List<HomepagePlaylist> playlists = provider.loadAccountFeaturedPlaylists("200", cookie);
+        assertEquals("qq:123", playlists.getFirst().id());
+        assertEquals("作者", playlists.getFirst().subtitle());
+        assertEquals("qq-personal", new com.fasterxml.jackson.databind.ObjectMapper().valueToTree(playlists.getFirst())
+            .path("recommendationSource").asText());
+        server.verify();
+    }
+
+    @Test
+    void rejectsNestedPersonalRpcErrorsAndFallsBackToHot() {
+        server.expect(requestTo("http://qq-api.test/getPersonalRecommend?type=1"))
+            .andRespond(withSuccess("{\"recommendationContext\":{\"accountId\":\"200\"},\"response\":{\"code\":0,\"recomPlaylist\":{\"code\":1000,\"data\":{\"v_playlist\":[{\"tid\":\"wrong\",\"title\":\"not personal\"}]}}}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/getRecommend"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"recomPlaylist\":{\"code\":0,\"data\":{\"v_hot\":[{\"content_id\":\"456\",\"title\":\"热门歌单\"}]}}}}", MediaType.APPLICATION_JSON));
+        assertEquals("qq:456", provider.loadAccountFeaturedPlaylists("200", "uin=o200; qm_keyst=secret").getFirst().id());
+        server.verify();
+    }
+
+    @Test
+    void neverLabelsAnAnonymousOrDifferentAccountsResponseAsPersonal() {
+        server.expect(requestTo("http://qq-api.test/getPersonalRecommend?type=1"))
+            .andRespond(withSuccess("{\"recommendationContext\":{\"accountId\":\"300\"},\"response\":{\"code\":0,\"recomPlaylist\":{\"code\":0,\"data\":{\"v_playlist\":[{\"tid\":\"wrong\",\"title\":\"Other user\"}]}}}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/getRecommend"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"recomPlaylist\":{\"code\":0,\"data\":{\"v_hot\":[{\"content_id\":\"456\",\"title\":\"热门歌单\"}]}}}}", MediaType.APPLICATION_JSON));
+        assertEquals("qq:456", provider.loadAccountFeaturedPlaylists("200", "uin=o200; qm_keyst=secret").getFirst().id());
         server.verify();
     }
 
@@ -467,12 +794,38 @@ class QqMusicProviderTest {
     }
 
     @Test
+    void fallsBackToTheCurrentQqDesktopSearchForPlaylists() {
+        server.expect(requestTo(containsString("/searchByType?key=%E9%B8%A3%E6%BD%AE&limit=8&page=1&type=playlist")))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"req_1":{"code":0,"data":{"body":{"songlist":{"list":[]}},"meta":{"sum":0}}}}}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://u.y.qq.com/cgi-bin/musicu.fcg"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(content().string(containsString("\"search_type\":3")))
+            .andRespond(withSuccess("""
+                {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"songlist":{"list":[
+                  {"dissid":"99","dissname":"鸣潮精选","imgurl":"https://img.test/list.jpg","songnum":20}
+                ]}},"meta":{"sum":1}}}}
+                """, MediaType.TEXT_PLAIN));
+
+        SearchResultPage result = provider.search("鸣潮", SearchType.PLAYLIST, 8, 0);
+
+        assertEquals(1, result.playlists().size());
+        assertEquals("qq:99", result.playlists().getFirst().id());
+        server.verify();
+    }
+
+    @Test
     void doesNotTreatSongOnlyResponsesAsPlaylistResults() {
         server.expect(requestTo(containsString("/searchByType?key=%E5%85%88%E7%BA%A6&limit=8&page=1&type=playlist")))
             .andRespond(withSuccess("""
                 {"response":{"code":0,"data":{"song":{"totalnum":600,"list":[
                   {"songmid":"mid-search-1","songname":"心月辞·长相望","singer":[{"name":"鸣潮先约电台"}]}
                 ]}}}}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://u.y.qq.com/cgi-bin/musicu.fcg"))
+            .andRespond(withSuccess("""
+                {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"songlist":{"list":[]}},"meta":{"sum":0}}}}
                 """, MediaType.APPLICATION_JSON));
 
         SearchResultPage result = provider.search("先约", SearchType.PLAYLIST, 8, 0);
@@ -509,6 +862,28 @@ class QqMusicProviderTest {
         assertEquals(943, result.artists().getFirst().trackCount());
         assertEquals(84, result.artists().getFirst().albumCount());
         assertEquals(false, result.hasMore());
+        server.verify();
+    }
+
+    @Test
+    void fallsBackToTheCurrentQqDesktopSearchForArtists() {
+        server.expect(requestTo(containsString("/searchByType?key=%E5%85%88%E7%BA%A6%E7%94%B5%E5%8F%B0&limit=8&page=1&type=artist")))
+            .andRespond(withSuccess("""
+                {"response":{"code":0,"req_1":{"code":0,"data":{"body":{"singer":{"list":[]}},"meta":{"sum":0}}}}}
+                """, MediaType.APPLICATION_JSON));
+        server.expect(requestTo("https://u.y.qq.com/cgi-bin/musicu.fcg"))
+            .andExpect(method(HttpMethod.POST))
+            .andExpect(content().string(containsString("\"search_type\":1")))
+            .andRespond(withSuccess("""
+                {"code":0,"music.search.SearchCgiService":{"code":0,"data":{"body":{"singer":{"list":[
+                  {"singerMID":"002wbPaC0L9C3A","singerName":"鸣潮先约电台","songNum":943,"albumNum":84}
+                ]}},"meta":{"sum":1}}}}
+                """, MediaType.TEXT_PLAIN));
+
+        SearchResultPage result = provider.search("先约电台", SearchType.ARTIST, 8, 0);
+
+        assertEquals(1, result.artists().size());
+        assertEquals("qq:002wbPaC0L9C3A", result.artists().getFirst().id());
         server.verify();
     }
 
@@ -588,6 +963,35 @@ class QqMusicProviderTest {
         provider.setArtistSubscription("200", "qq:002wbPaC0L9C3A", false, cookie);
 
         server.verify();
+    }
+
+    @Test
+    void reportsExpiredQqSessionsAsLoginRequiredAfterApiRenewalFails() {
+        for (String response : List.of(
+            "{\"code\":0,\"req_1\":{\"code\":1000}}",
+            "{\"code\":104401}",
+            "{\"code\":0,\"req_1\":{\"code\":104400}}"
+        )) {
+            server.expect(requestTo("http://qq-api.test/user/setSingerSubscription"))
+                .andRespond(withSuccess("{\"response\":" + response + "}", MediaType.APPLICATION_JSON));
+            assertThrows(ProviderLoginRequiredException.class,
+                () -> provider.setArtistSubscription("200", "qq:singer", true, "uin=200; qm_keyst=expired"));
+            server.verify();
+            server.reset();
+        }
+    }
+
+    @Test
+    void rejectsNestedQqWriteFailuresInsteadOfReportingSuccess() {
+        for (String data : List.of("{\"retCode\":42}", "{\"code\":42}")) {
+            server.expect(requestTo("http://qq-api.test/user/setSingerSubscription"))
+                .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":0,\"data\":"
+                    + data + "}}}", MediaType.APPLICATION_JSON));
+            assertThrows(IllegalStateException.class,
+                () -> provider.setArtistSubscription("200", "qq:singer", true, "uin=200; qm_keyst=valid"));
+            server.verify();
+            server.reset();
+        }
     }
 
     @Test

@@ -22,7 +22,8 @@ export function findCharacterCountAtTime(
   const firstCharacter = characterTimes?.[0];
   const starts = typeof firstCharacter === "number"
     ? characterTimes as number[]
-    : characterTimes?.map((character) => character.start) ?? [];
+    : (characterTimes as NonNullable<LyricLine["characters"]> | undefined)
+      ?.map((character) => character.start) ?? [];
   let low = 0;
   let high = starts.length;
 
@@ -97,7 +98,7 @@ export function getPreludeEndTime(
   hasLyrics: boolean
 ) {
   if (hasLyrics) {
-    return Number.isFinite(firstLyricTime) && firstLyricTime > 2 ? firstLyricTime : 0;
+    return Number.isFinite(firstLyricTime) && firstLyricTime > 0 ? firstLyricTime : 0;
   }
   return Number.isFinite(playbackDuration) && playbackDuration > 0 ? playbackDuration : 0;
 }
@@ -190,8 +191,7 @@ function lyricCharacterProgressAtTime(
   line: LyricLine,
   lineIndex: number,
   time: number,
-  activeIndex: number,
-  lines: LyricLine[]
+  activeIndex: number
 ) {
   if (lineIndex !== activeIndex || !line.text.length || time < line.time) {
     return 0;
@@ -265,8 +265,7 @@ export function getLyricHighlightState(time: number, lines: LyricLine[]): LyricH
       lines[activeIndex],
       activeIndex,
       time,
-      activeIndex,
-      lines
+      activeIndex
     )
   };
 }

@@ -3,6 +3,7 @@ export interface PlaybackMedia {
   paused: boolean;
   ended: boolean;
   seeking?: boolean;
+  readyState?: number;
   playbackRate: number;
 }
 
@@ -28,6 +29,7 @@ export function isPreviewPlayback(catalogDuration: number, mediaDuration?: numbe
 }
 
 export function createPlaybackClock() {
+  const maximumLeadSeconds = 0.15;
   let anchorMediaTime = 0;
   let anchorWallTime = 0;
   let anchorPlaybackRate = 1;
@@ -49,7 +51,7 @@ export function createPlaybackClock() {
       ? media.playbackRate
       : 1;
 
-    if (!initialized || media.paused || media.ended || media.seeking || playbackRate !== anchorPlaybackRate) {
+    if (!initialized || media.paused || media.ended || media.seeking || (media.readyState !== undefined && media.readyState < 3) || playbackRate !== anchorPlaybackRate) {
       reset(media, wallTime);
       return mediaTime;
     }
@@ -57,7 +59,7 @@ export function createPlaybackClock() {
     const elapsed = Math.max(0, wallTime - anchorWallTime) / 1000;
     const estimatedTime = anchorMediaTime + elapsed * anchorPlaybackRate;
 
-    return Math.max(0, estimatedTime);
+    return Math.max(mediaTime, Math.min(estimatedTime, mediaTime + maximumLeadSeconds));
   }
 
   function synchronize(media: PlaybackMedia, now: number) {
@@ -67,14 +69,14 @@ export function createPlaybackClock() {
       ? media.playbackRate
       : 1;
 
-    if (!initialized || media.paused || media.ended || media.seeking || playbackRate !== anchorPlaybackRate) {
+    if (!initialized || media.paused || media.ended || media.seeking || (media.readyState !== undefined && media.readyState < 3) || playbackRate !== anchorPlaybackRate) {
       reset(media, wallTime);
       return mediaTime;
     }
 
-    const estimatedTime = read(media, wallTime);
-    // Browser timeupdate values can trail the animation clock; only re-anchor forward during playback.
-    if (mediaTime > estimatedTime) {
+    const estimatedTime = anchorMediaTime + Math.max(0, wallTime - anchorWallTime) / 1000 * anchorPlaybackRate;
+    // Ignore small timeupdate jitter, but correct stalls and accumulated drift.
+    if (mediaTime > estimatedTime || estimatedTime - mediaTime > maximumLeadSeconds) {
       reset(media, wallTime);
       return mediaTime;
     }

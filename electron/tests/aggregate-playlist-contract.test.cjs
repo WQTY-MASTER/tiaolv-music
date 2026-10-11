@@ -9,7 +9,7 @@ const service = fs.readFileSync(path.join(root, "src/renderer/src/services/aggre
 
 assert.match(app, /import AggregatePlaylistPage from/, "应用应接入独立聚合歌单页面组件");
 assert.match(app, /activeView === 'aggregate'/, "聚合歌单导航应渲染独立页面");
-assert.match(app, /AGGREGATE_PLAYLIST_STORAGE_KEY/, "聚合歌单应使用独立本地存储键");
+assert.match(app, /readAggregatePlaylists/, "应用启动时应通过聚合歌单服务读取持久化数据");
 assert.match(app, /getLegacyAggregatePlaylists/, "应用启动时应读取旧应用目录中的聚合歌单");
 assert.match(app, /LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY/, "旧聚合歌单迁移应使用一次性完成标记");
 assert.match(app, /mergeAggregatePlaylistCollections/, "旧聚合歌单应与当前数据安全合并");
@@ -56,6 +56,7 @@ assert.match(service, /sources:/, "合并后的歌曲行应保留全部底层音
 assert.match(service, /createAggregatePlaylist/, "服务应提供聚合歌单创建逻辑");
 assert.match(service, /readAggregatePlaylists/, "服务应提供持久化读取逻辑");
 assert.match(service, /writeAggregatePlaylists/, "服务应提供持久化写入逻辑");
+assert.match(service, /AGGREGATE_PLAYLIST_STORAGE_KEY/, "聚合歌单服务应使用独立本地存储键");
 assert.match(service, /LEGACY_AGGREGATE_PLAYLIST_STORAGE_KEY/, "服务应兼容旧品牌存储键");
 assert.match(service, /removeAggregateTrackSource/, "服务应支持只删除一个音源");
 assert.match(service, /removeAggregateTrackGroup/, "服务应支持删除整行全部音源");

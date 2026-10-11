@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { runTrackBatch, type TrackBatchAction, type TrackBatchResult } from "./services/streamingTrackManagement";
 import { matchLocalAudioSource, type LocalAudioSelection, type LocalAudioSourceGroup } from "./services/localAudioSources";
 import {
   AppWindow,
@@ -33,12 +34,14 @@ import {
 } from "lucide-vue-next";
 import PlayerBar from "./components/PlayerBar.vue";
 import MiniPlayer from "./components/MiniPlayer.vue";
+import WindowTitlebar from "./components/WindowTitlebar.vue";
 import FirstRunOnboarding from "./components/FirstRunOnboarding.vue";
 import DesktopLyricsSettings from "./components/DesktopLyricsSettings.vue";
 import AppearanceSettings from "./components/AppearanceSettings.vue";
 import ShortcutSettings from "./components/ShortcutSettings.vue";
 import AboutSettings from "./components/AboutSettings.vue";
 import type { ShortcutAction } from "../../shared/shortcuts";
+import type { MiniPlayerAction, MiniPlayerSnapshot, MiniPlayerTrack } from "../../shared/miniPlayer";
 import PlaylistCard from "./components/PlaylistCard.vue";
 import SidebarNav from "./components/SidebarNav.vue";
 import AccountMenu from "./components/AccountMenu.vue";
@@ -97,9 +100,15 @@ import {
   loadAccountFollowing,
   loadAccountFollowers,
   loadAccountRecentTracks,
+  deleteAccountRecentTracks,
   loadAccountListeningRank,
+  reportQqListeningDelta,
+  reportQqRecentPlay,
+  loadQqListeningDataSummaries,
+  deleteQqListeningStats,
   reportListeningScrobble,
   loadAccountPlaylists,
+  deleteAccountPlaylist,
   setAccountPlaylistSubscription,
   createAccountPlaylist,
   loadCloudTracks,
@@ -116,6 +125,9 @@ import {
   toggleCatalogArtistSubscription,
   saveAccountFavorite,
   removeAccountFavorite,
+  removeAccountPlaylistTrack,
+  addAccountPlaylistTracks,
+  reorderAccountPlaylistTracks,
   restoreDefaultCacheDirectory,
   logoutProvider,
   matchLocalTrackLyrics,
@@ -132,6 +144,10 @@ import {
   clearManagedCache,
   loadCurrentAccounts,
   loadCurrentAccount,
+  setPageDataCacheAccountScope,
+  clearPageDataCacheAccountScope,
+  invalidatePageDataCache,
+  invalidatePageDataCacheForProvider,
   type AccountPlaylistView,
   type AccountProfileView,
   type AccountSocialUserView,
@@ -146,8 +162,21 @@ import {
   ApiRequestError,
   type ListeningStatsSummaryPayload,
   type PersistedTrack,
+  type QqListeningRankEntry,
+  type QqListeningRankPeriod,
+  type QqListeningDataSummary,
   type PlaybackState
 } from "./services/api";
+import {
+  acknowledgeQqListeningFlush,
+  beginQqRecentPlayReport,
+  createQqListeningSession,
+  failQqListeningFlush,
+  pauseQqListeningSession,
+  prepareQqListeningFlush,
+  sampleQqListeningPlayback,
+  type QqListeningSession
+} from "./services/qqListeningSession";
 import { readAppMode, writeAppMode, type AppMode } from "./services/appMode";
 import {
   readStartupHome,
@@ -173,6 +202,7 @@ import {
 } from "./services/lyricSync";
 import {
   parseLyricContent,
+  getLeadingLyricQuote,
   splitLyricCharacters,
   type LyricLine
 } from "./services/lyricParser";
@@ -272,7 +302,6 @@ import {
   type ListeningScrobbleSession
 } from "./services/listeningScrobble";
 import {
-  AGGREGATE_PLAYLIST_STORAGE_KEY,
   LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY,
   addTrackToAggregatePlaylist,
   createAggregatePlaylist,
@@ -315,7 +344,7 @@ type ViewKey =
   | "settings";
 type PlayMode = "shuffle" | "sequence" | "single" | "loop";
 type SettingsSection = "general" | "playback" | "appearance" | "desktop-lyrics" | "cache" | "shortcuts" | "about";
-type TrackPlaylistPickerMode = "regular" | "aggregate";
+type TrackPlaylistPickerMode = "regular" | "aggregate" | "streaming";
 type HistorySource = "all" | "local" | "netease" | "qq";
 type AccountProvider = "netease" | "qq";
 type SearchTab = CatalogSearchType;
@@ -345,9 +374,13 @@ interface Playlist {
   source?: string;
   accountScoped?: boolean;
   createdByAccount?: boolean;
+  deletable?: boolean;
+  favorite?: boolean;
   streamingTemplate?: boolean;
   playCount?: number;
   userManaged?: boolean;
+  recommendationSource?: string;
+  recommendationReason?: string;
 }
 
 interface Track {
@@ -800,6 +833,8 @@ const privateRoamingActive = ref(false);
 const streamingHomeState = ref<"idle" | "loading" | "success" | "error">("idle");
 const streamingHomeError = ref("");
 const streamingHomeCache = createStreamingHomeCache<StreamingHomeSnapshot>();
+const qqHomePlaylistsRefreshing = ref(false);
+const qqHomePlaylistsError = ref("");
 const selectedAuthAccount = computed(() =>
   accounts.value.find((candidate) => candidate.provider === selectedAuthProvider.value) ?? null
 );
@@ -882,6 +917,15 @@ const listeningDataDeleteMode = ref<ListeningStatsRetentionMode>("month");
 const listeningDataDeleteYear = ref(new Date().getFullYear());
 const listeningDataDeleteMonth = ref(new Date().getMonth() + 1);
 let listeningDataSummaryRequestId = 0;
+const qqListeningDataSummaries = ref<QqListeningDataSummary[]>([]);
+const selectedQqListeningDataAccountId = ref("");
+const qqListeningDataPending = ref(false);
+const qqListeningDataDeletePending = ref(false);
+const qqListeningDataDeleteMode = ref<"range" | "all">("range");
+const qqListeningDataDeleteFrom = ref(toLocalDateKey(new Date(Date.now() - 6 * 24 * 60 * 60 * 1_000)));
+const qqListeningDataDeleteTo = ref(toLocalDateKey(new Date()));
+const qqListeningDataNotice = ref("");
+const qqListeningDataError = ref("");
 const localLibrarySearchKeyword = ref("");
 const localFolderSearchKeyword = ref("");
 const selectedLocalFolderPath = ref<string | null>(null);
@@ -909,7 +953,7 @@ let localLyricsMatchRequestId = 0;
 const localLyricsMatchNotice = ref("");
 const selectedLocalTrackIds = ref(new Set<string>());
 const localTrackContextMenu = ref<{ track: Track; queue: Track[]; x: number; y: number } | null>(null);
-const trackPlaylistPicker = ref<{ track: Track; mode: TrackPlaylistPickerMode } | null>(null);
+const trackPlaylistPicker = ref<{ tracks: Track[]; mode: TrackPlaylistPickerMode } | null>(null);
 const localArtistSearchKeyword = ref("");
 const localArtistSortMode = ref<"name-asc" | "name-desc" | "count-desc" | "count-asc">("name-asc");
 const localArtistGenreFilter = ref("全部流派");
@@ -963,9 +1007,6 @@ const catalogResults = ref<Track[]>([]);
 const homepageState = ref<"idle" | "loading" | "success" | "error">("idle");
 const homepageError = ref("");
 const homepageData = ref<HomepageData>({ banners: [], playlists: [], songs: [], hasMore: false });
-const homepageFeaturedIndex = ref(0);
-const homepageRefreshState = ref<"idle" | "loading">("idle");
-const homepageRefreshNotice = ref("");
 const discoveryData = ref<HomepageData>({ banners: [], playlists: [], songs: [], hasMore: false });
 const discoveryState = ref<"idle" | "loading" | "success" | "error">("idle");
 const discoveryError = ref("");
@@ -1077,6 +1118,43 @@ const dailyRecommendationState = ref<"idle" | "loading" | "success" | "error">("
 const dailyRecommendationError = ref("");
 const accountFavoriteTracks = ref<Track[]>([]);
 const accountPlaylists = ref<Playlist[]>([]);
+const streamingPlaylistTargets = computed(() => accountPlaylists.value.filter(playlist => (
+  playlist.source === streamingSource.value
+  && playlist.accountScoped
+  && playlist.createdByAccount
+  && playlist.deletable
+  && !playlist.favorite
+)));
+const playlistDeletionPending = ref(false);
+const playlistMutationPending = ref(false);
+const playlistOrderMessage = ref("");
+const playlistOrderCooling = ref(false);
+let playlistOrderCooldownTimer: ReturnType<typeof setTimeout> | undefined;
+const selectedPlaylistBatchMode = computed<"favorites" | "playlist" | undefined>(() => {
+  const playlist = selectedPlaylist.value;
+  if ((playlist?.source !== "qq" && playlist?.source !== "netease") || !playlist.accountScoped) return undefined;
+  if (playlist.favorite || playlist.id.startsWith("account-favorites-detail-")) return "favorites";
+  return playlist.createdByAccount && playlist.deletable ? "playlist" : undefined;
+});
+
+async function deleteStreamingPlaylist(entry: { id: string }) {
+  const playlist = accountPlaylists.value.find(item => item.id === entry.id);
+  const provider = streamingSource.value;
+  if (!playlist?.createdByAccount || !playlist.deletable || (provider !== 'qq' && provider !== 'netease') || playlistDeletionPending.value) return;
+  const providerName = provider === 'qq' ? 'QQ 音乐' : '网易云音乐';
+  if (!window.confirm(`删除歌单「${playlist.title}」？这会同步删除${providerName}中的该歌单，无法撤销。`)) return;
+  playlistDeletionPending.value = true;
+  try {
+    await deleteAccountPlaylist(playlist.id, provider);
+    if (streamingSource.value !== provider) return;
+    accountPlaylists.value = accountPlaylists.value.filter(item => item.id !== playlist.id);
+    if (selectedPlaylist.value?.id === playlist.id) selectedPlaylist.value = null;
+  } catch (error) {
+    scanError.value = accountContentErrorMessage(error, '删除歌单失败，请稍后重试。');
+  } finally {
+    playlistDeletionPending.value = false;
+  }
+}
 const playlistCollectionPending = ref(false);
 const selectedPlaylistAccountEntry = computed(() => {
   const playlistId = selectedPlaylist.value?.id;
@@ -1110,6 +1188,9 @@ const selectedSocialProfileState = ref<"idle" | "loading" | "success" | "error">
 const selectedSocialProfileError = ref("");
 const accountRecentTracks = ref<Track[]>([]);
 const accountListeningRank = ref<Track[]>([]);
+const qqListeningRankPeriod = ref<QqListeningRankPeriod>("week");
+const qqListeningRankPending = ref(false);
+const qqListeningRankError = ref("");
 const accountContentState = ref<"idle" | "loading" | "success" | "error">("idle");
 const accountContentError = ref("");
 const searchTab = ref<SearchTab>("song");
@@ -1157,6 +1238,9 @@ let removeShortcutActionListener: (() => void) | undefined;
 let removeShortcutsChangedListener: (() => void) | undefined;
 let removeWindowCloseBehaviorListener: (() => void) | undefined;
 let removeDesktopLyricsVisibilityListener: (() => void) | undefined;
+let removeMiniPlayerActionListener: (() => void) | undefined;
+let removeMiniModeVisibilityListener: (() => void) | undefined;
+let miniSnapshotTimer: ReturnType<typeof window.setTimeout> | undefined;
 const hasScannedLocalLibrary = ref(false);
 const localLibraryHydrated = ref(false);
 const audioElement = ref<HTMLAudioElement | null>(null);
@@ -1189,6 +1273,8 @@ const hasConfiguredBackgroundImage = computed(() => (
   activeAppearanceBackground.value.mode === "image"
   && Boolean(activeAppearanceBackground.value.imagePath)
 ));
+const windowTitlebarDark = computed(() => appearanceDarkMode.value
+  && (!showSongDetail.value || hasConfiguredBackgroundImage.value));
 const appearanceAccent = computed(() => appearanceDarkMode.value
   ? appearancePreferences.value.darkAccent
   : appearancePreferences.value.lightAccent);
@@ -1206,7 +1292,12 @@ watch(
       const url = /^(data:|blob:|https?:)/i.test(imagePath)
         ? imagePath
         : await window.listenMusic?.readAppearanceBackground(imagePath);
-      if (!url) throw new Error("Background image unavailable");
+      if (!url) {
+        if (!cancelled) {
+          appearanceImageError.value = "背景图片读取失败。请确认文件仍然存在；更新软件后请完全退出并重新启动。";
+        }
+        return;
+      }
       if (cancelled) return;
       appearanceImageUrl.value = url;
       const image = new Image();
@@ -1258,7 +1349,8 @@ const appearanceStyle = computed(() => {
       ? activeAppearanceBackground.value.darkColor
       : activeAppearanceBackground.value.lightColor,
     "--appearance-background-image": appearanceBackgroundImage.value,
-    "--lyric-font-family": resolveAppearanceFont(lyrics.fontFamily),
+    "--lyric-font-family": resolveAppearanceFont(lyrics.fontFamily === "inherit"
+      ? appearancePreferences.value.fontFamily : lyrics.fontFamily),
     "--lyric-font-size": `${lyrics.fontSize}px`,
     "--lyric-font-weight": String(lyrics.fontWeight),
     "--lyric-line-height": String(lyrics.lineHeight),
@@ -1280,9 +1372,7 @@ const detailLyricsRef = ref<HTMLElement | null>(null);
 const manualLyricsScroll = ref(false);
 const lyricAnchorVisible = ref(false);
 const lyricsDragging = ref(false);
-const detailVolumeVisible = ref(false);
 const playMode = ref<PlayMode>("sequence");
-const playModeMenuVisible = ref(false);
 const systemTrayState = computed(() => ({
   title: currentTrack.value.title,
   artist: currentTrack.value.artist,
@@ -1317,6 +1407,10 @@ const pageTransitionName = computed(() => pageTransitionDirection.value === "for
 let resumeLyricsFollowTimer: ReturnType<typeof window.setTimeout> | undefined;
 let lyricAnchorHideTimer: ReturnType<typeof window.setTimeout> | undefined;
 let lyricDragPointerId: number | undefined;
+let lyricResizeFrame: number | undefined;
+let lyricAutoScrollFrame: number | undefined;
+let lyricAnchorScrollFrame: number | undefined;
+let lyricAutoScrollActive = false;
 let lyricDragStartY = 0;
 let lyricDragStartScrollTop = 0;
 let playbackFrameId: number | undefined;
@@ -1339,8 +1433,10 @@ let wasPlayingBeforeSeek = false;
 let searchRequestId = 0;
 let searchDebounceTimer: ReturnType<typeof window.setTimeout> | undefined;
 let searchToastTimer: ReturnType<typeof window.setTimeout> | undefined;
+const favoriteMutationPending = new Set<string>();
 let lyricClockTime = 0;
 let lastDesktopLyricsTimeSentAt = 0;
+let lastMiniPlayerTimeSentAt = 0;
 let renderedLyricIndex = -1;
 let renderedCharacterCount = 0;
 let renderedCharacterProgress = 0;
@@ -1359,12 +1455,19 @@ let listeningSampleTrackId: string | undefined;
 let listeningSampleTime: number | undefined;
 let listeningScrobbleSession: ListeningScrobbleSession | undefined;
 let listeningScrobbleSessionSerial = 0;
+let qqListeningSessionSerial = 0;
+let activeQqListeningSessionId: number | undefined;
+let qqRecentPlaybackSession: QqListeningSession | undefined;
+const qqListeningSessions = new Map<number, QqListeningSession>();
+const qqListeningFlushes = new Map<number, Promise<void>>();
+let qqListeningRetryTimer: ReturnType<typeof window.setTimeout> | undefined;
 let lastPlaybackStateSaveSecond = -Infinity;
 let sessionRestored = false;
 let queueSaveChain: Promise<void> = Promise.resolve();
 let queueItemSerial = 0;
 let stateSaveChain: Promise<void> = Promise.resolve();
 let accountContentRequestId = 0;
+let accountRecentRevision = 0;
 let accountSocialRequestId = 0;
 let socialProfileRequestId = 0;
 let streamingHomeRequestId = 0;
@@ -1439,15 +1542,8 @@ const playlistOverviewPlaylists = computed(() => {
     })
     .map(({ playlist }) => playlist);
 });
-const homepageBanners = computed(() => homepageData.value.banners);
 const homepagePlaylists = computed(() => homepageData.value.playlists);
 const homepageSongs = computed(() => homepageData.value.songs);
-const homepageHeroTrack = computed(() => {
-  if (homepageSongs.value.length === 0) {
-    return undefined;
-  }
-  return homepageSongs.value[homepageFeaturedIndex.value % homepageSongs.value.length];
-});
 const localHomeTrack = computed(() => {
   if (currentTrack.value.id !== DEFAULT_TRACK_ID) {
     return currentTrack.value;
@@ -1626,8 +1722,21 @@ const accountFavoritePlaylist = computed<Playlist>(() => ({
   secondary: "#765d92",
   mark: "爱",
   source: selectedStreamingAccount.value?.provider || streamingSource.value,
-  accountScoped: true
+  accountScoped: true,
+  favorite: true
 }));
+const accountLibraryPlaylists = computed<Playlist[]>(() => {
+  const playlists = accountPlaylists.value;
+  if (streamingSource.value !== "qq" || !selectedStreamingAccount.value || playlists.some(playlist => playlist.favorite)) return playlists;
+  return [{
+    ...accountFavoritePlaylist.value,
+    title: "我的喜欢",
+    imageUrl: accountFavoriteTracks.value[0]?.coverUrl,
+    createdByAccount: true,
+    deletable: false,
+    streamingTemplate: true
+  }, ...playlists];
+});
 const sidebarPlaylists = computed(() => (
   isStreamingMode.value
     ? [accountFavoritePlaylist.value, ...accountPlaylists.value]
@@ -2032,18 +2141,22 @@ const songDetailThemeStyle = computed(() => {
     "--player-accent-hover": palette.accentSecondary
   };
 });
-const desktopLyricsPlaybackState = computed<DesktopLyricsPlaybackState>(() => ({
+const desktopLyricsPlaybackMetadata = computed<Omit<DesktopLyricsPlaybackState, "currentTime">>(() => ({
+  trackId: currentTrack.value.id,
   title: currentTrack.value.title,
   artist: currentTrack.value.artist,
   isPlaying: isPlaying.value,
   playMode: playMode.value,
-  currentTime: currentTime.value,
   lyrics: currentTrack.value.lyrics,
   lyricsTranslation: currentTrack.value.lyricsTranslation,
   lyricsPhonetic: currentTrack.value.lyricsPhonetic,
   lyricsFormat: currentTrack.value.lyricsFormat,
   source: currentTrack.value.source,
   coverAccentColor: songDetailPalette.value.accentPrimary
+}));
+const desktopLyricsPlaybackState = computed<DesktopLyricsPlaybackState>(() => ({
+  ...desktopLyricsPlaybackMetadata.value,
+  currentTime: currentTime.value
 }));
 
 watch(
@@ -2139,7 +2252,11 @@ const currentLyricText = computed(() => lyricLines.value[activeLyricIndex.value]
 const currentLyricCredits = computed(() => {
   const parsedCredits = parseLyricCredits(currentTrack.value.lyrics);
   if (currentTrack.value.lyricCredits?.length) {
-    return currentTrack.value.lyricCredits.map((credit) => {
+    const combined = [...currentTrack.value.lyricCredits];
+    for (const parsed of parsedCredits) {
+      if (!combined.some((credit) => credit.label === parsed.label && credit.value === parsed.value)) combined.push(parsed);
+    }
+    return combined.map((credit) => {
       if (credit.time !== undefined) {
         return credit;
       }
@@ -2172,12 +2289,6 @@ const anchorPlaybackTime = computed(() => {
   }
   return anchorLyricLine.value?.time;
 });
-const playModeTitle = computed(() => ({
-  shuffle: "随机播放",
-  sequence: "顺序播放",
-  single: "单曲循环",
-  loop: "列表循环"
-})[playMode.value]);
 const playModeOptions: Array<{ mode: PlayMode; title: string }> = [
   { mode: "shuffle", title: "随机播放" },
   { mode: "sequence", title: "顺序播放" },
@@ -2223,6 +2334,15 @@ const listeningDataSelectionEmpty = computed(() => {
   const summary = listeningDataSummary.value;
   return !summary || (summary.rangeTrackCount === 0 && summary.rangeActiveDays === 0);
 });
+const selectedQqListeningDataSummary = computed(() => (
+  qqListeningDataSummaries.value.find((summary) => summary.accountId === selectedQqListeningDataAccountId.value) ?? null
+));
+const qqListeningDataRangeValid = computed(() => (
+  qqListeningDataDeleteMode.value === "all"
+  || (Boolean(qqListeningDataDeleteFrom.value)
+    && Boolean(qqListeningDataDeleteTo.value)
+    && qqListeningDataDeleteFrom.value <= qqListeningDataDeleteTo.value)
+));
 
 const pageTitle = computed(() => {
   if (submittedKeyword.value) {
@@ -2293,7 +2413,7 @@ const pageSubtitle = computed(() => {
     "account-followers": "关注你的音乐伙伴",
     "account-user-profile": "用户资料与社交信息",
     "streaming-recent": "回顾最近听过的声音",
-    "listening-ranking": "本周最常播放的歌曲",
+    "listening-ranking": "最近一周最常播放的歌曲",
     cloud: "网易云音乐云盘",
     settings: "调整本地音乐库和应用偏好"
   };
@@ -2308,10 +2428,7 @@ const pageTransitionKey = computed(() => [
   selectedLocalArtist.value?.id ?? "",
   selectedStreamingArtist.value?.id ?? "",
   selectedLocalFolderPath.value ?? "",
-  activeSettingsSection.value,
-  appMode.value === "streaming" && ["home", "streaming-library"].includes(activeView.value)
-    ? streamingSource.value
-    : ""
+  activeSettingsSection.value
 ].join("::"));
 
 const visiblePlaylists = computed(() => {
@@ -2383,6 +2500,8 @@ const selectedPlaylistTracks = computed(() => {
   } else {
     tracks = playlistState.value === "success" ? catalogResults.value : [];
   }
+  // QQ-owned lists use the verified cloud order, including after app restart.
+  if (playlist.source === "qq" && playlist.accountScoped) return tracks;
   return applyTrackOrder(tracks, playlistTrackOrder.value[playlist.id] ?? []);
 });
 const selectedPlaylistTrackSummary = computed(() => {
@@ -2524,6 +2643,7 @@ function toPersistedTrack(track: Track): PersistedTrack {
 }
 
 function syncFavoriteFlag(trackId: string, liked: boolean) {
+  if (trackId.startsWith("qq:")) streamingHomeCache.clear("qq");
   const collections = [demoTracks, remoteTracks.value, catalogResults.value, playbackQueue.value, historyTracks.value];
   collections.forEach((tracks) => {
     tracks.forEach((track) => {
@@ -2605,6 +2725,7 @@ function restorePersistedSession(state?: PlaybackState) {
     ? Math.min(100, (restoredPosition / currentTrack.value.duration) * 100)
     : 0;
   loadTrackLyrics(currentTrack.value);
+  void hydrateRestoredTrackLyrics(currentTrack.value, ++trackAssetRequestId);
   void nextTick(() => {
     if (audioElement.value) {
       audioElement.value.volume = volume.value / 100;
@@ -2645,7 +2766,11 @@ function toPlaylist(raw: unknown, index: number): Playlist | null {
     imageUrl: typeof item.imageUrl === "string" ? item.imageUrl : undefined,
     source,
     playCount: Number(item.playCount ?? 0),
-    createdByAccount: Boolean(item.createdByAccount)
+    createdByAccount: Boolean(item.createdByAccount),
+    deletable: item.deletable === true,
+    favorite: item.favorite === true,
+    recommendationSource: typeof item.recommendationSource === "string" ? item.recommendationSource : undefined,
+    recommendationReason: typeof item.recommendationReason === "string" ? item.recommendationReason : undefined
   };
 }
 
@@ -2865,6 +2990,12 @@ function accountContentErrorMessage(error: unknown, fallback: string) {
     : fallback;
 }
 
+function toQqListeningRankTracks(entries: QqListeningRankEntry[]) {
+  return entries
+    .map((entry, index) => toTrack(entry.track, index))
+    .filter((track): track is Track => Boolean(track));
+}
+
 async function loadAccountContent() {
   const activeAccount = selectedStreamingAccount.value;
   if (!activeAccount) {
@@ -2873,6 +3004,7 @@ async function loadAccountContent() {
   }
 
   const requestId = ++accountContentRequestId;
+  const recentRevision = accountRecentRevision;
   const provider = activeAccount.provider;
   accountFavoriteTracks.value = [];
   accountPlaylists.value = [];
@@ -2893,7 +3025,7 @@ async function loadAccountContent() {
     loadAccountProfile(provider),
     loadAccountFollowing(provider, ACCOUNT_SOCIAL_PAGE_SIZE, 0),
     loadAccountRecentTracks(provider),
-    loadAccountListeningRank(provider)
+    loadAccountListeningRank(provider, { period: qqListeningRankPeriod.value })
   ]);
 
   if (
@@ -2968,7 +3100,9 @@ async function loadAccountContent() {
     accountFollowing.value = [];
   }
 
-  if (recentResult.status === "fulfilled") {
+  if (recentRevision !== accountRecentRevision) {
+    // A confirmed playback report supersedes the older batch query.
+  } else if (recentResult.status === "fulfilled") {
     accountRecentTracks.value = Array.isArray(recentResult.value)
       ? recentResult.value.map(toTrack).filter((track): track is Track => Boolean(track))
       : [];
@@ -2978,9 +3112,11 @@ async function loadAccountContent() {
   }
 
   if (rankResult.status === "fulfilled") {
-    accountListeningRank.value = Array.isArray(rankResult.value)
-      ? rankResult.value.map(toTrack).filter((track): track is Track => Boolean(track))
-      : [];
+    accountListeningRank.value = provider === "qq"
+      ? toQqListeningRankTracks(Array.isArray(rankResult.value) ? rankResult.value as QqListeningRankEntry[] : [])
+      : Array.isArray(rankResult.value)
+        ? rankResult.value.map(toTrack).filter((track): track is Track => Boolean(track))
+        : [];
   } else {
     failures.push(rankResult.reason);
     accountListeningRank.value = [];
@@ -2998,6 +3134,51 @@ async function loadAccountContent() {
 
 async function loadStreamingLibraryData() {
   await loadAccountContent();
+}
+
+async function loadListeningRankRange(refresh = true) {
+  const activeAccount = selectedStreamingAccount.value;
+  if (!activeAccount) return;
+
+  const accountId = activeAccount.userId;
+  const provider = activeAccount.provider;
+  const period = qqListeningRankPeriod.value;
+  qqListeningRankPending.value = true;
+  qqListeningRankError.value = "";
+  try {
+    const entries = await loadAccountListeningRank(provider, {
+      period,
+      refresh
+    });
+    if (
+      selectedStreamingAccount.value?.provider !== provider
+      || selectedStreamingAccount.value.userId !== accountId
+      || qqListeningRankPeriod.value !== period
+    ) return;
+    accountListeningRank.value = provider === "qq"
+      ? toQqListeningRankTracks(entries as QqListeningRankEntry[])
+      : Array.isArray(entries)
+        ? entries.map(toTrack).filter((track): track is Track => Boolean(track))
+        : [];
+  } catch (error) {
+    if (selectedStreamingAccount.value?.userId === accountId) {
+      qqListeningRankError.value = accountContentErrorMessage(error, `${streamingProviderName.value}听歌排行刷新失败，已保留上次结果。`);
+    }
+  } finally {
+    if (selectedStreamingAccount.value?.userId === accountId && qqListeningRankPeriod.value === period) {
+      qqListeningRankPending.value = false;
+    }
+  }
+}
+
+function changeQqListeningRankPeriod(period: QqListeningRankPeriod) {
+  qqListeningRankPeriod.value = period;
+  qqListeningRankError.value = "";
+  void loadListeningRankRange(true);
+}
+
+async function refreshAccountListeningRank() {
+  await loadListeningRankRange(true);
 }
 
 function resetQqHomeRankings() {
@@ -3090,6 +3271,7 @@ async function loadStreamingHomeData(
   }
   streamingHomeError.value = "";
   if (provider === "qq") {
+    qqHomePlaylistsError.value = "";
     void loadQqHomeRankings();
   }
   const [recommendationsResult, playlistsResult, radarResult, roamingResult] = await Promise.allSettled([
@@ -3142,6 +3324,9 @@ async function loadStreamingHomeData(
     [provider]: streamingHomeTracks.value.map((track) => ({ ...track }))
   };
   streamingHomePlaylists.value = nextPlaylists;
+  if (provider === "qq" && playlistsResult.status === "rejected") {
+    qqHomePlaylistsError.value = "推荐歌单加载失败，请稍后刷新。";
+  }
   streamingRadarTracks.value = nextRadarTracks;
   streamingRadarState.value = radarResult.status === "fulfilled" ? "success" : "error";
   streamingRadarError.value = radarResult.status === "rejected" && radarResult.reason instanceof Error
@@ -3155,6 +3340,27 @@ async function loadStreamingHomeData(
 
   streamingHomeState.value = "success";
   saveStreamingHomeSnapshot(provider);
+}
+
+async function refreshQqHomePlaylists() {
+  const accountId = accounts.value.find(account => account.provider === "qq")?.userId;
+  if (!accountId || qqHomePlaylistsRefreshing.value) return;
+  qqHomePlaylistsRefreshing.value = true;
+  qqHomePlaylistsError.value = "";
+  try {
+    const result = await loadFeaturedPlaylists("qq", true);
+    if (streamingSource.value !== "qq" || selectedStreamingAccount.value?.userId !== accountId) return;
+    streamingHomePlaylists.value = result.map(toPlaylist)
+      .filter((playlist): playlist is Playlist => Boolean(playlist))
+      .map(playlist => ({ ...playlist, source: "qq", accountScoped: true, streamingTemplate: true }));
+    saveStreamingHomeSnapshot("qq");
+  } catch {
+    if (streamingSource.value === "qq" && selectedStreamingAccount.value?.userId === accountId) {
+      qqHomePlaylistsError.value = "推荐歌单刷新失败，已保留上次结果。";
+    }
+  } finally {
+    qqHomePlaylistsRefreshing.value = false;
+  }
 }
 
 async function loadStreamingRadarData() {
@@ -3197,6 +3403,9 @@ async function refreshBackendData() {
       // 保留已知账号，避免一次暂时的网络错误把登录状态从界面清掉。
     }
   }
+  accounts.value.forEach((currentAccount) => {
+    setPageDataCacheAccountScope(currentAccount.provider, currentAccount.userId);
+  });
 
   homepageState.value = "loading";
   homepageError.value = "";
@@ -3252,7 +3461,6 @@ async function refreshBackendData() {
 
   if (homepageResult.status === "fulfilled") {
     homepageData.value = toHomepageData(homepageResult.value);
-    homepageFeaturedIndex.value = 0;
     homepageState.value = "success";
   } else {
     homepageData.value = { banners: [], playlists: [], songs: [], hasMore: false };
@@ -3277,44 +3485,6 @@ async function refreshBackendData() {
   }
   await loadStreamingHomeData();
   restorePersistedSession(stateResult.status === "fulfilled" ? stateResult.value : undefined);
-}
-
-async function refreshHomepageRecommendations() {
-  if (homepageRefreshState.value === "loading") {
-    return;
-  }
-  homepageRefreshState.value = "loading";
-  homepageError.value = "";
-  homepageRefreshNotice.value = "";
-  try {
-    const result = await loadHomepage(true);
-    const refreshed = toHomepageData(result);
-    const previousIds = homepagePlaylists.value.map((playlist) => playlist.id).join(",");
-    const refreshedIds = refreshed.playlists.map((playlist) => playlist.id).join(",");
-    homepageData.value = refreshed;
-    homepageFeaturedIndex.value = 0;
-    homepageState.value = "success";
-    homepageRefreshNotice.value = previousIds === refreshedIds
-      ? "网易云暂未返回新的推荐歌单"
-      : "推荐歌单已刷新";
-  } catch {
-    homepageState.value = "error";
-    homepageError.value = "首页推荐暂不可用，请确认音乐 API 已启动。";
-  } finally {
-    homepageRefreshState.value = "idle";
-  }
-}
-
-function nextHomepageSong() {
-  if (homepageSongs.value.length > 0) {
-    homepageFeaturedIndex.value = (homepageFeaturedIndex.value + 1) % homepageSongs.value.length;
-  }
-}
-
-function previousHomepageSong() {
-  if (homepageSongs.value.length > 0) {
-    homepageFeaturedIndex.value = (homepageFeaturedIndex.value - 1 + homepageSongs.value.length) % homepageSongs.value.length;
-  }
 }
 
 async function loadDailyRecommendationData() {
@@ -3428,7 +3598,7 @@ async function performSearch(page = 1) {
 
 function submitSearch() {
   if (searchDebounceTimer) window.clearTimeout(searchDebounceTimer);
-  void performSearch(1);
+  return performSearch(1);
 }
 
 function focusStreamingSearch() {
@@ -3488,7 +3658,9 @@ async function loadStreamingArtistDetail(artist: CatalogSearchArtist) {
     const topSongs = topSongsResult.status === "fulfilled" ? topSongsResult.value : [];
     const songPage = songPageResult.status === "fulfilled" ? songPageResult.value : null;
     if (topSongsResult.status === "rejected" && songPageResult.status === "rejected") {
-      throw new Error("歌手歌曲加载失败，请稍后重试。");
+      streamingArtistState.value = "error";
+      streamingArtistError.value = "歌手歌曲加载失败，请稍后重试。";
+      return;
     }
     streamingArtistDetail.value = detail ?? {
       provider,
@@ -3777,6 +3949,7 @@ function openAuthPanel() {
 }
 
 function openProviderAuthPanel(provider: AccountProvider) {
+  if (provider === "qq") void finishQqListeningSession(false);
   selectedAuthProvider.value = provider;
   accountMenuVisible.value = false;
   streamingSourceMenuVisible.value = false;
@@ -4052,6 +4225,60 @@ async function refreshListeningDataSummary() {
   }
 }
 
+async function refreshQqListeningDataSummaries(force = false) {
+  if (qqListeningDataPending.value) return;
+  qqListeningDataPending.value = true;
+  qqListeningDataError.value = "";
+  try {
+    const summaries = await loadQqListeningDataSummaries(force);
+    qqListeningDataSummaries.value = Array.isArray(summaries) ? summaries : [];
+    if (!qqListeningDataSummaries.value.some((summary) => summary.accountId === selectedQqListeningDataAccountId.value)) {
+      selectedQqListeningDataAccountId.value = qqListeningDataSummaries.value[0]?.accountId ?? "";
+    }
+  } catch {
+    qqListeningDataError.value = "QQ 本地听歌排行数据加载失败，请确认后端已启动。";
+  } finally {
+    qqListeningDataPending.value = false;
+  }
+}
+
+async function deleteSelectedQqListeningStats() {
+  const accountId = selectedQqListeningDataAccountId.value;
+  if (
+    qqListeningDataDeletePending.value
+    || !accountId
+    || !qqListeningDataRangeValid.value
+  ) return;
+  const accountName = selectedQqListeningDataSummary.value?.nickname || accountId;
+  const rangeLabel = qqListeningDataDeleteMode.value === "all"
+    ? "全部记录"
+    : `${qqListeningDataDeleteFrom.value} 至 ${qqListeningDataDeleteTo.value}`;
+  const confirmed = window.confirm(
+    `确认删除 QQ 本地听歌排行「${accountName}」的${rangeLabel}？\n\n`
+      + "只删除本机保存的听歌排行，不会影响 QQ 音乐云端最近播放。此操作无法撤销。"
+  );
+  if (!confirmed) return;
+
+  qqListeningDataDeletePending.value = true;
+  qqListeningDataNotice.value = "";
+  qqListeningDataError.value = "";
+  try {
+    await finishQqListeningSession(false);
+    await deleteQqListeningStats(accountId, qqListeningDataDeleteMode.value === "all"
+      ? { all: true }
+      : { from: qqListeningDataDeleteFrom.value, to: qqListeningDataDeleteTo.value });
+    qqListeningDataNotice.value = `已删除「${accountName}」的${rangeLabel}。`;
+    await refreshQqListeningDataSummaries(true);
+    if (accounts.value.some((candidate) => candidate.provider === "qq" && candidate.userId === accountId)) {
+      await loadListeningRankRange(true);
+    }
+  } catch {
+    qqListeningDataError.value = "QQ 本地听歌排行删除失败，现有数据未改变。";
+  } finally {
+    qqListeningDataDeletePending.value = false;
+  }
+}
+
 async function flushListeningStatsBeforeDeletion() {
   if (listeningStatsSaveTimer) {
     window.clearTimeout(listeningStatsSaveTimer);
@@ -4098,6 +4325,7 @@ async function deleteSelectedListeningStats() {
 
 async function handleAuthenticated(nextAccount: AccountView) {
   const provider = nextAccount.provider === "qq" ? "qq" : "netease";
+  setPageDataCacheAccountScope(provider, nextAccount.userId);
   accounts.value = [
     ...accounts.value.filter((candidate) => candidate.provider !== nextAccount.provider),
     nextAccount
@@ -4128,8 +4356,11 @@ async function handleAuthenticated(nextAccount: AccountView) {
 }
 
 async function handleProviderLogout(provider: AccountProvider) {
+  const accountAtLogout = accounts.value.find((candidate) => candidate.provider === provider);
   try {
+    if (provider === "qq") await finishQqListeningSession();
     await logoutProvider(provider);
+    clearPageDataCacheAccountScope(provider, accountAtLogout?.userId);
     streamingHomeCache.clear(provider);
     accounts.value = accounts.value.filter((candidate) => candidate.provider !== provider);
     if (streamingSource.value === provider) {
@@ -4170,7 +4401,7 @@ function pushNavigation(entry: NavigationEntry) {
   navigationIndex.value = navigationHistory.value.length - 1;
 }
 
-function applyNavigation(entry: NavigationEntry): Promise<void> {
+async function applyNavigation(entry: NavigationEntry) {
   const requestId = ++playlistRequestId;
   activeView.value = entry.view;
   selectedPlaylist.value = entry.playlist ?? null;
@@ -4190,32 +4421,43 @@ function applyNavigation(entry: NavigationEntry): Promise<void> {
   searchError.value = "";
 
   if (!entry.playlist) {
-    return Promise.resolve();
+    return;
   }
 
   if (entry.playlist.id.startsWith("streaming-daily-")) {
     const provider = entry.playlist.source === "qq" ? "qq" : "netease";
     catalogResults.value = streamingDailyTrackCache.value[provider].map((track) => ({ ...track }));
     playlistState.value = "success";
-    return Promise.resolve();
+    return;
   }
 
   if (entry.playlist.id.startsWith("account-favorites-detail-")) {
-    catalogResults.value = accountFavoriteTracks.value.map((track) => ({ ...track }));
-    playlistState.value = "success";
-    return Promise.resolve();
+    try {
+      const raw = await loadAccountFavorites(entry.playlist.source || streamingSource.value);
+      if (requestId !== playlistRequestId) return;
+      const tracks = raw.map(toTrack).filter((track): track is Track => Boolean(track)).map(track => ({ ...track, liked: true }));
+      accountFavoriteTracks.value = tracks;
+      catalogResults.value = tracks.map(track => ({ ...track }));
+      playlistState.value = "success";
+    } catch {
+      if (requestId !== playlistRequestId) return;
+      playlistState.value = "error";
+      playlistError.value = "喜欢的歌曲加载失败，请刷新重试。";
+    }
+    return;
   }
 
   if (entry.playlist.id === "favorites" || entry.playlist.userManaged || entry.playlist.source === "local-user") {
     playlistState.value = "success";
-    return Promise.resolve();
+    return;
   }
 
   const playlistRequest = entry.playlist.accountScoped
     ? loadAccountPlaylist(entry.playlist.id, entry.playlist.source || account.value?.provider || "netease")
     : loadCatalogPlaylist(entry.playlist.id);
 
-  return playlistRequest.then((tracks) => {
+  try {
+    const tracks = await playlistRequest;
     if (requestId !== playlistRequestId) {
       return;
     }
@@ -4224,7 +4466,7 @@ function applyNavigation(entry: NavigationEntry): Promise<void> {
       : [];
     playlistState.value = "success";
     backendStatus.value = "已连接";
-  }).catch(() => {
+  } catch {
     if (requestId !== playlistRequestId) {
       return;
     }
@@ -4232,7 +4474,7 @@ function applyNavigation(entry: NavigationEntry): Promise<void> {
     playlistError.value = entry.playlist?.accountScoped
       ? "账号歌单加载失败，请确认网易云登录状态和 API 服务。"
       : "歌单歌曲加载失败，请确认 Java 后端和网易云 API 都已启动。";
-  });
+  }
 }
 
 function selectView(view: ViewKey) {
@@ -4274,6 +4516,17 @@ async function loadCloudData() {
   }
 }
 
+async function refreshCloudData() {
+  invalidatePageDataCacheForProvider("netease");
+  await loadCloudData();
+}
+
+async function refreshStreamingLibraryData() {
+  const activeAccount = selectedStreamingAccount.value;
+  if (activeAccount) invalidatePageDataCacheForProvider(activeAccount.provider);
+  await loadStreamingLibraryData();
+}
+
 async function uploadCloudTracks() {
   if (!neteaseAccount.value) {
     openProviderAuthPanel("netease");
@@ -4284,7 +4537,7 @@ async function uploadCloudTracks() {
   try {
     const uploaded = await uploadCloudAudio();
     if (uploaded.length) {
-      await loadCloudData();
+      await refreshCloudData();
       showSearchToast(`已上传 ${uploaded.length} 首歌曲到音乐云盘`);
     }
   } catch (error) {
@@ -4353,6 +4606,9 @@ function openStreamingLibraryView(view: "streaming-recent" | "listening-ranking"
   const entry: NavigationEntry = { view };
   pushNavigation(entry);
   void applyNavigation(entry);
+  if (view === "listening-ranking") {
+    void loadListeningRankRange(true);
+  }
 }
 
 async function loadAccountSocialPage(mode: "following" | "followers", page: number) {
@@ -4498,6 +4754,60 @@ function playAccountRecentTrackListRandom(trackIds: string[]) {
 function toggleAccountRecentFavorite(trackId: string) {
   const track = accountRecentTracks.value.find((candidate) => candidate.id === trackId);
   if (track) void toggleTrackLiked(track);
+}
+
+async function runAccountRecentTrackBatch(action: TrackBatchAction, ids: string[]): Promise<TrackBatchResult> {
+  const accountAtStart = selectedStreamingAccount.value;
+  if (!accountAtStart || playlistMutationPending.value) return { succeeded: [], failed: ids };
+  const provider = accountAtStart.provider;
+  const tracks = accountRecentTracksById(ids);
+  const trackById = new Map(tracks.map(track => [track.id, track]));
+  const selectedIds = ids.filter(id => trackById.has(id));
+  const isCurrent = () => selectedStreamingAccount.value?.userId === accountAtStart.userId
+    && streamingSource.value === provider;
+
+  if (action === "add-to-playlist") {
+    if (!tracks.length) return { succeeded: [], failed: ids };
+    trackPlaylistPicker.value = { tracks, mode: "streaming" };
+    return { succeeded: selectedIds, failed: ids.filter(id => !trackById.has(id)), message: "请选择要加入的自建歌单。" };
+  }
+  if (action === "queue") {
+    const existing = new Set(playbackQueue.value.map(track => track.id));
+    const additions = tracks.filter(track => !existing.has(track.id)).map(createQueueTrack);
+    playbackQueue.value = [...playbackQueue.value, ...additions];
+    await persistPlaybackQueue();
+    return { succeeded: selectedIds, failed: ids.filter(id => !trackById.has(id)), message: `已将 ${selectedIds.length} 首歌曲加入播放列表。` };
+  }
+
+  playlistMutationPending.value = true;
+  try {
+    if (action === "clear-recent") {
+      const result = await deleteAccountRecentTracks(selectedIds, provider);
+      if (!isCurrent()) return { succeeded: [], failed: ids };
+      accountRecentTracks.value = Array.isArray(result.tracks)
+        ? result.tracks.map(toTrack).filter((track): track is Track => Boolean(track))
+        : accountRecentTracks.value.filter(track => !result.deletedTrackIds.includes(track.id));
+      invalidatePageDataCacheForProvider(provider);
+      const deleted = new Set(result.deletedTrackIds);
+      return { succeeded: ids.filter(id => deleted.has(id)), failed: ids.filter(id => !deleted.has(id)) };
+    }
+    if (action === "like") {
+      const result = await runTrackBatch(selectedIds, async id => {
+        const track = trackById.get(id);
+        if (!track) throw new Error("歌曲不可用");
+        if (!accountFavoriteTracks.value.some(item => item.id === id)) {
+          await saveAccountFavorite(toPersistedTrack(track), provider);
+        }
+        if (!isCurrent()) return;
+        syncAccountFavoriteFlag(id, true);
+        accountFavoriteTracks.value = [{ ...track, liked: true }, ...accountFavoriteTracks.value.filter(item => item.id !== id)];
+      }, isCurrent);
+      return { ...result, failed: [...result.failed, ...ids.filter(id => !trackById.has(id))] };
+    }
+    return { succeeded: [], failed: ids };
+  } finally {
+    playlistMutationPending.value = false;
+  }
 }
 
 function accountListeningRankTracksById(trackIds: string[]) {
@@ -4660,16 +4970,6 @@ function handleGlobalNavigationShortcut(event: KeyboardEvent) {
   if (wantsForward) {
     event.preventDefault();
     navigateForward();
-  }
-}
-
-function openDailyRecommendations() {
-  pageTransitionDirection.value = "forward";
-  const entry = { view: "daily" as ViewKey };
-  pushNavigation(entry);
-  void applyNavigation(entry);
-  if (dailyRecommendationState.value === "idle") {
-    void loadDailyRecommendationData();
   }
 }
 
@@ -4944,13 +5244,9 @@ async function toggleSelectedPlaylistCollection() {
   playlistCollectionPending.value = true;
   scanError.value = "";
   try {
-    let platformSynced = true;
-    try {
-      const result = await setAccountPlaylistSubscription(playlist.id, subscribe, provider);
-      platformSynced = result.synced !== false;
-    } catch {
-      platformSynced = false;
-    }
+    const platformSynced = await setAccountPlaylistSubscription(playlist.id, subscribe, provider)
+      .then((result) => result.synced)
+      .catch(() => false);
     savePlaylistSubscriptionOverride(provider, providerAccount.userId, {
       id: playlist.id,
       title: playlist.title,
@@ -4990,6 +5286,7 @@ async function refreshStreamingDailyMix() {
   if (!playlist || !isStreamingDailyPlaylist.value) return;
   const provider: AccountProvider = playlist.source === "qq" ? "qq" : "netease";
   const previousTracks = selectedPlaylistTracks.value.map((track) => ({ ...track }));
+  invalidatePageDataCacheForProvider(provider);
   await loadStreamingHomeData(provider);
   if (streamingHomeState.value === "error") {
     streamingDailyTrackCache.value = { ...streamingDailyTrackCache.value, [provider]: previousTracks };
@@ -5007,6 +5304,7 @@ async function refreshStreamingDailyMix() {
 }
 
 async function refreshStreamingPlaylist() {
+  if (playlistMutationPending.value) return;
   const playlist = selectedPlaylist.value;
   if (!playlist) return;
   if (isStreamingDailyPlaylist.value) {
@@ -5014,25 +5312,94 @@ async function refreshStreamingPlaylist() {
     return;
   }
   if (playlist.streamingTemplate) {
+    if (playlist.accountScoped) {
+      invalidatePageDataCacheForProvider(playlist.source === "qq" ? "qq" : "netease");
+    } else {
+      invalidatePageDataCache("public|");
+    }
     await applyNavigation({ view: "playlist", playlist });
   }
 }
 
-function reorderStreamingPlaylistTrack(draggedTrackId: string, targetTrackId: string) {
+async function runStreamingTrackBatch(action: TrackBatchAction, ids: string[]): Promise<TrackBatchResult> {
   const playlist = selectedPlaylist.value;
-  if (!playlist || draggedTrackId === targetTrackId) return;
+  const mode = selectedPlaylistBatchMode.value;
+  const accountAtStart = selectedStreamingAccount.value;
+  const actionAllowed = mode === "favorites" ? action === "unlike" : action === "like" || action === "remove";
+  if (!playlist || !mode || !accountAtStart || playlistMutationPending.value || !actionAllowed) {
+    return { succeeded: [], failed: ids };
+  }
+  const provider = accountAtStart.provider;
+  const tracks = new Map(selectedPlaylistTracks.value.map(track => [track.id, track]));
+  const isCurrent = () => selectedStreamingAccount.value?.userId === accountAtStart.userId
+    && streamingSource.value === accountAtStart.provider && selectedPlaylist.value?.id === playlist.id;
+  playlistMutationPending.value = true;
+  try {
+    return await runTrackBatch(ids, async id => {
+      const track = tracks.get(id);
+      if (!track || track.source !== provider) throw new Error("歌曲不可用");
+      if (action === "remove") await removeAccountPlaylistTrack(playlist.id, id, provider);
+      else if (action === "unlike") await removeAccountFavorite(id, provider);
+      else if (!accountFavoriteTracks.value.some(item => item.id === id)) await saveAccountFavorite(toPersistedTrack(track), provider);
+      if (!isCurrent()) return;
+      if (action !== "remove") {
+        const liked = action === "like";
+        syncAccountFavoriteFlag(id, liked);
+        accountFavoriteTracks.value = liked
+          ? [{ ...track, liked: true }, ...accountFavoriteTracks.value.filter(item => item.id !== id)]
+          : accountFavoriteTracks.value.filter(item => item.id !== id);
+      }
+      if (action !== "like") {
+        catalogResults.value = catalogResults.value.filter(item => item.id !== id);
+        updateSelectedPlaylist({ ...selectedPlaylist.value!, count: catalogResults.value.length, imageUrl: catalogResults.value[0]?.coverUrl || "" });
+      }
+      accountPlaylists.value = accountPlaylists.value.map(item => {
+        if (item.favorite && action !== "remove") return { ...item, count: accountFavoriteTracks.value.length, imageUrl: accountFavoriteTracks.value[0]?.coverUrl || "" };
+        if (item.id === playlist.id && action === "remove") return { ...item, count: catalogResults.value.length, imageUrl: catalogResults.value[0]?.coverUrl || "" };
+        return item;
+      });
+    }, isCurrent);
+  } finally { playlistMutationPending.value = false; }
+}
+
+async function reorderStreamingPlaylistTrack(draggedTrackId: string, targetTrackId: string) {
+  const playlist = selectedPlaylist.value;
+  const accountAtStart = selectedStreamingAccount.value;
+  if (!playlist || !accountAtStart || !selectedPlaylistBatchMode.value || playlistMutationPending.value || playlistOrderCooling.value || draggedTrackId === targetTrackId) return;
+  const previousIds = selectedPlaylistTracks.value.map(track => track.id);
   const tracks = [...selectedPlaylistTracks.value];
   const fromIndex = tracks.findIndex((track) => track.id === draggedTrackId);
   const toIndex = tracks.findIndex((track) => track.id === targetTrackId);
   if (fromIndex < 0 || toIndex < 0) return;
   const [movedTrack] = tracks.splice(fromIndex, 1);
   tracks.splice(toIndex, 0, movedTrack);
-  playlistTrackOrder.value = {
-    ...playlistTrackOrder.value,
-    [playlist.id]: tracks.map(trackOrderKey)
-  };
-  persistPlaylistTrackOrder();
+  const provider = accountAtStart.provider;
+  const actualPlaylist = playlist.id.startsWith("account-favorites-detail-")
+    ? accountPlaylists.value.find(item => item.favorite && item.source === provider) : playlist;
+  if (!actualPlaylist) { playlistOrderMessage.value = "请先刷新音乐库，再调整顺序。"; return; }
+  const isCurrent = () => selectedPlaylist.value?.id === playlist.id && selectedStreamingAccount.value?.userId === accountAtStart.userId && streamingSource.value === provider;
+  playlistMutationPending.value = true;
+  playlistOrderMessage.value = `正在保存并校验${streamingProviderName.value}歌曲顺序…`;
+  try {
+    await reorderAccountPlaylistTracks(actualPlaylist.id, tracks.map(track => track.id), previousIds, provider);
+    if (!isCurrent()) return;
+    catalogResults.value = tracks;
+    if (selectedPlaylistBatchMode.value === "favorites") accountFavoriteTracks.value = tracks.map(track => ({ ...track, liked: true }));
+    updateSelectedPlaylist({ ...playlist, imageUrl: tracks[0]?.coverUrl || "" });
+    accountPlaylists.value = accountPlaylists.value.map(item => item.id === actualPlaylist.id ? { ...item, imageUrl: tracks[0]?.coverUrl || "" } : item);
+    playlistOrderMessage.value = `顺序已同步${streamingProviderName.value}并校验，3 秒后可继续调整。`;
+  } catch (error) {
+    if (isCurrent()) playlistOrderMessage.value = error instanceof Error ? error.message : "排序未保存，请刷新后重试。";
+  } finally {
+    playlistMutationPending.value = false;
+    playlistOrderCooling.value = true;
+    clearTimeout(playlistOrderCooldownTimer);
+    playlistOrderCooldownTimer = setTimeout(() => { playlistOrderCooling.value = false; }, 3000);
+  }
 }
+
+watch(() => selectedPlaylist.value?.id, () => { playlistOrderMessage.value = ""; });
+onBeforeUnmount(() => clearTimeout(playlistOrderCooldownTimer));
 
 async function searchFromStreamingDailyMix(query: string) {
   const homeEntry: NavigationEntry = { view: "home" };
@@ -5298,7 +5665,8 @@ async function confirmPlaylistNameDialog() {
         accountPlaylists.value.length
       );
       if (!created) {
-        throw new Error("创建成功，但未能读取新歌单");
+        playlistNameError.value = "创建成功，但未能读取新歌单";
+        return;
       }
       accountPlaylists.value = [{ ...created, accountScoped: true }, ...accountPlaylists.value];
       playlistNameDialogVisible.value = false;
@@ -5401,14 +5769,6 @@ function playSelectedPlaylistRandom() {
   playbackQueue.value = shuffled.map((track) => createQueueTrack(track));
   void persistPlaybackQueue();
   void playTrack(shuffled[0]);
-}
-
-function getPlaylistTrackFolder(track: Track) {
-  if (!track.filePath) {
-    return "未知文件夹";
-  }
-  const parts = track.filePath.split(/[\\/]/);
-  return parts.slice(0, -1).join("\\") || "未知文件夹";
 }
 
 let trackAssetRequestId = 0;
@@ -5558,6 +5918,173 @@ function queueListeningStatsSave(snapshot: ListeningStatsState) {
 function resetListeningSample() {
   listeningSampleTrackId = undefined;
   listeningSampleTime = undefined;
+}
+
+function qqListeningAccountForTrack(track: Track) {
+  if (track.source !== "qq" || !track.id.startsWith("qq:")) return undefined;
+  return accounts.value.find((candidate) => candidate.provider === "qq");
+}
+
+function scheduleQqListeningRetry() {
+  if (qqListeningRetryTimer !== undefined) return;
+  qqListeningRetryTimer = window.setTimeout(() => {
+    qqListeningRetryTimer = undefined;
+    for (const sessionId of qqListeningSessions.keys()) {
+      void flushQqListeningSession(sessionId !== activeQqListeningSessionId, sessionId);
+    }
+  }, 5_000);
+}
+
+async function flushQqListeningSession(force = false, sessionId = activeQqListeningSessionId) {
+  if (sessionId === undefined) return;
+  const existingFlush = qqListeningFlushes.get(sessionId);
+  if (existingFlush) {
+    if (force) {
+      await existingFlush;
+      return flushQqListeningSession(true, sessionId);
+    }
+    return;
+  }
+  const currentSession = qqListeningSessions.get(sessionId);
+  if (!currentSession) return;
+  const prepared = prepareQqListeningFlush(currentSession, force);
+  qqListeningSessions.set(sessionId, prepared.session);
+  if (!prepared.payload) {
+    if (
+      sessionId !== activeQqListeningSessionId
+      && prepared.session.pendingSeconds <= 0
+      && prepared.session.pendingPlayCount === 0
+      && !prepared.session.inFlight
+    ) {
+      qqListeningSessions.delete(sessionId);
+    }
+    return;
+  }
+
+  const operation = (async () => {
+    try {
+      await reportQqListeningDelta(prepared.payload!);
+      if (accounts.value.some(account => account.provider === "qq" && account.userId === prepared.payload!.accountId)) {
+        streamingHomeCache.clear("qq");
+      }
+      const latest = qqListeningSessions.get(sessionId);
+      if (latest) qqListeningSessions.set(sessionId, acknowledgeQqListeningFlush(latest));
+    } catch {
+      const latest = qqListeningSessions.get(sessionId);
+      if (latest) qqListeningSessions.set(sessionId, failQqListeningFlush(latest));
+      scheduleQqListeningRetry();
+    }
+  })();
+  qqListeningFlushes.set(sessionId, operation);
+  await operation;
+  if (qqListeningFlushes.get(sessionId) === operation) {
+    qqListeningFlushes.delete(sessionId);
+  }
+
+  const latest = qqListeningSessions.get(sessionId);
+  if (!latest) return;
+  if (sessionId !== activeQqListeningSessionId) {
+    if (latest.pendingSeconds > 0 || latest.pendingPlayCount > 0) {
+      if (!qqListeningRetryTimer) await flushQqListeningSession(true, sessionId);
+    } else {
+      qqListeningSessions.delete(sessionId);
+    }
+  } else if (latest.pendingSeconds >= 15 || latest.pendingPlayCount > 0) {
+    void flushQqListeningSession(false, sessionId);
+  }
+}
+
+function finishQqListeningSession(clearCloudSession = true) {
+  if (clearCloudSession) qqRecentPlaybackSession = undefined;
+  const sessionId = activeQqListeningSessionId;
+  if (sessionId === undefined) return Promise.resolve();
+  const session = qqListeningSessions.get(sessionId);
+  if (session) qqListeningSessions.set(sessionId, pauseQqListeningSession(session));
+  activeQqListeningSessionId = undefined;
+  return flushQqListeningSession(true, sessionId);
+}
+
+function ensureQqListeningSession(track: Track, mediaTime?: number) {
+  const account = qqListeningAccountForTrack(track);
+  if (!account) {
+    void finishQqListeningSession();
+    return undefined;
+  }
+  const accountId = account.userId;
+
+  const activeSession = activeQqListeningSessionId === undefined
+    ? undefined
+    : qqListeningSessions.get(activeQqListeningSessionId);
+  if (!activeSession || activeSession.accountId !== accountId || activeSession.track.id !== track.id) {
+    void finishQqListeningSession(false);
+    const sessionId = ++qqListeningSessionSerial;
+    activeQqListeningSessionId = sessionId;
+    qqListeningSessions.set(sessionId, createQqListeningSession(
+      accountId,
+      toPersistedTrack(track),
+      account.nickname,
+      account.avatarUrl
+    ));
+  }
+
+  const sessionId = activeQqListeningSessionId;
+  // Local-stat flushes and deletion must not restart the actual cloud playback.
+  if (!qqRecentPlaybackSession || qqRecentPlaybackSession.accountId !== accountId
+    || qqRecentPlaybackSession.track.id !== track.id) {
+    qqRecentPlaybackSession = createQqListeningSession(accountId, toPersistedTrack(track));
+  }
+  if (sessionId !== undefined && Number.isFinite(mediaTime)) {
+    qqRecentPlaybackSession = sampleQqListeningPlayback(qqRecentPlaybackSession, Number(mediaTime), performance.now());
+    const session = qqListeningSessions.get(sessionId);
+    if (session) {
+      qqListeningSessions.set(
+        sessionId,
+        sampleQqListeningPlayback(session, Number(mediaTime), performance.now())
+      );
+    }
+  }
+  return sessionId;
+}
+
+function pauseCurrentQqListeningSession() {
+  if (qqRecentPlaybackSession) qqRecentPlaybackSession = pauseQqListeningSession(qqRecentPlaybackSession);
+  const sessionId = activeQqListeningSessionId;
+  if (sessionId === undefined) return;
+  const session = qqListeningSessions.get(sessionId);
+  if (session) qqListeningSessions.set(sessionId, pauseQqListeningSession(session));
+}
+
+function recordCurrentQqListening(mediaTime: number) {
+  if (!isPlaying.value || isSeeking.value || localSourceBusy.value) return;
+  const sessionId = ensureQqListeningSession(currentTrack.value, mediaTime);
+  if (sessionId !== undefined) {
+    void reportCurrentQqRecentPlay();
+    void flushQqListeningSession(false, sessionId);
+  }
+}
+
+async function reportCurrentQqRecentPlay() {
+  const session = qqRecentPlaybackSession;
+  if (!session) return;
+  const prepared = beginQqRecentPlayReport(session);
+  qqRecentPlaybackSession = prepared.session;
+  if (!prepared.payload) return;
+  try {
+    const result = await reportQqRecentPlay(prepared.payload);
+    if (qqRecentPlaybackSession?.recentReportSessionId === prepared.payload.sessionId) {
+      qqRecentPlaybackSession = { ...qqRecentPlaybackSession, recentReportStatus: "reported" };
+    }
+    if (selectedStreamingAccount.value?.provider === "qq"
+      && selectedStreamingAccount.value.userId === prepared.payload.accountId) {
+      accountRecentRevision += 1;
+      accountRecentTracks.value = result.tracks.map(toTrack).filter((track): track is Track => Boolean(track));
+    }
+  } catch (error) {
+    if (qqRecentPlaybackSession?.recentReportSessionId === prepared.payload.sessionId) {
+      qqRecentPlaybackSession = { ...qqRecentPlaybackSession, recentReportStatus: "failed" };
+    }
+    showSearchToast(error instanceof Error ? error.message : "QQ 最近播放同步失败，本次不会重复提交");
+  }
 }
 
 function canScrobbleTrack(track: Track) {
@@ -5729,7 +6256,7 @@ function findLocalLyricFallback(track: Track) {
   }) ?? candidates[0];
 }
 
-async function loadOnlineTrackAssets(track: Track) {
+async function loadOnlineTrackAssets(track: Track, preparedNetworkAudioUrl?: string) {
   if (track.source === "cloud") {
     let cloudLyrics: Awaited<ReturnType<typeof loadCloudLyrics>> | null = null;
     try {
@@ -5737,6 +6264,7 @@ async function loadOnlineTrackAssets(track: Track) {
     } catch {
       // A cloud file may legitimately have no embedded LYRICS metadata.
     }
+    const cloudLyricCredits = cloudLyrics?.credits;
     const localLyricFallback = cloudLyrics?.lyrics?.trim()
       ? undefined
       : findLocalLyricFallback(track);
@@ -5754,8 +6282,8 @@ async function loadOnlineTrackAssets(track: Track) {
         ?? track.lyricsFormat,
       lyricsSource: cloudLyrics?.source
         ?? (localLyricFallback?.lyrics ? "local" : track.lyricsSource),
-      lyricCredits: cloudLyrics?.credits?.length
-        ? normalizeLyricCredits(cloudLyrics.credits)
+      lyricCredits: cloudLyricCredits?.length
+        ? normalizeLyricCredits(cloudLyricCredits)
         : localLyricFallback?.lyricCredits ?? track.lyricCredits,
       hasLyrics: Boolean(cloudLyrics?.lyrics ?? localLyricFallback?.lyrics ?? track.lyrics)
     };
@@ -5785,7 +6313,7 @@ async function loadOnlineTrackAssets(track: Track) {
   const localLyricFallback = onlineLyrics ? undefined : findLocalLyricFallback(track);
   const proxyCoverUrl = `/catalog/tracks/${encodeURIComponent(track.id)}/cover`;
   const primaryCoverUrl = detail?.coverUrl ?? track.coverUrl ?? proxyCoverUrl;
-  const networkAudioUrl = applyOnlineAudioCachePolicy(
+  const networkAudioUrl = preparedNetworkAudioUrl ?? applyOnlineAudioCachePolicy(
     loadCatalogAudio(track.id, requestedPlaybackQuality(track)),
     onlineAudioCachePolicy.value
   );
@@ -5846,6 +6374,9 @@ async function refreshAccountsAfterPlaybackFailure(track: Track) {
   try {
     const refreshedAccounts = await loadCurrentAccounts();
     accounts.value = refreshedAccounts;
+    refreshedAccounts.forEach((currentAccount) => {
+      setPageDataCacheAccountScope(currentAccount.provider, currentAccount.userId);
+    });
     account.value = refreshedAccounts.find((candidate) => candidate.provider === "netease") ?? null;
     if (!refreshedAccounts.some((candidate) => candidate.provider === provider)) {
       scanError.value = `${provider === "qq" ? "QQ 音乐" : "网易云音乐"}登录已失效，请重新登录。`;
@@ -5913,6 +6444,54 @@ function createNetworkFallbackTrack(track: Track) {
   } satisfies Track;
 }
 
+type ImmediatePlaybackResult =
+  | { played: true }
+  | { played: false; error: unknown };
+
+type ImmediatePlaybackAttempt = {
+  audio: HTMLAudioElement;
+  source: string;
+  track: Track;
+  networkAudioUrl?: string;
+  result: Promise<ImmediatePlaybackResult>;
+};
+
+function startOnlinePlaybackBeforeAssetLoad(track: Track, initialVolume: number): ImmediatePlaybackAttempt | undefined {
+  const audio = audioElement.value;
+  if (!audio || !track.source || !["cloud", "netease", "qq"].includes(track.source)) return undefined;
+
+  const networkAudioUrl = track.source === "netease" || track.source === "qq"
+    ? applyOnlineAudioCachePolicy(
+        loadCatalogAudio(track.id, requestedPlaybackQuality(track)),
+        onlineAudioCachePolicy.value
+      )
+    : undefined;
+  const networkTrack: Track = networkAudioUrl ? { ...track, audioUrl: networkAudioUrl } : track;
+  const localPlaybackTrack = preferLocalDownloadPlayback.value && networkAudioUrl
+    ? selectPreferredLocalPlaybackTrack(networkTrack, remoteTracks.value)
+    : undefined;
+  const immediateTrack: Track = localPlaybackTrack?.audioUrl
+    ? {
+        ...networkTrack,
+        audioUrl: localPlaybackTrack.audioUrl,
+        preferredLocalPlayback: true,
+        playbackFallbackUrl: networkAudioUrl,
+        playbackFormat: localPlaybackFormat(localPlaybackTrack)
+      }
+    : networkTrack;
+  if (!immediateTrack.audioUrl) return undefined;
+
+  currentTrack.value = immediateTrack;
+  prepareAudioSource(immediateTrack);
+  audio.volume = initialVolume;
+  const source = audio.src;
+  const result = audio.play().then<ImmediatePlaybackResult, ImmediatePlaybackResult>(
+    () => ({ played: true }),
+    (error: unknown) => ({ played: false, error })
+  );
+  return { audio, source, track: immediateTrack, networkAudioUrl, result };
+}
+
 async function playAudioWithNetworkFallback(
   audio: HTMLAudioElement,
   track: Track,
@@ -5942,7 +6521,23 @@ async function playAudioWithNetworkFallback(
   return fallbackTrack;
 }
 
+async function handlePlaybackStartFailure(audio: HTMLAudioElement, track: Track) {
+  audio.volume = volume.value / 100;
+  activePlaybackFade = null;
+  isPlaybackStarting.value = false;
+  isPlaying.value = false;
+  const loginExpired = await refreshAccountsAfterPlaybackFailure(track);
+  if (!loginExpired) {
+    scanError.value = track.source === "netease"
+      ? "网易云音频暂时无法播放，可能是版权或地区限制，请换一首歌曲。"
+      : "音频无法播放，请确认后端正在运行。";
+  }
+}
+
 async function playTrack(track: Track, options: PlayTrackOptions = {}) {
+  const previousAudio = audioElement.value;
+  if (previousAudio && !previousAudio.paused) recordCurrentQqListening(previousAudio.currentTime);
+  void finishQqListeningSession();
   isPlaybackStarting.value = true;
   const transitionToken = options.transitionToken;
   if (transitionToken === undefined) {
@@ -5953,6 +6548,8 @@ async function playTrack(track: Track, options: PlayTrackOptions = {}) {
     return;
   }
   const requestId = ++trackAssetRequestId;
+  localLyricsMatchRequestId += 1;
+  localLyricsMatchPending.value = false;
   resetLocalSourceState();
   stopPlaybackClock();
   isPlaying.value = false;
@@ -5973,12 +6570,18 @@ async function playTrack(track: Track, options: PlayTrackOptions = {}) {
   currentCoverFallbackActive.value = false;
   loadTrackLyrics(queueTrack);
 
-  const playbackTrack = await loadOnlineTrackAssets(queueTrack);
+  const shouldFadeIn = Boolean(options.fadeIn && playbackFadeEnabled.value && transitionToken !== undefined);
+  const initialVolume = shouldFadeIn ? 0 : volume.value / 100;
+  const immediatePlayback = startOnlinePlaybackBeforeAssetLoad(queueTrack, initialVolume);
+  const playbackTrack = await loadOnlineTrackAssets(queueTrack, immediatePlayback?.networkAudioUrl);
   if (requestId !== trackAssetRequestId) {
     return;
   }
   currentTrack.value = playbackTrack;
   loadTrackLyrics(playbackTrack);
+  if (shouldAutoMatchLocalLyrics(playbackTrack)) {
+    void matchLocalLyrics(playbackTrack, true, requestId);
+  }
   void nextTick(async () => {
     if (requestId !== trackAssetRequestId || (transitionToken !== undefined && transitionToken !== playbackFadeToken)) {
       return;
@@ -5992,23 +6595,35 @@ async function playTrack(track: Track, options: PlayTrackOptions = {}) {
         : "这首歌没有可播放地址。";
       return;
     }
-    prepareAudioSource(playbackTrack);
-    const shouldFadeIn = Boolean(options.fadeIn && playbackFadeEnabled.value && transitionToken !== undefined);
-    const initialVolume = shouldFadeIn ? 0 : volume.value / 100;
     let activePlaybackTrack = playbackTrack;
     try {
-      activePlaybackTrack = await playAudioWithNetworkFallback(audio, playbackTrack, initialVolume);
+      const playbackSource = resolveBackendUrl(playbackTrack.id === localAudioOwnerId.value && localAudioOverride.value
+        ? localAudioOverride.value
+        : playbackTrack.audioUrl);
+      const canReuseImmediatePlayback = immediatePlayback?.audio === audio
+        && immediatePlayback.source === playbackSource;
+      if (canReuseImmediatePlayback) {
+        const immediateResult = await immediatePlayback.result;
+        if (!immediateResult.played) {
+          if (!playbackTrack.preferredLocalPlayback) {
+            await handlePlaybackStartFailure(audio, activePlaybackTrack);
+            return;
+          }
+          activePlaybackTrack = await playAudioWithNetworkFallback(audio, playbackTrack, initialVolume, true);
+        }
+      } else {
+        prepareAudioSource(playbackTrack);
+        activePlaybackTrack = await playAudioWithNetworkFallback(audio, playbackTrack, initialVolume);
+      }
       if (requestId !== trackAssetRequestId) return;
       currentTrack.value = activePlaybackTrack;
-      if (activePlaybackTrack.source === "local" && localLyricsOnlineMatchEnabled.value) {
-        void matchLocalLyrics(activePlaybackTrack, true, requestId);
-      }
       playbackClock.reset(audio, performance.now());
       isPlaying.value = true;
       isPlaybackStarting.value = false;
       scanError.value = "";
       startPlaybackClock();
       startListeningScrobbleSession(activePlaybackTrack);
+      ensureQqListeningSession(activePlaybackTrack, audio.currentTime);
       recordCurrentTrackPlayStart(activePlaybackTrack);
       void recordPlayedTrack(activePlaybackTrack);
       void persistPlaybackState();
@@ -6020,16 +6635,7 @@ async function playTrack(track: Track, options: PlayTrackOptions = {}) {
         void fadeAudioVolume(audio, () => volume.value / 100, fadeDuration, transitionToken, "in");
       }
     } catch {
-      audio.volume = volume.value / 100;
-      activePlaybackFade = null;
-      isPlaybackStarting.value = false;
-      isPlaying.value = false;
-      const loginExpired = await refreshAccountsAfterPlaybackFailure(activePlaybackTrack);
-      if (!loginExpired) {
-        scanError.value = activePlaybackTrack.source === "netease"
-          ? "网易云音频暂时无法播放，可能是版权或地区限制，请换一首歌曲。"
-          : "音频无法播放，请确认后端正在运行。";
-      }
+      await handlePlaybackStartFailure(audio, activePlaybackTrack);
     }
   });
 }
@@ -6079,6 +6685,7 @@ function togglePlayback() {
       if (restartingEndedTrack || !listeningScrobbleSession) {
         startListeningScrobbleSession(currentTrack.value);
       }
+      ensureQqListeningSession(currentTrack.value, audio.currentTime);
       startPlaybackClock();
       recordCurrentTrackPlayStart(currentTrack.value);
       void recordPlayedTrack(currentTrack.value);
@@ -6089,6 +6696,8 @@ function togglePlayback() {
     resetPlaybackClock();
     resetListeningSample();
     resetCurrentScrobbleSample();
+    pauseCurrentQqListeningSession();
+    void flushQqListeningSession(true);
     isPlaying.value = false;
     stopPlaybackClock();
     void persistPlaybackState();
@@ -6495,6 +7104,7 @@ async function refreshHistoryTracks() {
   if (historyRefreshing.value) return;
   historyRefreshing.value = true;
   try {
+    invalidatePageDataCache((key) => key.includes("/library/history"));
     const result = await loadHistory();
     historyTracks.value = Array.isArray(result)
       ? result
@@ -6589,7 +7199,7 @@ async function toggleContextMenuTrackFavorite() {
 }
 
 function openTrackPlaylistPicker(track: Track, mode: TrackPlaylistPickerMode) {
-  trackPlaylistPicker.value = { track, mode };
+  trackPlaylistPicker.value = { tracks: [track], mode };
   scanError.value = "";
   closeLocalTrackContextMenu();
 }
@@ -6603,7 +7213,8 @@ async function addTrackToRegularPlaylist(playlist: Playlist) {
   if (!picker || picker.mode !== "regular") {
     return;
   }
-  const track = picker.track;
+  const track = picker.tracks[0];
+  if (!track) return;
 
   if (playlist.id === "favorites") {
     if (favoriteTracks.value.some((item) => item.id === track.id && item.source === track.source)) {
@@ -6658,7 +7269,8 @@ function addTrackToSelectedAggregatePlaylist(playlist: AggregatePlaylist) {
   if (!picker || picker.mode !== "aggregate") {
     return;
   }
-  const track = picker.track;
+  const track = picker.tracks[0];
+  if (!track) return;
   const source = track.source || "local";
   const aggregateTrack: AggregateTrackSource = {
     id: track.id,
@@ -6686,6 +7298,38 @@ function addTrackToSelectedAggregatePlaylist(playlist: AggregatePlaylist) {
   closeTrackPlaylistPicker();
 }
 
+async function addTracksToStreamingPlaylist(playlist: Playlist) {
+  const picker = trackPlaylistPicker.value;
+  const activeAccount = selectedStreamingAccount.value;
+  if (!picker || picker.mode !== "streaming" || !activeAccount || playlistMutationPending.value) return;
+  const tracks = picker.tracks.filter(track => track.source === activeAccount.provider);
+  if (!tracks.length) return;
+  playlistMutationPending.value = true;
+  try {
+    await addAccountPlaylistTracks(playlist.id, tracks.map(track => track.id), activeAccount.provider);
+    try {
+      const refreshed = await loadAccountPlaylists(activeAccount.provider);
+      if (selectedStreamingAccount.value?.userId === activeAccount.userId) {
+        accountPlaylists.value = toAccountPlaylistListWithOverrides(
+          refreshed,
+          activeAccount.provider === "qq" ? "qq" : "netease"
+        );
+      }
+    } catch {
+      accountPlaylists.value = accountPlaylists.value.map(item => item.id === playlist.id
+        ? { ...item, imageUrl: item.imageUrl || tracks[0]?.coverUrl }
+        : item);
+    }
+    scanNotice.value = `已将 ${tracks.length} 首歌曲加入「${playlist.title}」。`;
+    closeTrackPlaylistPicker();
+    invalidatePageDataCacheForProvider(activeAccount.provider);
+  } catch (error) {
+    scanError.value = error instanceof Error ? error.message : "批量加入歌单失败，请稍后重试。";
+  } finally {
+    playlistMutationPending.value = false;
+  }
+}
+
 function openAggregatePageFromPicker() {
   closeTrackPlaylistPicker();
   selectView("aggregate");
@@ -6701,6 +7345,8 @@ async function toggleLiked() {
 }
 
 async function toggleTrackLiked(track: Track) {
+  if (favoriteMutationPending.has(track.id)) return;
+  if (playlistMutationPending.value && track.source === "qq") return;
   if (track.id === DEFAULT_TRACK_ID) {
     return;
   }
@@ -6719,6 +7365,7 @@ async function toggleTrackLiked(track: Track) {
   }
 
   const wasLiked = Boolean(track.liked);
+  favoriteMutationPending.add(track.id);
   const nextLiked = !wasLiked;
   const previousTracks = isAccountTrack ? accountFavoriteTracks.value : favoriteTracks.value;
   if (isAccountTrack) {
@@ -6747,13 +7394,13 @@ async function toggleTrackLiked(track: Track) {
         await removeFavorite(track.id);
       }
     }
-  } catch {
+  } catch (error) {
     if (isAccountTrack) {
       syncAccountFavoriteFlag(track.id, wasLiked);
       accountFavoriteTracks.value = wasLiked
         ? [{ ...track, liked: true }, ...accountFavoriteTracks.value.filter((item) => item.id !== track.id)]
         : accountFavoriteTracks.value.filter((item) => item.id !== track.id);
-      scanError.value = "流媒体喜欢状态保存失败，请确认对应账号仍处于登录状态。";
+      scanError.value = error instanceof Error ? error.message : "流媒体喜欢状态保存失败，请稍后重试。";
     } else {
       syncFavoriteFlag(track.id, wasLiked);
       favoriteTracks.value = wasLiked
@@ -6761,6 +7408,9 @@ async function toggleTrackLiked(track: Track) {
         : favoriteTracks.value.filter((item) => item.id !== track.id);
       scanError.value = "喜欢状态保存失败，请确认后端已启动。";
     }
+    showSearchToast(scanError.value);
+  } finally {
+    favoriteMutationPending.delete(track.id);
   }
 }
 
@@ -7033,6 +7683,11 @@ function resetPlaybackClock() {
   }
 }
 
+function handleAudioSeeking() {
+  pauseCurrentQqListeningSession();
+  resetPlaybackClock();
+}
+
 function seekPlayback(value: number) {
   if (localSourceBusy.value) return;
   if (audioElement.value && playbackDuration.value > 0) {
@@ -7067,6 +7722,7 @@ function beginSeek() {
   isSeeking.value = true;
   resetListeningSample();
   resetCurrentScrobbleSample();
+  pauseCurrentQqListeningSession();
   wasPlayingBeforeSeek = Boolean(audio && !audio.paused && !audio.ended) || (!audio && isPlaying.value);
 }
 
@@ -7074,8 +7730,7 @@ function previewSeek(value: number) {
   if (playbackDuration.value <= 0 || localSourceBusy.value) {
     return;
   }
-  const previewValue = Math.min(Number(value), previewProgressLimit.value);
-  progress.value = previewValue;
+  progress.value = Math.min(Number(value), previewProgressLimit.value);
 }
 
 function handleProgressInput(event: Event) {
@@ -7105,6 +7760,7 @@ function finishSeek(value: number) {
         startPlaybackClock();
         resetListeningSample();
         resetCurrentScrobbleSample();
+        ensureQqListeningSession(currentTrack.value, audio.currentTime);
       }).catch(() => {
         isPlaying.value = false;
       });
@@ -7149,7 +7805,6 @@ function songInfoCharacters(text: string) {
 }
 
 async function alignPlaybackTargetToAnchor(
-  time: number,
   targetIsPreface: boolean,
   targetPrefaceLineIndex: number
 ) {
@@ -7167,6 +7822,7 @@ async function alignPlaybackTargetToAnchor(
     return;
   }
 
+  cancelLyricAutoScroll();
   const rootRect = root.getBoundingClientRect();
   const targetRect = target.getBoundingClientRect();
   const anchorOffset = root.clientHeight * 0.38 - 42;
@@ -7196,7 +7852,7 @@ async function playFromTime(time: number) {
   syncDesktopLyricsTime(lyricClockTime, true);
   resetPlaybackClock();
   updateLyricHighlightDom(lyricClockTime, true);
-  await alignPlaybackTargetToAnchor(time, targetIsPreface, targetPrefaceLineIndex);
+  await alignPlaybackTargetToAnchor(targetIsPreface, targetPrefaceLineIndex);
 
   if (!audio.src || !audio.paused) {
     return;
@@ -7211,10 +7867,6 @@ async function playFromTime(time: number) {
   }
 }
 
-async function playFromLyricLine(line: LyricLine) {
-  await playFromTime(line.time);
-}
-
 function loadTrackLyrics(track: Track) {
   resetLyricHighlightDom();
   lyricLines.value = parseLyricContent(
@@ -7222,6 +7874,25 @@ function loadTrackLyrics(track: Track) {
     track.lyricsTranslation,
     track.lyricsFormat
   );
+}
+
+async function hydrateRestoredTrackLyrics(track: Track, requestId: number) {
+  if (track.source !== "qq" && track.source !== "netease" && track.source !== "cloud") return;
+  try {
+    const lyrics = await (track.source === "cloud" ? loadCloudLyrics(track.id) : loadCatalogLyrics(track.id));
+    if (requestId !== trackAssetRequestId || currentTrack.value.id !== track.id || !lyrics.lyrics?.trim()) return;
+    currentTrack.value = {
+      ...currentTrack.value,
+      lyrics: lyrics.lyrics,
+      lyricsTranslation: lyrics.translation ?? currentTrack.value.lyricsTranslation,
+      lyricsPhonetic: lyrics.phonetic ?? currentTrack.value.lyricsPhonetic,
+      lyricsFormat: lyrics.format,
+      lyricsSource: lyrics.source,
+      lyricCredits: lyrics.credits?.length ? normalizeLyricCredits(lyrics.credits) : currentTrack.value.lyricCredits,
+      hasLyrics: true
+    };
+    loadTrackLyrics(currentTrack.value);
+  } catch { /* Stored lyrics remain usable while the platform is unavailable. */ }
 }
 
 function describeLocalLyricsState(track: Track) {
@@ -7242,6 +7913,12 @@ function describeLocalLyricsState(track: Track) {
     return "未找到逐字歌词，加载普通整行歌词";
   }
   return localLyricsOnlineMatchEnabled.value ? "" : "已关闭本地歌曲联网匹配歌词";
+}
+
+function shouldAutoMatchLocalLyrics(track: Track) {
+  return track.source === "local"
+    && track.id !== DEFAULT_TRACK_ID
+    && localLyricsOnlineMatchEnabled.value;
 }
 
 function mergeMatchedLocalTrack(raw: PersistedTrack) {
@@ -7284,15 +7961,17 @@ async function matchLocalLyrics(track: Track, automatic = false, requestId = tra
     localLyricsMatchNotice.value = "已关闭本地歌曲联网匹配歌词";
     return;
   }
-  if (automatic && Boolean(track.lyrics?.trim()) && !qqAccount.value) {
-    return;
-  }
-
   const matchRequestId = ++localLyricsMatchRequestId;
   localLyricsMatchPending.value = true;
-  localLyricsMatchNotice.value = automatic ? "正在联网匹配歌词…" : "正在重新匹配歌词…";
+  localLyricsMatchNotice.value = automatic && track.lyrics?.trim()
+    ? describeLocalLyricsState(track)
+    : automatic ? "正在联网匹配歌词…" : "正在重新匹配歌词…";
   try {
-    const result = await matchLocalTrackLyrics(track.id, saveMatchedLyricsBesideAudio.value);
+    const result = await matchLocalTrackLyrics(
+      track.id,
+      saveMatchedLyricsBesideAudio.value,
+      !automatic
+    );
     if (matchRequestId !== localLyricsMatchRequestId || requestId !== trackAssetRequestId
       || currentTrack.value.id !== track.id || !localLyricsOnlineMatchEnabled.value) {
       return;
@@ -7415,7 +8094,13 @@ function handleAudioOutputDeviceChange() {
 
 function handleAudioPlay() {
   resetPlaybackClock();
+  if (audioElement.value) ensureQqListeningSession(currentTrack.value, audioElement.value.currentTime);
   void applyAudioOutputPreferencesToPlayback();
+}
+
+function handleAudioPause() {
+  pauseCurrentQqListeningSession();
+  void flushQqListeningSession(true);
 }
 
 watch(audioOutputPreferences, (preferences) => {
@@ -7540,6 +8225,7 @@ watch(activeSettingsSection, (section) => {
   if (section === "cache") {
     void refreshCacheSettings(true);
     void refreshListeningDataSummary();
+    void refreshQqListeningDataSummaries(true);
   }
 });
 
@@ -7649,7 +8335,7 @@ function syncDesktopLyricsTime(time: number, force = false) {
   window.listenMusic?.updateDesktopLyricsTime(time, force);
 }
 
-watch(desktopLyricsPlaybackState, syncDesktopLyricsPlaybackState, { deep: true, immediate: true });
+watch(desktopLyricsPlaybackMetadata, syncDesktopLyricsPlaybackState, { deep: true, immediate: true });
 
 watch(musicFolder, (directory) => {
   const normalized = directory.trim();
@@ -7665,6 +8351,11 @@ watch(autoScanLocalLibraryEnabled, (enabled) => {
 });
 
 function resetLyricsFollowState() {
+  cancelLyricAutoScroll();
+  if (lyricAnchorScrollFrame !== undefined) {
+    window.cancelAnimationFrame(lyricAnchorScrollFrame);
+    lyricAnchorScrollFrame = undefined;
+  }
   if (resumeLyricsFollowTimer) {
     window.clearTimeout(resumeLyricsFollowTimer);
     resumeLyricsFollowTimer = undefined;
@@ -7686,7 +8377,7 @@ function openSongDetail() {
   resetLyricsFollowState();
   streamingSourceMenuVisible.value = false;
   const audioTime = audioElement.value?.currentTime;
-  if (Number.isFinite(audioTime)) {
+  if (typeof audioTime === "number" && Number.isFinite(audioTime)) {
     lyricClockTime = audioTime;
     currentTime.value = audioTime;
   }
@@ -7709,8 +8400,9 @@ function toggleSongDetail() {
 
 async function toggleDesktopLyrics() {
   syncDesktopLyricsPlaybackState();
-  const visible = await window.listenMusic?.toggleDesktopLyricsWindow();
-  if (typeof visible === "boolean") desktopLyricsVisible.value = visible;
+  const bridge = window.listenMusic;
+  if (!bridge) return;
+  desktopLyricsVisible.value = await bridge.toggleDesktopLyricsWindow();
 }
 
 async function chooseMusicFolder() {
@@ -8105,7 +8797,6 @@ function updateSongInfoHighlightDom(time: number) {
       && lastAutoFollowItemId !== activeItemId
     ) {
       followActiveLyricItem(root, activeItem);
-      updateLyricAnchorFromScroll();
       lastAutoFollowItemId = activeItemId;
     }
   }
@@ -8212,6 +8903,7 @@ function startPlaybackClock() {
     const time = playbackClock.read(audio, performance.now());
     lyricClockTime = time;
     syncDesktopLyricsTime(time);
+    syncMiniPlayerTime(time);
     const nextIndex = findActiveLyricIndex(time, lyricLines.value);
     if (nextIndex !== activeLyricIndex.value) {
       currentTime.value = time;
@@ -8233,6 +8925,7 @@ function updateProgressFromAudio() {
     : playbackClock.synchronize(audio, performance.now());
   lyricClockTime = lyricTime;
   syncDesktopLyricsTime(lyricTime);
+  syncMiniPlayerTime(lyricTime);
   progress.value = playbackDuration.value > 0
     ? Math.min(100, (audio.currentTime / playbackDuration.value) * 100)
     : 0;
@@ -8247,6 +8940,7 @@ function updateProgressFromAudio() {
   syncSystemMediaPosition();
   recordCurrentTrackListening(audio.currentTime);
   recordCurrentTrackScrobble(audio.currentTime);
+  recordCurrentQqListening(audio.currentTime);
 }
 
 function updateMediaDuration() {
@@ -8269,6 +8963,7 @@ function handleAudioEnded() {
   stopPlaybackClock();
   resetListeningSample();
   resetCurrentScrobbleSample();
+  void finishQqListeningSession();
   void persistPlaybackState();
   if (currentTrack.value.source === "netease" && isPreviewPlayback(currentTrack.value.duration, mediaDuration.value)) {
     isPlaying.value = false;
@@ -8280,6 +8975,7 @@ function handleAudioEnded() {
       audioElement.value.currentTime = 0;
       void audioElement.value.play().then(() => {
         startListeningScrobbleSession(currentTrack.value);
+        ensureQqListeningSession(currentTrack.value, audioElement.value?.currentTime ?? 0);
         startPlaybackClock();
       });
     }
@@ -8308,13 +9004,12 @@ async function handleAudioError() {
     stopPlaybackClock();
     isPlaying.value = false;
     try {
-      const fallbackTrack = await playAudioWithNetworkFallback(
+      currentTrack.value = await playAudioWithNetworkFallback(
         audio,
         currentTrack.value,
         volume.value / 100,
         true
       );
-      currentTrack.value = fallbackTrack;
       playbackClock.reset(audio, performance.now());
       isPlaying.value = true;
       scanError.value = "";
@@ -8423,6 +9118,7 @@ function resetPlayerToDefault() {
   trackAssetRequestId += 1;
   isPlaybackStarting.value = false;
   audioElement.value?.pause();
+  void finishQqListeningSession();
   if (audioElement.value) {
     audioElement.value.removeAttribute("src");
     audioElement.value.load();
@@ -8442,10 +9138,6 @@ function resetPlayerToDefault() {
   void persistPlaybackState();
 }
 
-function togglePlayMode() {
-  playModeMenuVisible.value = !playModeMenuVisible.value;
-}
-
 function cyclePlayerBarPlayMode() {
   const modes: PlayMode[] = ["sequence", "loop", "single", "shuffle"];
   const currentIndex = modes.indexOf(playMode.value);
@@ -8455,7 +9147,6 @@ function cyclePlayerBarPlayMode() {
 
 function selectPlayMode(mode: PlayMode) {
   playMode.value = mode;
-  playModeMenuVisible.value = false;
   void persistPlaybackState();
 }
 
@@ -8535,7 +9226,7 @@ function dismissMiniQueue() {
 function addMiniQueueTrackToPlaylist(track: Track, playlistId: string) {
   const playlist = playlistOverviewSource.value.find((item) => item.id === playlistId);
   if (!playlist) return;
-  trackPlaylistPicker.value = { track, mode: "regular" };
+  trackPlaylistPicker.value = { tracks: [track], mode: "regular" };
   void addTrackToRegularPlaylist(playlist);
 }
 
@@ -8565,28 +9256,103 @@ async function copyMiniQueueTrackInfo(track: Track) {
 
 async function openMiniPlayer() {
   const requestId = ++miniModeRequestId;
-  miniPlayerVisible.value = true;
+  const enterMiniMode = window.listenMusic?.enterMiniMode;
+  miniPlayerVisible.value = !enterMiniMode;
   miniQueueVisible.value = false;
   miniQueueShellOpen.value = false;
   showSongDetail.value = false;
   queuePanelVisible.value = false;
   authPanelVisible.value = false;
 
-  const enterMiniMode = window.listenMusic?.enterMiniMode;
-  nativeMiniMode.value = typeof enterMiniMode === "function";
+  nativeMiniMode.value = false;
   await nextTick();
   if (!enterMiniMode) return;
 
   try {
+    syncMiniPlayerSnapshot();
     const entered = await enterMiniMode({
       showInTaskbar: appearancePreferences.value.playerControls.miniShowInTaskbar,
       alwaysOnTop: appearancePreferences.value.playerControls.miniAlwaysOnTop
     });
-    if (requestId === miniModeRequestId) nativeMiniMode.value = entered;
+    if (requestId === miniModeRequestId) {
+      nativeMiniMode.value = entered;
+      miniPlayerVisible.value = true;
+      if (entered) syncMiniPlayerSnapshot();
+    }
   } catch {
-    if (requestId === miniModeRequestId) nativeMiniMode.value = false;
+    if (requestId === miniModeRequestId) {
+      nativeMiniMode.value = false;
+      miniPlayerVisible.value = true;
+    }
   }
 }
+
+function miniPresentationTrack(track: Track): MiniPlayerTrack {
+  return { id: track.id, title: track.title, artist: track.artist, album: track.album,
+    duration: track.duration, primary: track.primary, secondary: track.secondary,
+    mark: track.mark, liked: track.liked, history: track.history, queueKey: track.queueKey };
+}
+
+function syncMiniPlayerSnapshot() {
+  const bridge = window.listenMusic;
+  if (!bridge?.updateMiniPlayerSnapshot) return;
+  const snapshot: MiniPlayerSnapshot = {
+    track: miniPresentationTrack(currentTrack.value),
+    queue: playbackQueue.value.map((track, index) => ({ ...miniPresentationTrack(track), queueKey: queueTrackKey(track, index) })),
+    playlists: playlistOverviewSource.value.map(({ id, title, count }) => ({ id, title, count })),
+    coverUrl: currentCoverUrl.value,
+    isPlaying: isPlaying.value, progress: progress.value, lyric: currentLyricText.value,
+    lyricLines: lyricLines.value, source: currentTrack.value.source, lyricsFormat: currentTrack.value.lyricsFormat,
+    lyricsSource: currentTrack.value.lyricsSource,
+    themeStyle: songDetailThemeStyle.value, preferences: appearancePreferences.value.miniPlayer,
+    volume: volume.value, playMode: playMode.value, currentTime: lyricClockTime,
+    duration: playbackDuration.value, alwaysOnTop: appearancePreferences.value.playerControls.miniAlwaysOnTop,
+    showInTaskbar: appearancePreferences.value.playerControls.miniShowInTaskbar
+  };
+  bridge.updateMiniPlayerSnapshot(JSON.parse(JSON.stringify(snapshot)));
+}
+
+function handleMiniPlayerAction(action: MiniPlayerAction) {
+  switch (action.type) {
+    case "toggle": void togglePlayback(); return;
+    case "previous": void previousTrack(); return;
+    case "next": void nextTrack(); return;
+    case "like": void toggleLiked(); return;
+    case "mode": cyclePlayerBarPlayMode(); return;
+    case "volume": updateVolume(action.value); return;
+    case "pin": appearancePreferences.value.playerControls.miniAlwaysOnTop = action.value; return;
+    case "appearance": appearancePreferences.value.miniPlayer = action.preferences; return;
+  }
+  if (!("key" in action)) return;
+  const track = playbackQueue.value.find((item, index) => queueTrackKey(item, index) === action.key || (!item.queueKey && item.id === action.key));
+  if (!track) return;
+  switch (action.type) {
+    case "queue-play": void playQueueTrack(track); break;
+    case "queue-like": void toggleTrackLiked(track); break;
+    case "queue-remove": removeQueueTrack(action.key); break;
+    case "queue-copy": void copyMiniQueueTrackInfo(track); break;
+    case "queue-add": addMiniQueueTrackToPlaylist(track, action.playlistId); break;
+    case "queue-create": createMiniPlaylistWithTrack(track, action.name); break;
+  }
+}
+
+watch([currentTrack, playbackQueue, playlistOverviewSource, currentCoverUrl, isPlaying,
+  currentLyricText, lyricLines, songDetailThemeStyle, appearancePreferences, volume,
+  playMode, playbackDuration], () => {
+  if (!nativeMiniMode.value || miniSnapshotTimer !== undefined) return;
+  miniSnapshotTimer = window.setTimeout(() => { miniSnapshotTimer = undefined; syncMiniPlayerSnapshot(); }, 80);
+}, { deep: true });
+
+function syncMiniPlayerTime(time: number, force = false) {
+  if (!nativeMiniMode.value || !Number.isFinite(time)) return;
+  const now = performance.now();
+  if (!force && now - lastMiniPlayerTimeSentAt < 100) return;
+  lastMiniPlayerTimeSentAt = now;
+  const progress = playbackDuration.value > 0 ? Math.max(0, Math.min(100, time / playbackDuration.value * 100)) : 0;
+  window.listenMusic?.updateMiniPlayerTime?.(time, progress);
+}
+
+watch(currentTime, time => syncMiniPlayerTime(time, true));
 
 function handlePlayerBarProximity(event: PointerEvent) {
   if (appearancePreferences.value.playerControls.visibility !== "hover") return;
@@ -8615,10 +9381,6 @@ async function closeMiniPlayer() {
   miniPlayerVisible.value = false;
 }
 
-function toggleDetailVolume() {
-  detailVolumeVisible.value = !detailVolumeVisible.value;
-}
-
 function resumeLyricsFollow() {
   if (resumeLyricsFollowTimer) {
     window.clearTimeout(resumeLyricsFollowTimer);
@@ -8630,6 +9392,7 @@ function resumeLyricsFollow() {
 }
 
 function handleLyricsManualScroll() {
+  cancelLyricAutoScroll();
   manualLyricsScroll.value = true;
   lyricAnchorVisible.value = true;
   lastAutoFollowItemId = "";
@@ -8707,11 +9470,20 @@ function updateLyricAnchorFromScroll() {
     return;
   }
 
+  const availableWidth = Math.max(0, window.innerWidth - Math.max(0, root.getBoundingClientRect().left));
+  root.style.maxWidth = `${availableWidth}px`;
   const anchorOffset = root.clientHeight * 0.38 - 42;
   // CSS percentage offsets exclude the scroller padding; share the measured anchor instead.
   root.style.setProperty("--lyric-anchor-offset", `${anchorOffset}px`);
   const songInfoLines = root.querySelectorAll<HTMLElement>("[data-song-info-line]");
   const lyricLineElements = root.querySelectorAll<HTMLElement>("[data-lyric-index]");
+  lyricLineElements.forEach((line) => {
+    const original = line.querySelector<HTMLElement>(".lyric-original");
+    if (original) {
+      // Reserve the centered 1.25x transform's overhang for every wrapped line.
+      line.style.setProperty("--lyric-scale-room", `${original.offsetHeight * 0.125}px`);
+    }
+  });
   const firstSongInfoLine = songInfoLines.item(0);
   const firstTimelineItem = firstSongInfoLine ?? lyricLineElements.item(0);
   if (firstTimelineItem) {
@@ -8767,6 +9539,60 @@ function updateLyricAnchorFromScroll() {
   lyricAnchorIndex.value = nextAnchorIndex;
 }
 
+function handleLyricScroll() {
+  if (lyricAutoScrollActive || lyricAnchorScrollFrame !== undefined) {
+    return;
+  }
+  lyricAnchorScrollFrame = window.requestAnimationFrame(() => {
+    lyricAnchorScrollFrame = undefined;
+    updateLyricAnchorFromScroll();
+  });
+}
+
+function cancelLyricAutoScroll() {
+  if (lyricAutoScrollFrame !== undefined) {
+    window.cancelAnimationFrame(lyricAutoScrollFrame);
+    lyricAutoScrollFrame = undefined;
+  }
+  lyricAutoScrollActive = false;
+}
+
+function animateLyricScroll(root: HTMLElement, targetTop: number) {
+  cancelLyricAutoScroll();
+  const maximumTop = Math.max(0, root.scrollHeight - root.clientHeight);
+  const startTop = root.scrollTop;
+  const endTop = Math.max(0, Math.min(maximumTop, targetTop));
+  const distance = endTop - startTop;
+  if (Math.abs(distance) < 1) {
+    root.scrollTop = endTop;
+    updateLyricAnchorFromScroll();
+    return;
+  }
+
+  const startedAt = performance.now();
+  const duration = Math.min(420, Math.max(280, Math.abs(distance) * 1.15));
+  lyricAutoScrollActive = true;
+  const tick = (now: number) => {
+    if (root !== detailLyricsRef.value) {
+      cancelLyricAutoScroll();
+      return;
+    }
+    const progress = Math.min(1, (now - startedAt) / duration);
+    const easedProgress = progress < 0.5
+      ? 4 * progress * progress * progress
+      : 1 - Math.pow(-2 * progress + 2, 3) / 2;
+    root.scrollTop = startTop + distance * easedProgress;
+    if (progress < 1) {
+      lyricAutoScrollFrame = window.requestAnimationFrame(tick);
+      return;
+    }
+    lyricAutoScrollFrame = undefined;
+    updateLyricAnchorFromScroll();
+    lyricAutoScrollActive = false;
+  };
+  lyricAutoScrollFrame = window.requestAnimationFrame(tick);
+}
+
 function followActiveLyricItem(root: HTMLElement, activeLine: HTMLElement) {
   const rootRect = root.getBoundingClientRect();
   const anchorOffset = root.clientHeight * 0.38 - 42;
@@ -8774,7 +9600,7 @@ function followActiveLyricItem(root: HTMLElement, activeLine: HTMLElement) {
     + firstLyricTextCenter(activeLine)
     - rootRect.top
     - anchorOffset;
-  root.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
+  animateLyricScroll(root, targetTop);
 }
 
 async function refreshLyricLayout() {
@@ -8786,6 +9612,14 @@ async function refreshLyricLayout() {
   if (root && activeLine && isPlaying.value && !manualLyricsScroll.value) {
     followActiveLyricItem(root, activeLine);
   }
+}
+
+function handleLyricViewportResize() {
+  if (lyricResizeFrame !== undefined) window.cancelAnimationFrame(lyricResizeFrame);
+  lyricResizeFrame = window.requestAnimationFrame(() => {
+    lyricResizeFrame = undefined;
+    void refreshLyricLayout();
+  });
 }
 
 watch(detailLyricsRef, (root, _previous, onCleanup) => {
@@ -8814,12 +9648,12 @@ watch([activeLyricIndex, showSongDetail, lyricLines, manualLyricsScroll, isPlayi
     return;
   }
   followActiveLyricItem(root, activeLine);
-  updateLyricAnchorFromScroll();
   lastAutoFollowItemId = activeItemId;
 });
 
 onMounted(async () => {
   window.addEventListener("keydown", handleGlobalNavigationShortcut);
+  window.addEventListener("resize", handleLyricViewportResize);
   window.addEventListener("focus", handleListeningStatsReconnect);
   window.addEventListener("focus", handleAudioOutputDeviceChange);
   window.addEventListener("online", handleListeningStatsReconnect);
@@ -8828,6 +9662,12 @@ onMounted(async () => {
   removeTaskbarMediaActionListener = window.listenMusic?.onTaskbarMediaAction(handleTaskbarMediaAction);
   removeTrayMediaActionListener = window.listenMusic?.onTrayMediaAction(handleTrayMediaAction);
   removeDesktopLyricsActionListener = window.listenMusic?.onDesktopLyricsAction(handleDesktopLyricsAction);
+  removeMiniPlayerActionListener = window.listenMusic?.onMiniPlayerAction?.(handleMiniPlayerAction);
+  removeMiniModeVisibilityListener = window.listenMusic?.onMiniModeVisibility?.((visible) => {
+    nativeMiniMode.value = visible;
+    miniPlayerVisible.value = visible;
+    if (!visible) { miniQueueVisible.value = false; miniQueueShellOpen.value = false; }
+  });
   removeShortcutActionListener = window.listenMusic?.onShortcutAction(handleShortcutAction);
   removeShortcutsChangedListener = window.listenMusic?.onShortcutsChanged((snapshot) => {
     globalShortcutsState.value = snapshot.config.enabled;
@@ -8870,6 +9710,15 @@ onMounted(async () => {
   }
 });
 onBeforeUnmount(() => {
+  void finishQqListeningSession();
+  if (qqListeningRetryTimer !== undefined) {
+    window.clearTimeout(qqListeningRetryTimer);
+    qqListeningRetryTimer = undefined;
+  }
+  window.removeEventListener("resize", handleLyricViewportResize);
+  if (lyricResizeFrame !== undefined) window.cancelAnimationFrame(lyricResizeFrame);
+  cancelLyricAutoScroll();
+  if (lyricAnchorScrollFrame !== undefined) window.cancelAnimationFrame(lyricAnchorScrollFrame);
   playbackFadeToken += 1;
   activePlaybackFade = null;
   clearSleepTimerHandles();
@@ -8886,6 +9735,9 @@ onBeforeUnmount(() => {
   removeShortcutsChangedListener?.();
   removeWindowCloseBehaviorListener?.();
   removeDesktopLyricsVisibilityListener?.();
+  removeMiniPlayerActionListener?.();
+  removeMiniModeVisibilityListener?.();
+  if (miniSnapshotTimer !== undefined) window.clearTimeout(miniSnapshotTimer);
   mediaSessionActions.forEach((action) => setMediaSessionAction(action, null));
   audioOutputController?.dispose();
   stopPlaybackClock();
@@ -8918,6 +9770,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <WindowTitlebar :dark="windowTitlebarDark" />
   <Transition :name="onboardingExitImmediately ? 'onboarding-shell-immediate' : 'onboarding-shell'" appear>
     <FirstRunOnboarding
       v-if="showFirstRunOnboarding && !nativeMiniMode"
@@ -9217,7 +10070,7 @@ onBeforeUnmount(() => {
           :favorite-tracks="accountFavoriteTracks"
           :recent-tracks="accountRecentTracks"
           :ranking-tracks="accountListeningRank"
-          :playlists="accountPlaylists"
+          :playlists="accountLibraryPlaylists"
           :provider="streamingSource"
           :loading="accountContentState === 'loading'"
           :error="accountContentError"
@@ -9230,6 +10083,7 @@ onBeforeUnmount(() => {
           @open-ranking="openStreamingLibraryView('listening-ranking')"
           @open-playlist="openAccountPlaylistInUnifiedView"
           @create-playlist="openStreamingPlaylistCreateDialog"
+          @delete-playlist="deleteStreamingPlaylist"
           @login="openProviderAuthPanel(streamingSource)"
         />
 
@@ -9244,7 +10098,7 @@ onBeforeUnmount(() => {
           :current-track-id="currentTrack.id"
           :playing="isPlaying"
           @upload="uploadCloudTracks"
-          @refresh="loadCloudData"
+          @refresh="refreshCloudData"
           @play-all="playAllCloudTracks"
           @play-track="playCloudTrack"
           @context-menu="openCloudTrackContextMenu"
@@ -9314,6 +10168,9 @@ onBeforeUnmount(() => {
           :cover-url="accountRecentTracks[0]?.coverUrl"
           :refreshing="accountContentState === 'loading'"
           :reorderable="false"
+          batch-mode="recent"
+          :run-batch="runAccountRecentTrackBatch"
+          :mutation-pending="playlistMutationPending"
           title="最近播放"
           label="最近"
           @back="navigateBack"
@@ -9322,7 +10179,7 @@ onBeforeUnmount(() => {
           @play-all="playAccountRecentTrackList"
           @play-random="playAccountRecentTrackListRandom"
           @toggle-favorite="toggleAccountRecentFavorite"
-          @refresh="loadStreamingLibraryData"
+          @refresh="refreshStreamingLibraryData"
           @search-global="searchFromStreamingDailyMix"
         />
 
@@ -9333,7 +10190,7 @@ onBeforeUnmount(() => {
           :current-track-id="currentTrack.id"
           :is-playing="isPlaying || isPlaybackStarting"
           :cover-url="accountListeningRank[0]?.coverUrl"
-          :refreshing="accountContentState === 'loading'"
+          :refreshing="qqListeningRankPending"
           :reorderable="false"
           title="听歌排行"
           label="排行"
@@ -9343,9 +10200,19 @@ onBeforeUnmount(() => {
           @play-all="playAccountListeningRankTrackList"
           @play-random="playAccountListeningRankTrackListRandom"
           @toggle-favorite="toggleAccountListeningRankFavorite"
-          @refresh="loadStreamingLibraryData"
+          @refresh="refreshAccountListeningRank"
           @search-global="searchFromStreamingDailyMix"
-        />
+        >
+          <template #toolbar-tools>
+            <div class="qq-listening-range" :aria-label="`${streamingProviderName}听歌排行时间范围`">
+              <div class="qq-listening-range-options" role="group" aria-label="排行范围">
+                <button type="button" :disabled="qqListeningRankPending" :class="{ active: qqListeningRankPeriod === 'week' }" @click="changeQqListeningRankPeriod('week')">最近一周</button>
+                <button type="button" :disabled="qqListeningRankPending" :class="{ active: qqListeningRankPeriod === 'all' }" @click="changeQqListeningRankPeriod('all')">全部</button>
+              </div>
+              <p v-if="qqListeningRankError" class="qq-listening-range-error" role="status">{{ qqListeningRankError }}</p>
+            </div>
+          </template>
+        </StreamingDailyMixPage>
 
         <AggregatePlaylistPage
           v-if="activeView === 'aggregate'"
@@ -9358,17 +10225,6 @@ onBeforeUnmount(() => {
           @reorder="reorderAggregatePlaylistGroups"
           @set-cover="chooseAggregatePlaylistCover"
         />
-
-        <template v-if="appMode === 'local' && activeView !== 'library'">
-          <section class="library-toolbar" v-if="activeView === 'library'">
-            <div class="folder-input">
-              <span aria-hidden="true">⌂</span>
-              <input v-model="musicFolder" type="text" aria-label="音乐文件夹路径" placeholder="选择音乐文件夹，例如 G:\本地音乐" @keydown.enter="scanMusicFolder" />
-            </div>
-            <span v-if="scanNotice" class="scan-message">{{ scanNotice }}</span>
-            <span v-if="scanError" class="scan-message error">{{ scanError }}</span>
-          </section>
-        </template>
 
         <Transition name="settings-toast">
           <div
@@ -10129,6 +10985,97 @@ onBeforeUnmount(() => {
                   {{ listeningDataError || listeningDataNotice }}
                 </p>
               </article>
+
+              <article class="settings-card settings-listening-data-card settings-qq-listening-data-card">
+                <div class="settings-card-heading">
+                  <span class="settings-icon" aria-hidden="true">
+                    <Headphones :size="22" :stroke-width="1.8" />
+                  </span>
+                  <div>
+                    <h2>QQ 本地听歌排行</h2>
+                    <p>按 QQ 账号分别保存在本机；清理不会影响 QQ 音乐云端最近播放。</p>
+                  </div>
+                </div>
+
+                <div v-if="qqListeningDataSummaries.length" class="settings-qq-listening-body">
+                  <label class="settings-qq-account-picker">
+                    <span>QQ 账号</span>
+                    <select v-model="selectedQqListeningDataAccountId" class="settings-select-control">
+                      <option v-for="summary in qqListeningDataSummaries" :key="summary.accountId" :value="summary.accountId">
+                        {{ summary.nickname || summary.accountId }}
+                      </option>
+                    </select>
+                  </label>
+
+                  <section class="settings-listening-summary" aria-label="QQ 本地听歌排行汇总">
+                    <div>
+                      <span>记录歌曲</span>
+                      <strong>{{ selectedQqListeningDataSummary?.trackCount ?? 0 }}</strong>
+                      <small>首歌曲</small>
+                    </div>
+                    <div>
+                      <span>累计时长</span>
+                      <strong>{{ formatListeningDuration(selectedQqListeningDataSummary?.listenedSeconds ?? 0) }}</strong>
+                      <small>仅此 QQ 账号</small>
+                    </div>
+                    <div>
+                      <span>记录日期</span>
+                      <strong class="settings-qq-date-range">
+                        {{ selectedQqListeningDataSummary?.firstDate || "-" }} 至 {{ selectedQqListeningDataSummary?.lastDate || "-" }}
+                      </strong>
+                      <small>关闭应用后仍会保留</small>
+                    </div>
+                  </section>
+
+                  <div class="settings-listening-retention">
+                    <div class="settings-listening-retention-heading">
+                      <div>
+                        <strong>删除 QQ 排行记录</strong>
+                        <span>只能在这里主动删除；切换账号和退出登录不会清空。</span>
+                      </div>
+                      <div class="settings-listening-mode" aria-label="QQ 排行删除范围">
+                        <button type="button" :class="{ active: qqListeningDataDeleteMode === 'range' }" @click="qqListeningDataDeleteMode = 'range'">日期范围</button>
+                        <button type="button" :class="{ active: qqListeningDataDeleteMode === 'all' }" @click="qqListeningDataDeleteMode = 'all'">该账号全部</button>
+                      </div>
+                    </div>
+
+                    <div v-if="qqListeningDataDeleteMode === 'range'" class="settings-listening-selectors settings-qq-date-selectors">
+                      <label>
+                        <span>开始日期</span>
+                        <input v-model="qqListeningDataDeleteFrom" type="date" :max="qqListeningDataDeleteTo || undefined" />
+                      </label>
+                      <label>
+                        <span>结束日期</span>
+                        <input v-model="qqListeningDataDeleteTo" type="date" :min="qqListeningDataDeleteFrom || undefined" />
+                      </label>
+                    </div>
+                    <p v-else class="settings-listening-all-note">将清空这个 QQ 账号保存在本机的全部听歌排行。</p>
+
+                    <div class="settings-listening-delete-row">
+                      <p>不会影响 QQ 音乐云端最近播放，也不会修改歌曲、喜欢和歌单。</p>
+                      <button
+                        class="settings-action danger"
+                        type="button"
+                        :disabled="qqListeningDataDeletePending || qqListeningDataPending || !selectedQqListeningDataAccountId || !qqListeningDataRangeValid"
+                        @click="deleteSelectedQqListeningStats"
+                      >
+                        <Trash2 :size="15" aria-hidden="true" />
+                        {{ qqListeningDataDeletePending ? "正在删除…" : qqListeningDataDeleteMode === "all" ? "删除账号全部排行" : "删除所选日期排行" }}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <p v-else-if="!qqListeningDataPending" class="settings-qq-listening-empty">还没有任何 QQ 账号的本地听歌排行。</p>
+
+                <p
+                  v-if="qqListeningDataPending || qqListeningDataNotice || qqListeningDataError"
+                  class="settings-cache-status"
+                  :class="{ error: Boolean(qqListeningDataError) }"
+                  role="status"
+                >
+                  {{ qqListeningDataPending ? "正在读取 QQ 本地听歌排行…" : qqListeningDataError || qqListeningDataNotice }}
+                </p>
+              </article>
             </template>
             <ShortcutSettings v-else-if="activeSettingsSection === 'shortcuts'" />
             <AboutSettings v-else-if="activeSettingsSection === 'about'" />
@@ -10269,7 +11216,7 @@ onBeforeUnmount(() => {
                   :key="track.id"
                   class="local-home-recent-card"
                   type="button"
-                  @click="playTrack(track, currentLibrary)"
+                  @click="playTrack(track)"
                   @contextmenu.prevent="openTrackContextMenu(track, $event, currentLibrary)"
                 >
                   <span class="local-home-recent-cover" :style="{ background: `linear-gradient(135deg, ${track.primary}, ${track.secondary})` }">
@@ -10304,7 +11251,7 @@ onBeforeUnmount(() => {
                       :key="item.track.id"
                       class="local-top-track-row"
                       type="button"
-                      @click="playTrack(item.track, currentLibrary)"
+                      @click="playTrack(item.track)"
                       @contextmenu.prevent="openTrackContextMenu(item.track, $event, currentLibrary)"
                     >
                       <span class="local-top-track-rank">{{ (index + 1).toString().padStart(2, "0") }}</span>
@@ -11081,10 +12028,13 @@ onBeforeUnmount(() => {
             />
 
             <StreamingQqCuratedPlaylists
-              v-if="streamingSource === 'qq' && streamingHomePlaylists.length"
+              v-if="streamingSource === 'qq'"
               :playlists="streamingHomePlaylists"
+              :refreshing="qqHomePlaylistsRefreshing"
+              :error="qqHomePlaylistsError"
               @select="selectPlaylist"
               @discover="selectView('discover')"
+              @refresh="refreshQqHomePlaylists"
             />
 
             <section v-if="streamingSource === 'netease' && streamingHomePlaylists.length" class="streaming-featured-playlists" aria-label="网易云音乐精选歌单">
@@ -11175,6 +12125,7 @@ onBeforeUnmount(() => {
 
         <StreamingDailyMixPage
           v-if="activeView === 'playlist' && selectedPlaylist && isStreamingTemplatePlaylist"
+          :key="`${streamingSource}:${selectedStreamingAccount?.userId}:${selectedPlaylist.id}`"
           :class="{ 'is-library-detail-page': selectedPlaylist.id.startsWith('account-favorites-detail-') }"
           :tracks="selectedPlaylistTracks"
           :provider-name="selectedPlaylist.source === 'qq' ? 'QQ 音乐' : '网易云音乐'"
@@ -11186,6 +12137,12 @@ onBeforeUnmount(() => {
           :collectable="selectedPlaylistCollectable"
           :collected="selectedPlaylistCollected"
           :collection-pending="playlistCollectionPending"
+          :batch-mode="selectedPlaylistBatchMode"
+          :run-batch="runStreamingTrackBatch"
+          :mutation-pending="playlistMutationPending"
+          :reorderable="Boolean(selectedPlaylistBatchMode)"
+          :reorder-pending="playlistOrderCooling"
+          :order-message="playlistOrderMessage"
           :refreshing="isStreamingDailyPlaylist ? streamingHomeState === 'loading' : playlistState === 'loading'"
           @back="navigateBack"
           @play="playStreamingDailyTrack"
@@ -11293,12 +12250,10 @@ onBeforeUnmount(() => {
         <section v-if="!submittedKeyword && activeView !== 'settings' && activeView !== 'playlists' && activeView !== 'aggregate' && activeView !== 'folders' && activeView !== 'history' && activeView !== 'discover' && !['streaming-library', 'cloud', 'account-following', 'account-followers', 'account-user-profile', 'streaming-recent', 'listening-ranking'].includes(activeView) && !(appMode === 'local' && (activeView === 'albums' || activeView === 'library' || activeView === 'artists')) && !selectedPlaylist && activeView !== 'home' && activeView !== 'daily'" class="section-block">
           <div class="section-heading">
             <div>
-              <h2>{{ submittedKeyword ? "相关歌单" : selectedPlaylist ? "当前歌单" : activeView === "home" ? "为你推荐的歌单" : activeView === "streaming-library" ? "我的网易云歌单" : "歌单精选" }}</h2>
+              <h2>歌单精选</h2>
               <span>{{ visiblePlaylists.length }} 个歌单</span>
             </div>
             <div class="section-heading-actions">
-              <span v-if="homepageRefreshNotice" class="refresh-notice">{{ homepageRefreshNotice }}</span>
-              <button v-if="activeView === 'home' && !submittedKeyword" class="text-button" type="button" :disabled="homepageRefreshState === 'loading'" @click="refreshHomepageRecommendations"><span aria-hidden="true">↻</span>{{ homepageRefreshState === 'loading' ? "刷新中" : "刷新歌单" }}</button>
               <button class="text-button" type="button" @click="selectView('discover')">{{ selectedPlaylist ? "返回歌单" : "查看全部" }} <span aria-hidden="true">›</span></button>
             </div>
           </div>
@@ -11313,13 +12268,8 @@ onBeforeUnmount(() => {
             {{ accountContentError }}
             <button type="button" @click="loadDailyRecommendationData">重新加载</button>
           </div>
-          <div v-else-if="visiblePlaylists.length > 0 || activeView === 'playlists'" class="playlist-grid">
-            <button v-if="activeView === 'playlists' && !submittedKeyword" class="create-playlist-card" type="button" @click="openPlaylistCreateDialog">
-              <span class="create-playlist-plus" aria-hidden="true">+</span>
-              <strong>创建歌单</strong>
-              <small>点击创建新歌单</small>
-            </button>
-            <PlaylistCard v-for="playlist in visiblePlaylists" :key="playlist.id" :playlist="playlist" :show-play="activeView !== 'home' && activeView !== 'discover'" @select="selectPlaylist" @play="playPlaylist" />
+          <div v-else-if="visiblePlaylists.length > 0" class="playlist-grid">
+            <PlaylistCard v-for="playlist in visiblePlaylists" :key="playlist.id" :playlist="playlist" show-play @select="selectPlaylist" @play="playPlaylist" />
           </div>
           <div v-else class="empty-state">没有找到匹配的歌单，换个关键词试试。</div>
         </section>
@@ -11327,7 +12277,7 @@ onBeforeUnmount(() => {
         <section v-if="!submittedKeyword && activeView !== 'settings' && activeView !== 'albums' && activeView !== 'playlists' && activeView !== 'aggregate' && activeView !== 'folders' && activeView !== 'history' && activeView !== 'discover' && !['streaming-library', 'cloud', 'account-following', 'account-followers', 'account-user-profile', 'streaming-recent', 'listening-ranking'].includes(activeView) && !selectedPlaylist && !selectedLocalAlbum && !(appMode === 'local' && activeView === 'library') && !(appMode === 'local' && activeView === 'artists') && activeView !== 'home'" class="section-block track-section">
           <div class="section-heading">
             <div>
-              <h2>{{ submittedKeyword ? "在线搜索结果" : selectedLocalAlbum ? "歌曲" : selectedPlaylist ? selectedPlaylist.title : activeView === "history" ? "最近播放" : activeView === "daily" ? "每日推荐歌曲" : activeView === "streaming-library" ? "我喜欢的音乐" : "继续聆听" }}</h2>
+              <h2>{{ activeView === "daily" ? "每日推荐歌曲" : "继续聆听" }}</h2>
               <span>{{ visibleTracks.length }} 首歌曲</span>
             </div>
             <button class="text-button" type="button" @click="selectedLocalAlbum ? selectView('albums') : selectView('library')">{{ selectedLocalAlbum ? "全部专辑" : "打开音乐库" }} <span aria-hidden="true">›</span></button>
@@ -11419,14 +12369,14 @@ onBeforeUnmount(() => {
         class="track-playlist-picker-dialog"
         role="dialog"
         aria-modal="true"
-        :aria-label="trackPlaylistPicker.mode === 'regular' ? '加入歌单' : '加入聚合歌单'"
+        :aria-label="trackPlaylistPicker.mode === 'aggregate' ? '加入聚合歌单' : '加入歌单'"
         @click.self="closeTrackPlaylistPicker"
       >
         <section class="track-playlist-picker-panel">
           <header>
             <div>
-              <h2>{{ trackPlaylistPicker.mode === "regular" ? "加入歌单" : "加入聚合歌单" }}</h2>
-              <p>选择要加入的目标：{{ trackPlaylistPicker.track.title }}</p>
+              <h2>{{ trackPlaylistPicker.mode === "aggregate" ? "加入聚合歌单" : "加入歌单" }}</h2>
+              <p>选择要加入的目标：{{ trackPlaylistPicker.tracks.length === 1 ? trackPlaylistPicker.tracks[0]?.title : `已选择 ${trackPlaylistPicker.tracks.length} 首` }}</p>
             </div>
             <button class="track-playlist-picker-close" type="button" title="关闭" aria-label="关闭" @click="closeTrackPlaylistPicker">×</button>
           </header>
@@ -11447,7 +12397,26 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div v-else-if="aggregatePlaylists.length" class="track-playlist-target-list">
+          <div v-else-if="trackPlaylistPicker.mode === 'streaming' && streamingPlaylistTargets.length" class="track-playlist-target-list">
+            <button
+              v-for="playlist in streamingPlaylistTargets"
+              :key="playlist.id"
+              type="button"
+              :disabled="playlistMutationPending"
+              @click="addTracksToStreamingPlaylist(playlist)"
+            >
+              <span class="track-playlist-target-art" :style="{ background: `linear-gradient(135deg, ${playlist.primary}, ${playlist.secondary})` }" aria-hidden="true">{{ playlist.mark }}</span>
+              <span><strong>{{ playlist.title }}</strong><small>{{ playlist.count }} 首</small></span>
+              <i aria-hidden="true">＋</i>
+            </button>
+          </div>
+
+          <div v-else-if="trackPlaylistPicker.mode === 'streaming'" class="track-playlist-picker-empty">
+            <strong>还没有可编辑的自建歌单</strong>
+            <span>请先在音乐库创建一个普通歌单。</span>
+          </div>
+
+          <div v-else-if="trackPlaylistPicker.mode === 'aggregate' && aggregatePlaylists.length" class="track-playlist-target-list">
             <button
               v-for="playlist in aggregatePlaylists"
               :key="playlist.id"
@@ -11476,7 +12445,8 @@ onBeforeUnmount(() => {
       crossorigin="anonymous"
       preload="metadata"
       @play="handleAudioPlay"
-      @seeking="resetPlaybackClock"
+      @pause="handleAudioPause"
+      @seeking="handleAudioSeeking"
       @ratechange="resetPlaybackClock"
       @loadedmetadata="updateMediaDuration"
       @durationchange="updateMediaDuration"
@@ -11573,10 +12543,18 @@ onBeforeUnmount(() => {
                 </button>
               </div>
               <div class="song-detail-track-meta">
-                <span class="song-detail-artist" :aria-label="`${currentTrack.artist} / ${currentTrack.album}`">
+                <span class="song-detail-artist" :aria-label="`歌手：${currentTrack.artist}`">
                   <span
-                    v-for="(character, characterIndex) in songInfoCharacters(currentTrack.artist + ' / ' + currentTrack.album)"
+                    v-for="(character, characterIndex) in songInfoCharacters(currentTrack.artist)"
                     :key="`artist-${characterIndex}`"
+                    class="song-info-character"
+                  >{{ character }}</span>
+                </span>
+                <span v-if="currentTrack.album" class="song-detail-album" :aria-label="`专辑：${currentTrack.album}`">
+                  <span class="song-detail-meta-label">专辑：</span>
+                  <span
+                    v-for="(character, characterIndex) in songInfoCharacters(currentTrack.album)"
+                    :key="`album-${characterIndex}`"
                     class="song-info-character"
                   >{{ character }}</span>
                 </span>
@@ -11590,7 +12568,7 @@ onBeforeUnmount(() => {
             ref="detailLyricsRef"
             class="song-detail-lyrics"
             :class="{ 'is-dragging': lyricsDragging }"
-            @scroll="updateLyricAnchorFromScroll"
+            @scroll="handleLyricScroll"
             @wheel.stop="handleLyricsManualScroll"
             @touchmove.stop="handleLyricsManualScroll"
             @pointerdown="handleLyricPointerDown"
@@ -11598,6 +12576,14 @@ onBeforeUnmount(() => {
             @pointerup="handleLyricPointerEnd"
             @pointercancel="handleLyricPointerEnd"
           >
+            <div
+              v-if="localLyricsMatchPending && currentTrack.source === 'local' && !currentTrack.lyrics?.trim()"
+              class="song-detail-lyrics-loading"
+              role="status"
+            >
+              正在准备歌词…
+            </div>
+            <template v-else>
             <div v-if="anchorPlaybackTime !== undefined && lyricAnchorVisible" class="lyric-anchor-controls">
               <button
                 class="lyric-seek-button"
@@ -11617,7 +12603,7 @@ onBeforeUnmount(() => {
               aria-hidden="true"
               :style="{ height: `${lyricStartSpacerHeight}px` }"
             ></div>
-            <div v-if="preludeEndTime > 0" class="song-detail-song-info" aria-label="前奏歌曲信息">
+            <div class="song-detail-song-info" aria-label="前奏歌曲信息">
               <p class="song-detail-preface-track" data-song-info-line>
                 <span
                   v-for="(character, characterIndex) in songInfoCharacters(preludeTrackText)"
@@ -11629,7 +12615,7 @@ onBeforeUnmount(() => {
                 <p v-for="credit in currentLyricCredits" :key="`${credit.label}-${credit.value}`" class="song-detail-credit" data-song-info-line>
                   <strong>
                     <span
-                      v-for="(character, characterIndex) in songInfoCharacters(credit.label)"
+                      v-for="(character, characterIndex) in songInfoCharacters(`${credit.label}：`)"
                       :key="`credit-label-${characterIndex}`"
                       class="song-info-character"
                     >{{ character }}</span>
@@ -11654,6 +12640,7 @@ onBeforeUnmount(() => {
                 :class="{
                   'is-active': index === activeLyricIndex,
                   'is-word-timed': Boolean(line.characters?.length),
+                  'has-translation': Boolean(line.translation?.trim()),
                   'is-outside-focus': isLyricLineOutsideFocus(index)
                 }"
               >
@@ -11663,10 +12650,11 @@ onBeforeUnmount(() => {
                       v-for="(character, characterIndex) in lyricCharacters(line)"
                       :key="`${line.time}-${characterIndex}`"
                       class="lyric-character"
+                      :class="{ 'is-leading-quote': characterIndex === 0 && Boolean(getLeadingLyricQuote(line.text)) }"
                       :data-character="character"
                     >{{ character }}</span>
                   </span>
-                  <span v-if="line.translation" class="song-detail-translation">{{ line.translation }}</span>
+                  <span v-if="line.translation" class="song-detail-translation"><span v-if="getLeadingLyricQuote(line.translation)" class="is-leading-quote">{{ getLeadingLyricQuote(line.translation) }}</span>{{ getLeadingLyricQuote(line.translation) ? line.translation.slice(1) : line.translation }}</span>
                 </span>
               </p>
               <div
@@ -11676,6 +12664,7 @@ onBeforeUnmount(() => {
               ></div>
             </div>
             <div v-else class="song-detail-lyrics-empty">暂无歌词</div>
+            </template>
             </section>
           </div>
         </div>
@@ -11809,7 +12798,7 @@ onBeforeUnmount(() => {
   </div>
 
   <MiniPlayer
-    v-if="miniPlayerVisible"
+    v-if="miniPlayerVisible && !nativeMiniMode"
     :track="currentTrack"
     :queue="playbackQueue"
     :queue-open="miniQueueVisible"
@@ -11819,6 +12808,10 @@ onBeforeUnmount(() => {
     :is-playing="isPlaying"
     :progress="progress"
     :lyric="currentLyricText"
+    :lyric-lines="lyricLines"
+    :source="currentTrack.source"
+    :lyrics-format="currentTrack.lyricsFormat"
+    :lyrics-source="currentTrack.lyricsSource"
     :theme-style="songDetailThemeStyle"
     :native-window="nativeMiniMode"
     :preferences="appearancePreferences.miniPlayer"
@@ -11897,6 +12890,7 @@ onBeforeUnmount(() => {
   </Teleport>
 </template>
 
+<!--suppress CssUnusedSymbol -->
 <style>
 :root {
   --app-page-background: #f4f4f6;
@@ -12288,7 +13282,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .artist-index-enter-active { transition: opacity 320ms ease; }
 .artist-index-leave-active { transition: opacity 160ms ease; }
 .artist-index-enter-from,.artist-index-leave-to { opacity: 0; }
-.local-artist-index button { position: relative; z-index: 0; display: grid; width: 22px; height: 19px; place-items: center; border: 0; border-radius: 999px; background: transparent; color: #778598; cursor: pointer; font-size: 11px; font-weight: 850; line-height: 1; opacity: 0; transform: scale(1); transform-origin: center; animation: artist-index-letter-enter 360ms ease-out both; animation-delay: calc(80ms + var(--artist-letter-index) * 16ms); transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms cubic-bezier(.2,.8,.2,1); }
+.local-artist-index button { --artist-letter-index: 0; position: relative; z-index: 0; display: grid; width: 22px; height: 19px; place-items: center; border: 0; border-radius: 999px; background: transparent; color: #778598; cursor: pointer; font-size: 11px; font-weight: 850; line-height: 1; opacity: 0; transform: scale(1); transform-origin: center; animation: artist-index-letter-enter 360ms ease-out both; animation-delay: calc(80ms + var(--artist-letter-index) * 16ms); transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease, transform 160ms cubic-bezier(.2,.8,.2,1); }
 .local-artist-index button:not(:disabled):hover,
 .local-artist-index button:not(:disabled):focus-visible { z-index: 2; background: #e6f7f2; color: #087d6d; box-shadow: 0 5px 12px rgba(8,125,109,.18); transform: scale(1.45); }
 .local-artist-index button.active { z-index: 1; background: #14b899; color: #fff; box-shadow: 0 5px 12px rgba(20,184,153,.24); transform: scale(1.35); }
@@ -12315,7 +13309,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .local-artist-track-list strong { color: #10182b; font-size: 13px; font-weight: 900; }
 .local-artist-track-list small { color: #7b879a; font-size: 12px; }
 .local-artist-track-list em { color: #8f9aaa; font-size: 12px; font-style: normal; font-weight: 800; text-align: right; }
-.hero-section { display: grid; grid-template-columns: minmax(360px,1.3fr) minmax(300px,1fr); gap: 18px; margin-bottom: 38px; }.hero-card { position: relative; display: flex; height: 253px; min-height: 253px; max-height: 253px; overflow: hidden; border-radius: 16px; background: #dce8ee; }.hero-copy { position: relative; z-index: 1; display: flex; max-width: 58%; flex-direction: column; justify-content: center; padding: 30px 34px; background: linear-gradient(90deg,rgba(220,232,238,.98) 0%,rgba(220,232,238,.82) 72%,rgba(220,232,238,0) 100%); }.hero-kicker,.quick-label { color: rgba(43,56,59,.56); font-size: 10px; font-weight: 800; letter-spacing: 1px; }.hero-copy h2 { display: -webkit-box; height: 90px; max-height: 90px; max-width: 330px; margin: 11px 0 9px; overflow: hidden; color: #263335; font-size: clamp(27px,3.3vw,43px); line-height: 1.05; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }.hero-copy p { max-width: 210px; margin-bottom: 18px; color: rgba(38,51,53,.65); font-size: 11px; line-height: 1.7; }.hero-action { display: inline-flex; width: fit-content; align-items: center; gap: 7px; border: 0; border-radius: 999px; padding: 10px 15px 10px 12px; background: #1fd77a; color: #fff; cursor: pointer; font-size: 11px; font-weight: 700; box-shadow: 0 9px 17px rgba(24,178,102,.2); }.hero-action:hover { background: #16c76d; }.hero-action span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: rgba(255,255,255,.95); color: #1dbd6d; font-size: 8px; }
+.hero-section { display: grid; grid-template-columns: minmax(360px,1.3fr) minmax(300px,1fr); gap: 18px; margin-bottom: 38px; }.hero-card { position: relative; display: flex; height: 253px; min-height: 253px; max-height: 253px; overflow: hidden; border-radius: 16px; background: #dce8ee; }.hero-copy { position: relative; z-index: 1; display: flex; max-width: 58%; flex-direction: column; justify-content: center; padding: 30px 34px; background: linear-gradient(90deg,rgba(220,232,238,.98) 0%,rgba(220,232,238,.82) 72%,rgba(220,232,238,0) 100%); }.hero-kicker,.quick-label { color: rgba(43,56,59,.56); font-size: 10px; font-weight: 800; letter-spacing: 1px; }.hero-copy h2 { display: -webkit-box; height: 90px; max-height: 90px; max-width: 330px; margin: 11px 0 9px; overflow: hidden; color: #263335; font-size: clamp(27px,3.3vw,43px); line-height: 1.05; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }.hero-copy p { max-width: 210px; margin-bottom: 18px; color: rgba(38,51,53,.65); font-size: 11px; line-height: 1.7; }.hero-action { display: inline-flex; width: fit-content; align-items: center; gap: 7px; border: 0; border-radius: 999px; padding: 10px 15px 10px 12px; background: #1fd77a; color: #fff; cursor: pointer; font-size: 11px; font-weight: 700; box-shadow: 0 9px 17px rgba(24,178,102,.2); }.hero-action:hover { background: #16c76d; }.hero-action span { display: grid; width: 19px; height: 19px; place-items: center; border-radius: 50%; background: rgba(255,255,255,.95); color: #1dbd6d; font-size: 8px; }
 .hero-visual { position: absolute; inset: 0; overflow: hidden; }.hero-visual img { width: 100%; height: 100%; object-fit: cover; opacity: .92; }.hero-disc,.hero-cover,.hero-orbit { display: none; }
 .homepage-fallback .hero-card { background: #dce8ee; }.homepage-fallback .fallback-visual { left: 42%; }.homepage-fallback .fallback-visual::after { position: absolute; inset: 0; background: linear-gradient(90deg,rgba(220,232,238,.98),rgba(220,232,238,.18) 64%,rgba(220,232,238,0)); content: ""; }.discovery-intro { display: flex; align-items: flex-end; justify-content: space-between; gap: 22px; margin-bottom: 32px; padding: 28px 30px; border-radius: 16px; background: #dce8ee; }.discovery-intro h2 { margin: 10px 0 7px; color: #263335; font-size: 30px; }.discovery-intro p { max-width: 480px; margin: 0; color: rgba(38,51,53,.65); font-size: 12px; line-height: 1.7; }.discovery-intro button { flex: 0 0 auto; border: 1px solid rgba(38,51,53,.18); border-radius: 999px; padding: 9px 15px; background: rgba(255,255,255,.56); color: #415456; cursor: pointer; font-size: 11px; }.discovery-intro button:hover { background: #fff; color: #168ec6; }
 .quick-recommendations { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; }.quick-card { position: relative; display: flex; min-height: 218px; flex-direction: column; overflow: hidden; border-radius: 14px; padding: 22px 18px; }.quick-card strong { position: relative; z-index: 1; margin-top: 17px; color: #313b3d; font-size: 15px; line-height: 1.45; }.quick-card.peach { background: #f2d8c5; }.quick-card.mint { background: #cfe5d8; }.quick-card.ink { background: #d9e1e8; }.quick-art { position: absolute; right: 5px; bottom: -12px; color: rgba(255,255,255,.58); font-family: Georgia,"Times New Roman",serif; font-size: 112px; line-height: 1; }.quick-card button { position: relative; z-index: 1; display: grid; width: 29px; height: 29px; margin-top: auto; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.72); color: #364244; cursor: pointer; font-size: 10px; }.quick-hint { position: relative; z-index: 1; margin-top: auto; color: rgba(54,66,68,.62); font-size: 10px; }
@@ -12721,7 +13715,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 
 .song-detail-mode-wrap { position: relative; }
 .song-detail-controls .song-detail-mode { display: grid; width: 30px; height: 30px; place-items: center; }
-.play-mode-icon,.play-mode-option-icon,.transport-icon,.volume-icon { display: block; width: 18px; height: 18px; background: currentColor; -webkit-mask: center / contain no-repeat; mask: center / contain no-repeat; }
+.play-mode-icon,.play-mode-option-icon,.transport-icon,.volume-icon { display: block; width: 18px; height: 18px; background: currentColor; -webkit-mask-position: center; mask-position: center; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: contain; mask-size: contain; }
 .play-mode-icon-shuffle { -webkit-mask-image: url("./assets/icons/shuffle-line.svg"); mask-image: url("./assets/icons/shuffle-line.svg"); }
 .play-mode-icon-sequence { -webkit-mask-image: url("./assets/icons/list-order.svg"); mask-image: url("./assets/icons/list-order.svg"); }
 .play-mode-icon-single { -webkit-mask-image: url("./assets/icons/repeat-one-line.svg"); mask-image: url("./assets/icons/repeat-one-line.svg"); }
@@ -12735,7 +13729,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .play-mode-menu button:hover,.play-mode-menu button.selected { background: #e7f8fb; color: #168ec6; }
 .play-mode-option-icon { width: 15px; height: 15px; }
 .queue-panel { position: fixed; right: 18px; bottom: 92px; z-index: 55; display: grid; width: min(472px,calc(100vw - 36px)); max-height: min(560px,calc(100vh - 122px)); grid-template-rows: auto minmax(0,1fr); overflow: hidden; border: 1px solid #e7edf4; border-radius: 18px; background: rgba(255,255,255,.98); box-shadow: 0 20px 48px rgba(28,39,36,.16); color: #10192b; }.queue-panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 17px 18px 12px; }.queue-panel-title { display: grid; min-width: 0; gap: 7px; }.queue-title-row { display: flex; align-items: center; gap: 9px; }.queue-panel-header h2 { margin: 0; color: #0c1426; font-size: 18px; font-weight: 900; letter-spacing: 0; }.queue-count-badge { display: inline-flex; align-items: baseline; gap: 2px; padding: 4px 9px; border-radius: 999px; background: #eaf3ff; color: #1f6cff; font-size: 11px; font-weight: 800; }.queue-count-badge b { font-size: 13px; }.queue-panel-title p { margin: 0; color: #718096; font-size: 12px; }.queue-panel-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }.queue-panel-actions button { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 12px; border: 1px solid #dce3ec; border-radius: 999px; background: #fff; color: #2f3b4f; cursor: pointer; font-size: 12px; font-weight: 700; box-shadow: 0 4px 12px rgba(24,35,52,.05); transition: border-color 150ms ease,color 150ms ease,background 150ms ease,transform 150ms ease; }.queue-panel-actions button:hover { border-color: #b9c9de; background: #f8fbff; color: #1f6cff; transform: translateY(-1px); }.queue-panel-actions button:disabled { color: #c3c9d2; cursor: default; transform: none; }.queue-action-icon { position: relative; display: inline-block; width: 13px; height: 13px; color: currentColor; }.queue-locate-icon { border: 1.7px solid currentColor; border-radius: 50%; }.queue-locate-icon::after { position: absolute; top: 50%; left: 50%; width: 3px; height: 3px; border-radius: 50%; background: currentColor; content: ""; transform: translate(-50%,-50%); }.queue-trash-icon::before { position: absolute; top: 3px; left: 3px; width: 7px; height: 8px; border: 1.6px solid currentColor; border-top: 0; border-radius: 0 0 2px 2px; content: ""; }.queue-trash-icon::after { position: absolute; top: 1px; left: 2px; width: 9px; height: 2px; border-radius: 999px; background: currentColor; box-shadow: 3px -2px 0 -1px currentColor; content: ""; }.queue-list { display: grid; min-height: 0; gap: 8px; overflow: auto; padding: 8px 8px 14px; }.queue-track { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; border: 1px solid transparent; border-radius: 14px; background: #fff; transition: background 150ms ease,border-color 150ms ease,box-shadow 150ms ease,transform 150ms ease; }.queue-track:hover { background: #f8fbff; transform: translateY(-1px); }.queue-track:hover .queue-drag-handle,.queue-track:hover .queue-current-actions,.queue-track:focus-within .queue-drag-handle,.queue-track:focus-within .queue-current-actions { opacity: 1; pointer-events: auto; }.queue-track.active { border-color: #bdd4ff; background: #eef5ff; box-shadow: 0 9px 24px rgba(31,108,255,.12); }.queue-track-main { display: grid; width: 100%; min-width: 0; grid-template-columns: 58px 38px minmax(0,1fr); align-items: center; gap: 12px; border: 0; padding: 8px 8px 8px 12px; background: transparent; color: inherit; cursor: pointer; text-align: left; }.queue-row-leading { display: flex; min-width: 0; align-items: center; justify-content: center; gap: 8px; }.queue-drag-handle { display: grid; gap: 3px; width: 14px; color: #8a99ad; cursor: grab; }.queue-drag-handle:active { cursor: grabbing; }.queue-drag-handle,.queue-current-actions { opacity: 0; pointer-events: none; transition: opacity 150ms ease,transform 150ms ease; }.queue-drag-handle i { display: block; width: 13px; height: 2px; border-radius: 999px; background: currentColor; }.queue-index { color: #6d7890; font-size: 12px; font-weight: 800; text-align: center; }.queue-wave-indicator { display: flex; width: 20px; align-items: center; justify-content: center; gap: 3px; }.queue-wave-indicator i { width: 3px; height: 5px; border-radius: 999px; background: #1f6cff; animation: queue-wave 780ms ease-in-out infinite; }.queue-wave-indicator i:nth-child(2) { animation-delay: 120ms; }.queue-wave-indicator i:nth-child(3) { animation-delay: 240ms; }.queue-track.is-paused .queue-wave-indicator i { animation-play-state: paused; opacity: .75; }.queue-track.is-paused .queue-wave-indicator i:nth-child(1) { height: 4px; }.queue-track.is-paused .queue-wave-indicator i:nth-child(2) { height: 6px; }.queue-track.is-paused .queue-wave-indicator i:nth-child(3) { height: 4px; }.queue-cover { display: grid; width: 38px; height: 38px; place-items: center; overflow: hidden; border-radius: 7px; color: #fff; font-size: 13px; font-weight: 700; box-shadow: 0 5px 14px rgba(28,39,64,.12); }.queue-cover img { width: 100%; height: 100%; object-fit: cover; }.queue-track-copy { display: grid; min-width: 0; gap: 4px; }.queue-track-copy strong,.queue-track-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.queue-track-copy strong { color: #111827; font-size: 13px; font-weight: 850; }.queue-track-copy span { color: #7d8799; font-size: 11px; }.queue-track.active .queue-track-copy strong { color: #1f6cff; }.queue-current-actions { display: flex; align-items: center; gap: 6px; padding-right: 10px; }.queue-current-actions button { display: grid; width: 25px; height: 25px; place-items: center; border: 0; border-radius: 50%; background: rgba(226,232,240,.78); color: #7d8799; cursor: pointer; font-size: 14px; line-height: 1; transition: background 150ms ease,color 150ms ease,transform 150ms ease; }.queue-current-actions button:hover { background: #d7e1ee; color: #334155; transform: translateY(-1px); }.queue-card-next-icon { display: block; width: 13px; height: 13px; background: currentColor; -webkit-mask: url("./assets/icons/next.svg") center / contain no-repeat; mask: url("./assets/icons/next.svg") center / contain no-repeat; }.queue-empty { padding: 34px 20px; color: #9ca4a2; font-size: 11px; text-align: center; }.queue-panel-enter-active,.queue-panel-leave-active { transition: opacity 180ms ease,transform 180ms ease; }.queue-panel-enter-from,.queue-panel-leave-to { opacity: 0; transform: translateY(8px); }
-.song-detail { background-color: #fff; contain: paint; will-change: opacity; }
+.song-detail { --detail-ambient-start: #eef8f9; --detail-ambient-end: #edf7f8; background-color: #fff; contain: paint; will-change: opacity; }
 .player-bar.song-detail-player-bar { z-index: 70; }
 .player-bar-visibility-enter-active,.player-bar-visibility-leave-active { transition: opacity 240ms ease,transform 240ms ease; }
 .player-bar-visibility-enter-from,.player-bar-visibility-leave-to { opacity: 0; transform: translate(-50%,12px); }
@@ -13297,6 +14291,41 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   white-space: nowrap;
 }
 
+.settings-qq-listening-body {
+  display: grid;
+  gap: 20px;
+}
+.settings-qq-account-picker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  color: #4d5a70;
+  font-size: 12px;
+  font-weight: 750;
+}
+.settings-qq-date-range { font-size: 13px !important; }
+.settings-qq-date-selectors input {
+  box-sizing: border-box;
+  width: 170px;
+  height: 38px;
+  border: 1px solid #d9e0e9;
+  border-radius: 8px;
+  padding: 0 11px;
+  background: #fff;
+  color: #273349;
+  font: inherit;
+  font-size: 12px;
+}
+.settings-qq-listening-empty {
+  margin: 0;
+  border-block: 1px solid #e7ebf1;
+  padding: 24px 20px;
+  background: #f6f8fb;
+  color: #7d8899;
+  font-size: 12px;
+}
+
 .settings-listening-retention {
   display: grid;
   gap: 18px;
@@ -13549,6 +14578,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   .settings-listening-summary > div + div { border-left: 0; border-top: 1px solid #e2e7ee; }
   .settings-listening-selectors { align-items: stretch; flex-direction: column; }
   .settings-listening-selectors .settings-select-control { width: 100%; }
+  .settings-qq-account-picker { align-items: stretch; flex-direction: column; }
+  .settings-qq-account-picker .settings-select-control,
+  .settings-qq-date-selectors input { width: 100%; }
 }
 
 .settings-switch {
@@ -13725,10 +14757,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   display: grid;
   width: min(1180px, calc(100vw - 224px - 36px));
   max-width: none;
-  margin-top: 18px;
-  margin-right: 0;
-  margin-bottom: 0;
-  margin-left: calc((100% - min(1180px, calc(100vw - 224px - 36px))) / 2);
+  margin: 18px 0 0 calc((100% - min(1180px, calc(100vw - 224px - 36px))) / 2);
   gap: 42px;
   color: #11192b;
   transition: width 280ms ease, margin-left 280ms ease;
@@ -13744,10 +14773,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   display: grid;
   width: min(1180px, calc(100vw - 224px - 36px));
   max-width: none;
-  margin-top: 0;
-  margin-right: 0;
-  margin-bottom: 0;
-  margin-left: calc((100% - min(1180px, calc(100vw - 224px - 36px))) / 2);
+  margin: 0 0 0 calc((100% - min(1180px, calc(100vw - 224px - 36px))) / 2);
   align-content: start;
   gap: 42px;
   color: #10182b;
@@ -13967,6 +14993,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .local-home-random-arrow { color: #748097; font-size: 14px; }
 
 .local-home-last-played {
+  --home-accent-primary: #dfe7ef;
+  --home-accent-secondary: #b8c7d8;
+  --home-cover-image: none;
   position: relative;
   display: grid;
   min-height: 408px;
@@ -15020,6 +16049,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   text-align: left;
 }
 
+.song-detail-lyrics-loading {
+  display: flex;
+  min-height: min(44vh, 390px);
+  align-items: center;
+  color: #78969c;
+  font-size: 15px;
+}
+
 .song-detail-lyrics-list p {
   font-size: 22px;
   text-align: left;
@@ -15041,6 +16078,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 }
 
 .song-detail-progress .progress-slider-wrap {
+  --preview-progress-limit: 100%;
+  --progress: 0%;
   position: relative;
   display: block;
   min-width: 0;
@@ -15174,7 +16213,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 }
 
 .song-detail-lyrics {
+  --lyric-anchor-offset: calc(38% - 42px);
   --lyric-gutter: 72px;
+  --lyric-overflow-room: clamp(96px, 10vw, 180px);
   position: relative;
   align-content: start;
   align-self: stretch;
@@ -15183,14 +16224,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  width: calc(100% + var(--lyric-gutter));
+  width: calc(100% + var(--lyric-gutter) + var(--lyric-overflow-room));
   margin-left: calc(var(--lyric-gutter) * -1);
-  padding: 0 10px 38px 0;
-  padding-left: var(--lyric-gutter);
+  padding: 0 10px 38px var(--lyric-gutter);
   scrollbar-width: none;
   touch-action: pan-y;
   cursor: grab;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 90%, transparent 100%);
+  -webkit-mask-image: -webkit-linear-gradient(top, transparent 0%, #000 8%, #000 90%, transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 90%, transparent 100%);
 }
 
@@ -15268,8 +16308,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 }
 
 .song-detail-track-meta {
-  display: block;
+  display: grid;
   min-width: 0;
+  gap: 3px;
   margin: 0;
 }
 
@@ -15279,6 +16320,19 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   color: #77959b;
   font-size: 22px;
   line-height: 1.45;
+}
+
+.song-detail-album {
+  display: block;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #8aa1a6;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.song-detail-meta-label {
+  color: #6f8b91;
 }
 
 .song-detail-song-info {
@@ -15446,12 +16500,15 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .lyric-line-content {
   display: block;
   min-width: 0;
+  max-width: 100%;
+  overflow: visible;
   width: 100%;
 }
 
 .song-detail-lyrics-list .lyric-original {
   display: block;
   color: #405d63;
+  white-space: nowrap;
 }
 
 .song-detail-lyrics-list {
@@ -15493,12 +16550,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 
 .song-detail-lyrics-list .song-detail-translation {
   display: block;
-  margin-top: 3px;
+  margin-top: 7px;
   color: #6f9296;
   font-size: 22px;
   font-weight: 400;
   line-height: 1.5;
   transition: color 180ms ease, font-size 180ms ease;
+  white-space: nowrap;
 }
 
 .song-detail-lyrics-list .is-active .song-detail-translation {
@@ -15516,8 +16574,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
     max-height: 100%;
     width: calc(min(100%, 430px) + var(--lyric-gutter));
     margin-left: calc(var(--lyric-gutter) * -1);
-    padding: 0 0 28px;
-    padding-left: var(--lyric-gutter);
+    padding: 0 0 28px var(--lyric-gutter);
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
@@ -16003,7 +17060,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .streaming-featured-playlist-mark { color: rgba(255,255,255,.9); font-size: 28px; font-weight: 900; }
 .streaming-featured-playlist-count { position: absolute; left: 9px; bottom: 9px; border-radius: 999px; padding: 4px 7px; background: rgba(19,27,40,.68); color: #fff; font-size: 9px; font-weight: 800; backdrop-filter: blur(8px); }
 .streaming-featured-playlist-play { position: absolute; right: 9px; bottom: 9px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid rgba(255,255,255,.78); border-radius: 50%; background: rgba(255,255,255,.9); color: #172033; box-shadow: 0 7px 18px rgba(24,31,43,.16); opacity: 0; transform: translateY(5px); transition: opacity 180ms ease, transform 180ms ease; }
-.streaming-featured-playlist-card strong { display: -webkit-box; overflow: hidden; color: #172033; font-size: 12px; font-weight: 850; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.streaming-featured-playlist-card strong { display: -webkit-box; overflow: hidden; color: #172033; font-size: 12px; font-weight: 850; line-height: 1.5; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .streaming-featured-playlist-card:hover .streaming-featured-playlist-cover { box-shadow: 0 18px 34px rgba(31,40,55,.15); transform: translateY(-4px); }
 .streaming-featured-playlist-card:hover .streaming-featured-playlist-cover img { transform: scale(1.025); }
 .streaming-featured-playlist-card:hover .streaming-featured-playlist-play { opacity: 1; transform: translateY(0); }
@@ -16043,8 +17100,20 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 
 /* Appearance preferences are applied at the shell so every route shares one live theme. */
 .app-shell {
+  --appearance-accent: #68369a;
+  --appearance-background-image: none;
+  --appearance-font-family: Inter, "Segoe UI", sans-serif;
+  --app-accent: var(--appearance-accent);
+  --lyric-active-color: #2f9fc8;
+  --lyric-font-family: Inter, "Segoe UI", sans-serif;
+  --lyric-font-size: 20px;
+  --lyric-font-weight: 700;
+  --lyric-inactive-color: #405d63;
+  --lyric-inactive-opacity: .58;
+  --lyric-line-height: 1.55;
+  --lyric-sweep-color: #2f9fc8;
   accent-color: var(--appearance-accent);
-  font-family: var(--appearance-font-family);
+  font-family: var(--appearance-font-family, Inter, "Segoe UI", sans-serif);
 }
 .app-shell.has-custom-background-image {
   background-color: var(--app-page-background);
@@ -16200,10 +17269,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .app-shell .song-detail-artist,
 .app-shell .song-detail-song-info,
 .app-shell .song-detail-translation { font-size: var(--lyric-font-size); }
+.app-shell .song-detail-lyrics { grid-template-columns: minmax(0, 1fr); }
 .app-shell .song-detail-lyrics-list { text-align: left; padding-bottom: 0; --lyric-highlight-color: var(--lyric-sweep-color); }
 .app-shell .song-detail-lyrics-list p.lyric-line {
   color: var(--lyric-inactive-color);
-  font-family: var(--lyric-font-family);
+  font-family: var(--lyric-font-family, Inter, "Segoe UI", sans-serif);
   font-size: var(--lyric-font-size);
   font-weight: var(--lyric-font-weight);
   line-height: var(--lyric-line-height);
@@ -16211,11 +17281,38 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   transform-origin: left center;
   opacity: var(--lyric-inactive-opacity);
   transition: opacity 180ms ease, color 180ms ease;
+  padding-block: 2px;
 }
 .app-shell .song-detail-lyrics-list p.lyric-line.is-active { font-size: var(--lyric-font-size); opacity: 1; }
-.app-shell .song-detail-lyrics-list p.lyric-line.is-active .lyric-original { font-size: calc(var(--lyric-font-size) * 1.25); }
+.app-shell .song-detail-lyrics-list p.lyric-line.has-translation { padding-bottom: .35em; }
+.app-shell .song-detail-lyrics-list .lyric-line-content { display: flex; flex-direction: column; align-items: flex-start; }
+.app-shell .song-detail-lyrics-list .lyric-original {
+  position: relative;
+  width: max-content;
+  max-width: 80%;
+  margin-block: var(--lyric-scale-room, 0px);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  font-size: var(--lyric-font-size);
+  line-height: max(1.3em, calc(var(--lyric-line-height) * .78em));
+  transform: scale(1);
+  transform-origin: left center;
+  transition: color 180ms ease, transform 260ms cubic-bezier(.2,.75,.2,1);
+  will-change: transform;
+}
+.app-shell .song-detail-lyrics-list p.lyric-line.is-active .lyric-original { transform: scale(1.25); }
+.app-shell .song-detail-lyrics-list .song-detail-translation {
+  position: relative;
+  margin-top: 2px;
+  line-height: 1.25;
+  width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.app-shell .song-detail-lyrics-list .is-leading-quote { position: absolute; left: 0; top: 0; transform: translateX(-100%); }
 .app-shell .song-detail-lyrics-list .lyric-character,
 .app-shell .song-info-character { white-space: pre-wrap; }
+.app-shell .song-detail-lyrics-list .lyric-character { white-space: pre; }
 .app-shell .song-detail-lyrics-list p.lyric-line.is-outside-focus { opacity: .12; }
 .app-shell .song-detail-lyrics-list .lyric-original,
 .app-shell .song-detail-lyrics-list .lyric-character { color: var(--lyric-inactive-color); }
@@ -16235,6 +17332,41 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .app-shell.lyrics-no-word-highlight .song-detail-lyrics-list .lyric-line.is-word-timed .lyric-character { background: none; color: var(--lyric-inactive-color); -webkit-text-fill-color: currentColor; }
 .app-shell.lyrics-no-word-highlight .song-detail-lyrics-list .lyric-line.is-word-timed.is-active .lyric-character { color: var(--lyric-active-color); }
 .app-shell .song-detail-lyrics-list .lyric-line.is-active:not(.is-word-timed) .lyric-character { color: var(--lyric-active-color); }
+
+.qq-listening-range {
+  display: flex;
+  max-width: 320px;
+  box-sizing: border-box;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 8px;
+}
+.qq-listening-range-options {
+  display: inline-flex;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid #dfe3e9;
+  border-radius: 8px;
+  background: rgba(255,255,255,.84);
+}
+.qq-listening-range-options button,
+.qq-listening-custom-range > button {
+  height: 32px;
+  border: 0;
+  border-radius: 6px;
+  padding: 0 12px;
+  background: transparent;
+  color: #657084;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.qq-listening-range-options button.active {
+  background: #20242d;
+  color: #fff;
+}
+.qq-listening-range-options button:disabled { opacity: .6; cursor: wait; }
+.qq-listening-range-error { margin: 0; color: #bd4e55; font-size: 12px; }
 
 @media (prefers-reduced-motion: reduce) {
   .app-page-enter-active,
@@ -16310,5 +17442,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   .streaming-personal-grid { grid-template-columns: 1fr; gap: 14px; }
   .streaming-personal-card { grid-template-columns: 68px minmax(0, 1fr) 38px; min-height: 96px; padding: 14px; }
   .streaming-radar-covers { transform: scale(.84); transform-origin: center left; }
+  .qq-listening-range { align-items: stretch; max-width: none; }
+  .qq-listening-range-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+  .qq-listening-range-options button { padding-inline: 5px; }
 }
 </style>

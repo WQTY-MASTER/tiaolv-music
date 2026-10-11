@@ -34,7 +34,8 @@ assert.match(provider, /body\.add\("songFile"/, "上传到网易云时必须使�
 assert.match(provider, /path\("\/cloud\/lyric\/get"\)/, "云盘歌词必须来自网易云 /cloud/lyric/get");
 assert.match(api, /export function loadCloudLyrics\b/, "前端 API 应暴露云盘歌词读取方法");
 assert.match(app, /track\.source === "cloud"[\s\S]*loadCloudLyrics\(track\.id\)/, "播放云盘歌曲时应加载文件内置歌词");
-assert.match(main, /fetch\(source\)/, "下载应由 Electron 主进程直接保存网易云音频流");
+assert.match(app, /const cloudLyricCredits = cloudLyrics\?\.credits[\s\S]*normalizeLyricCredits\(cloudLyricCredits\)/, "云盘歌词制作信息应先完成空值收窄再规范化");
+assert.match(main, /fetch\(source,\s*\{[\s\S]*?redirect: isLocalBackendUrl\(source\) \? "error" : "follow"/, "主进程下载应避免本机访问令牌随重定向发往外部地址");
 assert.doesNotMatch(main, /cloud\/tracks\/.*\/download/, "下载不得依赖自建云盘文件接口");
 
 console.log("流媒体音乐云盘契约通过");

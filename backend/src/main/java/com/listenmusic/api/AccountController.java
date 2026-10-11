@@ -2,9 +2,15 @@ package com.listenmusic.api;
 
 import com.listenmusic.auth.AccountView;
 import com.listenmusic.domain.Track;
+import com.listenmusic.domain.QqListeningDataSummary;
 import com.listenmusic.provider.HomepagePlaylist;
 import com.listenmusic.provider.AccountProfile;
 import com.listenmusic.provider.AccountSocialUser;
+import com.listenmusic.provider.FavoriteOperationException;
+import com.listenmusic.provider.PlaylistOrderConflictException;
+import com.listenmusic.provider.PlaylistOrderRateLimitException;
+import com.listenmusic.provider.RecentTracksDeleteResult;
+import com.listenmusic.provider.RecentPlayReportException;
 import com.listenmusic.service.AccountCatalogService;
 import com.listenmusic.service.AccountLoginRequiredException;
 import org.springframework.http.HttpStatus;
@@ -28,6 +34,22 @@ public class AccountController {
 
     public AccountController(AccountCatalogService accountCatalogService) {
         this.accountCatalogService = accountCatalogService;
+    }
+
+    public record RecentPlayReportRequest(String accountId, String trackId, String sessionId, long listenedSeconds, long totalSeconds) {}
+
+    @PostMapping("/qq/recent-play-reports")
+    public Map<String, Object> reportRecentPlay(@RequestBody RecentPlayReportRequest request) {
+        List<Track> tracks = accountCatalogService.reportRecentPlay(
+            request.accountId(), request.trackId(), request.sessionId(), request.listenedSeconds(), request.totalSeconds()
+        );
+        return Map.of("ok", true, "tracks", tracks);
+    }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(RecentPlayReportException.class)
+    public ResponseEntity<Map<String, String>> recentPlayReportFailed(RecentPlayReportException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+            .body(Map.of("code", "RECENT_PLAY_REPORT_FAILED", "message", ex.getMessage()));
     }
 
     @GetMapping("/current")
@@ -94,9 +116,52 @@ public class AccountController {
         return accountCatalogService.loadRecentTracks(provider);
     }
 
+    public record RecentTracksDeleteRequest(List<String> trackIds) {}
+
+    @DeleteMapping("/{provider}/recent-tracks")
+    public RecentTracksDeleteResult deleteRecentTracks(
+        @PathVariable String provider,
+        @RequestBody RecentTracksDeleteRequest request
+    ) {
+        return accountCatalogService.deleteRecentTracks(provider, request.trackIds());
+    }
+
     @GetMapping("/{provider}/listening-rank")
-    public List<Track> listeningRank(@PathVariable String provider) {
-        return accountCatalogService.loadListeningRank(provider);
+    public List<?> listeningRank(
+        @PathVariable String provider,
+        @RequestParam(defaultValue = "week") String period,
+        @RequestParam(required = false) String from,
+        @RequestParam(required = false) String to
+    ) {
+        return accountCatalogService.loadListeningRank(provider, period, from, to);
+    }
+
+    @PostMapping("/{provider}/listening-stats")
+    public Map<String, Object> recordListeningStats(
+        @PathVariable String provider,
+        @RequestBody QqListeningDeltaRequest request
+    ) {
+        accountCatalogService.recordQqListeningDelta(
+            provider, request.accountId(), request.accountNickname(), request.accountAvatarUrl(),
+            request.track(), request.listenedSeconds(), request.playCount()
+        );
+        return Map.of("ok", true);
+    }
+
+    @GetMapping("/qq/listening-stats/accounts")
+    public List<QqListeningDataSummary> qqListeningDataSummaries() {
+        return accountCatalogService.loadQqListeningDataSummaries();
+    }
+
+    @DeleteMapping("/qq/listening-stats/{accountId}")
+    public Map<String, Object> deleteQqListeningStats(
+        @PathVariable String accountId,
+        @RequestParam(defaultValue = "false") boolean all,
+        @RequestParam(required = false) String from,
+        @RequestParam(required = false) String to
+    ) {
+        accountCatalogService.deleteQqListeningStats(accountId, all, from, to);
+        return Map.of("ok", true);
     }
 
     @PostMapping("/{provider}/listening-scrobbles")
@@ -131,6 +196,37 @@ public class AccountController {
     @GetMapping("/{provider}/featured-playlists")
     public List<HomepagePlaylist> featuredPlaylists(@PathVariable String provider) {
         return accountCatalogService.loadFeaturedPlaylists(provider);
+    }
+
+    @DeleteMapping("/{provider}/playlists/{id}")
+    public Map<String, Boolean> deletePlaylist(@PathVariable String provider, @PathVariable String id) {
+        accountCatalogService.deletePlaylist(provider, id);
+        return Map.of("ok", true);
+    }
+
+    @DeleteMapping("/{provider}/playlists/{id}/tracks/{trackId}")
+    public Map<String, Boolean> removePlaylistTrack(@PathVariable String provider, @PathVariable String id, @PathVariable String trackId) {
+        accountCatalogService.removePlaylistTrack(provider, id, trackId);
+        return Map.of("ok", true);
+    }
+
+    public record PlaylistTrackOrderRequest(List<String> trackIds, List<String> previousTrackIds) {}
+    public record PlaylistTracksRequest(List<String> trackIds) {}
+
+    @PostMapping("/{provider}/playlists/{id}/tracks")
+    public Map<String, Boolean> addPlaylistTracks(
+        @PathVariable String provider,
+        @PathVariable String id,
+        @RequestBody PlaylistTracksRequest request
+    ) {
+        accountCatalogService.addPlaylistTracks(provider, id, request.trackIds());
+        return Map.of("ok", true);
+    }
+
+    @PostMapping("/{provider}/playlists/{id}/order")
+    public Map<String, Boolean> reorderPlaylistTracks(@PathVariable String provider, @PathVariable String id, @RequestBody PlaylistTrackOrderRequest request) {
+        accountCatalogService.reorderPlaylistTracks(provider, id, request.trackIds(), request.previousTrackIds());
+        return Map.of("ok", true);
     }
 
     @GetMapping("/{provider}/playlists/{id}")
@@ -182,6 +278,29 @@ public class AccountController {
     public ResponseEntity<Map<String, String>> loginRequired(AccountLoginRequiredException ex) {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
             .body(Map.of("code", "LOGIN_REQUIRED", "message", ex.getMessage()));
+    }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(PlaylistOrderConflictException.class)
+    public ResponseEntity<Map<String, String>> playlistOrderConflict(PlaylistOrderConflictException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+            .body(Map.of("code", "PLAYLIST_ORDER_CONFLICT", "message", ex.getMessage()));
+    }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(PlaylistOrderRateLimitException.class)
+    public ResponseEntity<Map<String, String>> playlistOrderRateLimited(PlaylistOrderRateLimitException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+            .body(Map.of("code", "PLAYLIST_ORDER_RATE_LIMITED", "message", ex.getMessage()));
+    }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(FavoriteOperationException.class)
+    public ResponseEntity<Map<String, String>> favoriteWriteFailed(FavoriteOperationException ex) {
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+            .body(Map.of("code", "FAVORITE_WRITE_FAILED", "message", ex.getMessage()));
+    }
+
+    @org.springframework.web.bind.annotation.ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, String>> invalidRequest(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(Map.of("message", ex.getMessage()));
     }
 
 }

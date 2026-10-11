@@ -7,6 +7,9 @@ node_modules/
 electron/out/
 electron/src/renderer/dist/
 backend/target/
+electron/resources/runtime/
+electron/resources/.runtime-stage-*/
+electron/resources/.runtime-previous-*/
 dist/
 build/
 *.tsbuildinfo
@@ -24,9 +27,8 @@ build/
 # Nested third-party git metadata (tracked as normal files)
 music-api/api-enhanced/.git
 music-api/api-enhanced/.git.disabled
-
-# Optional QQ Music API checkout is maintained as its own repository
-music-api/qq-music-api/
+music-api/qq-music-api/.git
+music-api/qq-music-api/.git.disabled
 
 # Env / secrets / runtime data
 .env
@@ -37,8 +39,12 @@ logs/
 anonymous_token
 xeapi_public_key
 credential.key
+local-access.token
 credentials/
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 

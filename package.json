@@ -11,6 +11,17 @@
     "serve": "node scripts/web-dev.cjs",
     "web:dev": "node scripts/web-dev.cjs",
     "build": "npm --prefix electron run build",
-    "test": "npm --prefix electron run test:branding && npm --prefix electron run test:dev-launch && npm --prefix electron test"
+    "test": "node scripts/verify.cjs frontend",
+    "verify": "node scripts/verify.cjs all",
+    "verify:offline": "node scripts/verify.cjs offline",
+    "verify:backend": "node scripts/verify.cjs backend",
+    "verify:typecheck": "node scripts/verify.cjs typecheck",
+    "verify:e2e": "node scripts/verify.cjs e2e",
+    "runtime:stage": "node scripts/stage-runtime.cjs",
+    "runtime:smoke": "node scripts/runtime-smoke.cjs",
+    "services": "node scripts/start-services.cjs",
+    "release:win": "node scripts/verify.cjs frontend && node scripts/verify.cjs typecheck && node scripts/stage-runtime.cjs --online && npm --prefix electron run build && npm --prefix electron run pack:win",
+    "data:backup": "node scripts/data-backup.cjs backup",
+    "data:restore": "node scripts/data-backup.cjs restore"
   }
 }

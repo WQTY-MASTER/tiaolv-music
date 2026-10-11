@@ -16,14 +16,16 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class UserDataRepositoryListeningStatsTest {
+    private SingleConnectionDataSource dataSource;
     private JdbcTemplate jdbcTemplate;
     private UserDataRepository repository;
 
     @BeforeEach
     void createSchema() throws SQLException {
-        jdbcTemplate = new JdbcTemplate(new SingleConnectionDataSource(
+        dataSource = new SingleConnectionDataSource(
             DriverManager.getConnection("jdbc:sqlite::memory:"), true
-        ));
+        );
+        jdbcTemplate = new JdbcTemplate(dataSource);
         repository = new UserDataRepository(jdbcTemplate);
         jdbcTemplate.execute("""
             create table listening_track_stats (
@@ -63,8 +65,8 @@ class UserDataRepositoryListeningStatsTest {
     }
 
     @AfterEach
-    void closeDatabase() throws SQLException {
-        ((SingleConnectionDataSource) jdbcTemplate.getDataSource()).destroy();
+    void closeDatabase() {
+        if (dataSource != null) dataSource.destroy();
     }
 
     @Test

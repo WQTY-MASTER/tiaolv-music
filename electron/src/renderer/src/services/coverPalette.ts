@@ -29,6 +29,11 @@ function colorDistance(left: Rgb, right: Rgb) {
   return Math.hypot(left[0] - right[0], left[1] - right[1], left[2] - right[2]);
 }
 
+function circularHueDistance(left: number, right: number) {
+  const distance = Math.abs(left - right);
+  return Math.min(distance, 1 - distance);
+}
+
 function rgbToHsl([red, green, blue]: Rgb): [number, number, number] {
   const [r, g, b] = [red, green, blue].map((channel) => channel / 255);
   const maximum = Math.max(r, g, b);
@@ -135,9 +140,24 @@ export function selectRepresentativeColors(pixels: Uint8ClampedArray): [string, 
     Math.max(...rgb) - Math.min(...rgb) >= 24
     && count >= colors[0].count * 0.08
   ));
-  const primaryColor = chromaticColors[0] ?? colors[0];
-  const primary = primaryColor.rgb;
-  const secondary = colors.filter((color) => color !== primaryColor).sort((left, right) => (
+  const primaryColor = chromaticColors
+    .map((candidate) => {
+      const candidateHue = rgbToHsl(candidate.rgb)[0];
+      const related = chromaticColors.filter(({ rgb }) => (
+        circularHueDistance(candidateHue, rgbToHsl(rgb)[0]) <= 1 / 12
+      ));
+      const count = related.reduce((sum, color) => sum + color.count, 0);
+      const rgb = related.reduce<Rgb>((sum, color) => [
+        sum[0] + color.rgb[0] * color.count,
+        sum[1] + color.rgb[1] * color.count,
+        sum[2] + color.rgb[2] * color.count
+      ], [0, 0, 0]).map((channel) => channel / count) as Rgb;
+      return { candidate, count, rgb };
+    })
+    .sort((left, right) => right.count - left.count)[0];
+  const primaryCandidate = primaryColor?.candidate ?? colors[0];
+  const primary = primaryColor?.rgb ?? primaryCandidate.rgb;
+  const secondary = colors.filter((color) => color !== primaryCandidate).sort((left, right) => (
     colorDistance(right.rgb, primary) * Math.sqrt(right.count)
     - colorDistance(left.rgb, primary) * Math.sqrt(left.count)
   ))[0]?.rgb ?? [primary[2], primary[0], primary[1]] as Rgb;
@@ -159,9 +179,18 @@ export function createSoftCoverPalette(primary: string, secondary: string): Cove
 export async function extractCoverPalette(coverUrl: string): Promise<CoverPalette | null> {
   if (!coverUrl || typeof Image === "undefined" || typeof document === "undefined") return null;
 
+  let readableCoverUrl = coverUrl;
+  if (/^https?:/i.test(coverUrl) && window.listenMusic?.readCoverDataUrl) {
+    try {
+      readableCoverUrl = await window.listenMusic.readCoverDataUrl(coverUrl) ?? coverUrl;
+    } catch {
+      readableCoverUrl = coverUrl;
+    }
+  }
+
   return new Promise((resolve) => {
     const image = new Image();
-    if (!/^(?:data:|blob:|file:)/i.test(coverUrl)) image.crossOrigin = "anonymous";
+    if (!/^(?:data:|blob:|file:)/i.test(readableCoverUrl)) image.crossOrigin = "anonymous";
     image.decoding = "async";
     image.onload = () => {
       try {
@@ -182,6 +211,6 @@ export async function extractCoverPalette(coverUrl: string): Promise<CoverPalett
       }
     };
     image.onerror = () => resolve(null);
-    image.src = coverUrl;
+    image.src = readableCoverUrl;
   });
 }

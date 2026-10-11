@@ -24,7 +24,15 @@ import {
   type DesktopLyricsPlaybackState,
   type DesktopLyricsPreferences
 } from "../../../shared/desktopLyrics";
-import { projectDesktopLyricsTime, reconcileDesktopLyricsTime } from "../services/desktopLyricsClock";
+import {
+  desktopLyricsTrackChanged,
+  projectDesktopLyricsTime,
+  reconcileDesktopLyricsTime
+} from "../services/desktopLyricsClock";
+import {
+  getDesktopLyricPlaybackProgress,
+  getDesktopLyricScrollProgress
+} from "../services/desktopLyricsOverflow";
 import { parseLyricContent, splitLyricCharacters } from "../services/lyricParser";
 import { findActiveLyricIndex, getLyricCharacterProgress } from "../services/lyricSync";
 
@@ -58,6 +66,7 @@ const phoneticByTime = computed(() => new Map(
 ));
 const activeIndex = computed(() => findActiveLyricIndex(renderedCurrentTime.value, lines.value));
 const characterProgress = computed(() => getLyricCharacterProgress(renderedCurrentTime.value, lines.value));
+const lineCharacterCounts = computed(() => lines.value.map((line) => splitLyricCharacters(line.text).length));
 const highlightMode = computed(() => getDesktopLyricHighlightMode(playback.value));
 const lyricColors = computed(() => resolveDesktopLyricColors(
   preferences.value.lyricColorTheme,
@@ -82,7 +91,7 @@ const lyricLineStep = computed(() => {
     && visibleLines.value.some(({ line }) => Boolean(line.translation));
   const hasPhonetic = preferences.value.phoneticEnabled
     && visibleLines.value.some(({ line }) => Boolean(phoneticByTime.value.get(line.time.toFixed(3))));
-  const lineHeightFactor = 1.55 + (hasTranslation ? 0.68 : 0) + (hasPhonetic ? 0.58 : 0);
+  const lineHeightFactor = 1.55 + (hasTranslation ? 0.82 : 0) + (hasPhonetic ? 0.58 : 0);
   return Math.round(preferences.value.fontSize * lineHeightFactor + 12);
 });
 const shellStyle = computed<Record<string, string>>(() => ({
@@ -144,8 +153,12 @@ function startLyricsClock() {
 }
 
 function applyPlaybackState(state: DesktopLyricsPlaybackState) {
+  const trackChanged = desktopLyricsTrackChanged(playback.value, state);
   playback.value = { ...DEFAULT_DESKTOP_LYRICS_PLAYBACK_STATE, ...state };
-  syncRenderedCurrentTime(playback.value.currentTime, true);
+  if (!trackChanged && playback.value.currentTime < renderedCurrentTime.value) {
+    playback.value.currentTime = renderedCurrentTime.value;
+  }
+  syncRenderedCurrentTime(playback.value.currentTime, trackChanged);
   if (playback.value.isPlaying) {
     startLyricsClock();
   } else {
@@ -221,6 +234,40 @@ function lineCharacters(text: string) {
 
 function phoneticFor(time: number) {
   return phoneticByTime.value.get(time.toFixed(3)) ?? "";
+}
+
+const activeLyricFlowStyle = computed<Record<string, string>>(() => {
+  const lineIndex = activeIndex.value;
+  const line = lines.value[lineIndex];
+  if (!line) return {} as Record<string, string>;
+  const characterCount = lineCharacterCounts.value[lineIndex] ?? 0;
+  const estimatedEnd = line.time + Math.max(4, Math.min(12, characterCount * 0.32));
+  const endTime = line.duration && line.duration > 0
+    ? line.time + line.duration
+    : Math.min(lines.value[lineIndex + 1]?.time ?? estimatedEnd, estimatedEnd);
+  const useCharacterProgress = highlightMode.value === "word" && Boolean(line.characters?.length || line.characterTimes?.length);
+  const playbackProgress = getDesktopLyricPlaybackProgress(
+    renderedCurrentTime.value,
+    line.time,
+    endTime,
+    useCharacterProgress ? characterProgress.value : undefined,
+    useCharacterProgress ? characterCount : undefined
+  );
+  const scrollProgress = getDesktopLyricScrollProgress(playbackProgress, preferences.value.animationEnabled) * 100;
+  return {
+    "--lyric-scroll-viewport-offset": `${scrollProgress}cqw`,
+    "--lyric-scroll-content-offset": `${scrollProgress}%`
+  };
+});
+
+function lyricFlowStyle(lineIndex: number) {
+  if (lineIndex !== activeIndex.value) {
+    return {
+      "--lyric-scroll-viewport-offset": "0cqw",
+      "--lyric-scroll-content-offset": "0%"
+    };
+  }
+  return activeLyricFlowStyle.value;
 }
 
 function lyricSlotStyle(offset: number) {
@@ -431,25 +478,27 @@ onBeforeUnmount(() => {
             :data-lyric-index="item.index"
             :style="{ fontSize: `${preferences.fontSize}px` }"
           >
-            <p class="desktop-lyric-original">
-              <template v-if="highlightMode === 'word' && item.line.characters?.length">
-                <span
-                  v-for="(character, characterIndex) in lineCharacters(item.line.text)"
-                  :key="`${characterIndex}-${character}`"
-                  class="desktop-lyric-character"
-                  :style="characterStyle(characterIndex, item.index)"
-                >{{ character }}</span>
-              </template>
-              <template v-else>{{ item.line.text }}</template>
+            <p class="desktop-lyric-original desktop-lyric-flow-viewport">
+              <span class="desktop-lyric-flow" :style="lyricFlowStyle(item.index)">
+                <template v-if="highlightMode === 'word' && item.line.characters?.length">
+                  <span
+                    v-for="(character, characterIndex) in lineCharacters(item.line.text)"
+                    :key="`${characterIndex}-${character}`"
+                    class="desktop-lyric-character"
+                    :style="characterStyle(characterIndex, item.index)"
+                  >{{ character }}</span>
+                </template>
+                <template v-else>{{ item.line.text }}</template>
+              </span>
             </p>
             <p
               v-if="preferences.phoneticEnabled && phoneticFor(item.line.time)"
-              class="desktop-lyric-phonetic"
+              class="desktop-lyric-phonetic desktop-lyric-flow-viewport"
             >
-              {{ phoneticFor(item.line.time) }}
+              <span class="desktop-lyric-flow" :style="lyricFlowStyle(item.index)">{{ phoneticFor(item.line.time) }}</span>
             </p>
-            <p v-if="preferences.translationEnabled && item.line.translation" class="desktop-lyric-translation">
-              {{ item.line.translation }}
+            <p v-if="preferences.translationEnabled && item.line.translation" class="desktop-lyric-translation desktop-lyric-flow-viewport">
+              <span class="desktop-lyric-flow" :style="lyricFlowStyle(item.index)">{{ item.line.translation }}</span>
             </p>
           </div>
         </div>
@@ -474,12 +523,18 @@ onBeforeUnmount(() => {
 }
 
 .desktop-lyrics-shell {
+  --lyrics-font-family: "Microsoft YaHei UI", sans-serif;
+  --lyrics-font-weight: 400;
+  --lyrics-corner-radius: 18px;
+  --lyrics-panel-background: rgb(19 21 25 / 72%);
+  --lyric-played: #5b8cff;
+  --lyric-unplayed: #fff;
   position: relative;
   width: 100%;
   height: 100%;
   overflow: hidden;
   color: #fff;
-  font-family: var(--lyrics-font-family);
+  font-family: var(--lyrics-font-family, "Microsoft YaHei UI", sans-serif);
   font-synthesis: weight;
   background: rgb(0 0 0 / 1%);
   border: 1px solid transparent;
@@ -554,7 +609,10 @@ onBeforeUnmount(() => {
   gap: 5px;
   padding: 0 9px;
   color: rgb(255 255 255 / 82%);
-  font: 600 12px/1 inherit;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
   letter-spacing: 0;
   border: 0;
   border-radius: 4px;
@@ -580,7 +638,10 @@ onBeforeUnmount(() => {
   place-items: center;
   padding: 0;
   color: rgb(255 255 255 / 78%);
-  font: 600 13px/1 inherit;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
   border: 0;
   border-radius: 5px;
   background: transparent;
@@ -672,6 +733,8 @@ onBeforeUnmount(() => {
 }
 
 .desktop-lyric-slot {
+  --lyric-slot-y: 0px;
+  --lyric-line-step: 60px;
   position: absolute;
   top: 50%;
   right: 0;
@@ -752,14 +815,65 @@ onBeforeUnmount(() => {
 .desktop-lyric-original,
 .desktop-lyric-phonetic,
 .desktop-lyric-translation {
+  width: 100%;
   max-width: 100%;
   margin: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
   letter-spacing: 0;
   font-weight: var(--lyrics-font-weight);
   text-shadow: 0 2px 8px rgb(0 0 0 / 52%);
+}
+
+.desktop-lyric-flow-viewport {
+  container-type: inline-size;
+  overflow: hidden;
+}
+
+.desktop-lyric-flow {
+  --lyric-viewport-width: 100cqw;
+  --lyric-content-width: 100%;
+  --lyric-scroll-viewport-offset: 0cqw;
+  --lyric-scroll-content-offset: 0%;
+  display: block;
+  width: max-content;
+  min-width: max-content;
+  transform: translate3d(
+    calc(
+      max(0px, calc(50cqw - 50%))
+      + min(0px, calc(var(--lyric-scroll-viewport-offset) - var(--lyric-scroll-content-offset)))
+    ),
+    0,
+    0
+  );
+  will-change: transform;
+}
+
+.desktop-lyrics-shell.align-left .desktop-lyric-flow {
+  transform: translate3d(
+    min(0px, calc(var(--lyric-scroll-viewport-offset) - var(--lyric-scroll-content-offset))),
+    0,
+    0
+  );
+}
+
+.desktop-lyrics-shell.align-right .desktop-lyric-flow {
+  transform: translate3d(
+    calc(
+      max(0px, calc(100cqw - 100%))
+      + min(0px, calc(var(--lyric-scroll-viewport-offset) - var(--lyric-scroll-content-offset)))
+    ),
+    0,
+    0
+  );
+}
+
+.desktop-lyric-line:not(.active) .desktop-lyric-flow {
+  width: auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transform: none;
 }
 
 .desktop-lyric-original {
@@ -775,7 +889,7 @@ onBeforeUnmount(() => {
 .desktop-lyric-translation {
   margin-top: 5px;
   color: var(--lyric-unplayed);
-  font-size: 0.52em;
+  font-size: 0.62em;
   line-height: 1.4;
   opacity: 0.76;
 }
@@ -786,6 +900,7 @@ onBeforeUnmount(() => {
 }
 
 .desktop-lyric-character {
+  --character-fill: 0%;
   color: transparent;
   background: linear-gradient(
     90deg,

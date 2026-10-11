@@ -19,6 +19,17 @@ assert.match(app, /loadListeningStatsSummary/, "删除前应加载选定范围�
 assert.match(app, /deleteListeningStatsRange[\s\S]*deleteAllListeningStats/, "页面应接入范围删除和全部删除接口");
 assert.match(app, /只会删除聆听足迹[\s\S]*不会影响最近播放、歌单、本地音乐、缓存和离线下载/, "删除确认必须明确数据边界");
 assert.match(app, /listeningStatsSaveChain/, "删除前应等待正在保存的聆听统计，避免旧快照复活");
+assert.match(app, /QQ 本地听歌排行/, "缓存页应提供 QQ 本地听歌排行清理入口");
+assert.match(app, /loadQqListeningDataSummaries/, "进入缓存页应读取各 QQ 账号的本地排行汇总");
+assert.match(app, /v-model="selectedQqListeningDataAccountId"/, "多个 QQ 账号的数据应分别选择，不能合并展示");
+assert.match(app, /qqListeningDataDeleteMode === 'range'[\s\S]*qqListeningDataDeleteMode === 'all'/, "QQ 排行应支持范围删除和账号全部删除");
+assert.match(app, /qqListeningDataDeleteFrom[\s\S]*qqListeningDataDeleteTo/, "QQ 排行范围删除应提供开始和结束日期");
+assert.match(app, /qqListeningDataRangeValid/, "不完整或倒序日期应禁用删除");
+assert.match(app, /deleteQqListeningStats/, "QQ 排行清理应调用独立后端接口");
+assert.match(app, /不会影响 QQ 音乐云端最近播放/, "页面和确认文案应明确保护 QQ 云端最近播放");
+assert.match(app, /window\.confirm\([\s\S]*QQ 本地听歌排行/, "删除 QQ 排行前必须显式确认");
+assert.match(app, /await refreshQqListeningDataSummaries\(true\)[\s\S]*loadListeningRankRange\(true\)/, "删除成功后应刷新汇总和当前 QQ 排行");
+assert.match(app, /catch[\s\S]*qqListeningDataError\.value/, "删除失败时应保留现有汇总并显示错误");
 
 assert.match(api, /export interface CacheSettings/, "API 应公开缓存设置类型");
 assert.match(api, /export async function loadCacheSnapshot[\s\S]*request<CacheSnapshot>\("\/cache"\)/, "API 应加载缓存快照");
@@ -28,5 +39,7 @@ assert.match(api, /export async function clearManagedCache[\s\S]*request<CacheSn
 assert.match(api, /export (?:async )?function loadListeningStatsSummary/, "API 应支持预览聆听足迹范围");
 assert.match(api, /export (?:async )?function deleteListeningStatsRange/, "API 应支持按日期范围删除足迹");
 assert.match(api, /export (?:async )?function deleteAllListeningStats/, "API 应支持删除全部足迹");
+assert.match(api, /export function loadQqListeningDataSummaries/, "API 应支持读取 QQ 排行账号汇总");
+assert.match(api, /export function deleteQqListeningStats/, "API 应支持删除指定 QQ 账号的本地排行");
 
 console.log("缓存设置页面契约通过");

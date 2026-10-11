@@ -16,7 +16,7 @@ class MigrationSequenceTest {
     Path tempDir;
 
     @Test
-    void preservesPublishedMigrationVersionsAndAddsListeningRetentionInVersionTen() throws Exception {
+    void preservesPublishedMigrationVersionsAndAddsQqListeningRankInVersionEleven() throws Exception {
         String jdbcUrl = "jdbc:sqlite:" + tempDir.resolve("migration-test.db");
         Flyway flyway = Flyway.configure()
             .dataSource(jdbcUrl, null, null)
@@ -38,7 +38,8 @@ class MigrationSequenceTest {
                 "7:track metadata source",
                 "8:local library deduplication",
                 "9:listening stats",
-                "10:listening stats retention"
+                "10:listening stats retention",
+                "11:qq listening rank"
             );
 
         try (var connection = DriverManager.getConnection(jdbcUrl)) {
@@ -54,6 +55,9 @@ class MigrationSequenceTest {
             assertThat(tableExists(connection, "listening_day_stats")).isTrue();
             assertThat(tableExists(connection, "listening_track_day_stats")).isTrue();
             assertThat(tableExists(connection, "listening_stats_meta")).isTrue();
+            assertThat(tableExists(connection, "qq_listening_accounts")).isTrue();
+            assertThat(tableExists(connection, "qq_listening_tracks")).isTrue();
+            assertThat(tableExists(connection, "qq_listening_day_stats")).isTrue();
         }
     }
 

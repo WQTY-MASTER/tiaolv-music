@@ -95,7 +95,7 @@ const emit = defineEmits<{
   place-items: center;
   border: 4px solid rgba(17, 25, 43, .78);
   border-radius: 50%;
-  background: repeating-radial-gradient(circle, #242d43 0 4px, #647087 5px 6px, #242d43 7px 10px);
+  background: repeating-radial-gradient(circle, #242d43 0, #242d43 4px, #647087 5px, #647087 6px, #242d43 7px, #242d43 10px);
   box-shadow: 0 18px 34px rgba(14, 24, 35, .22);
 }
 .qq-record-label { display: grid; width: 66px; height: 66px; place-items: center; border: 4px solid #263247; border-radius: 50%; background: #31c98a; color: #fff; }

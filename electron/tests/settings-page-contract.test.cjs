@@ -122,12 +122,13 @@ assert.match(api, /export function matchLocalTrackLyrics/, "前端 API 缺少本
 assert.match(api, /saveBesideAudio/, "歌词匹配请求需要携带同目录保存选项");
 assert.match(
   app,
-  /matchLocalTrackLyrics\(track\.id,\s*saveMatchedLyricsBesideAudio\.value\)/,
+  /matchLocalTrackLyrics\(\s*track\.id,\s*saveMatchedLyricsBesideAudio\.value,\s*!automatic\s*\)/,
   "手动和自动歌词匹配都应传递同目录保存选项"
 );
 assert.match(app, /重新匹配歌词/, "本地歌曲歌词页缺少手动重新匹配入口");
 assert.match(app, /matchLocalLyrics\(currentTrack\)/, "手动匹配应作用于当前本地歌曲");
 assert.match(app, /已加载本地逐字歌词/, "本地 QRC 或 YRC 应显示明确的加载状态");
 assert.match(app, /未找到逐字歌词，加载普通整行歌词/, "普通 LRC 降级应显示明确状态");
+assert.match(app, /QQ 本地听歌排行[\s\S]*QQ 音乐云端最近播放/, "缓存与数据页面应说明 QQ 本地排行与云端最近播放的边界");
 
 console.log("设置页契约通过");

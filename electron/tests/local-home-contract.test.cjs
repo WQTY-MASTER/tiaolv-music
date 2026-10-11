@@ -13,7 +13,7 @@ assert.match(app, /local-home-greeting/, "本地主页缺少问候标题");
 assert.match(app, /local-home-random/, "本地主页缺少随机漫游入口");
 assert.match(app, /local-home-last-played/, "本地主页缺少上次播放区域");
 assert.match(app, /\.local-home-page\s*\{[^}]*width:\s*min\(1180px/, "本地主页组件需要缩短为 1180px 居中布局");
-assert.match(app, /\.local-home-page\s*\{[^}]*margin-top:\s*18px/, "本地主页顶部应保留舒适留白，避免问候文字贴边");
+assert.match(app, /\.local-home-page\s*\{[^}]*(?:margin-top:\s*18px|margin:\s*18px\s+0\s+0\s+calc\()/, "本地主页顶部应保留舒适留白，避免问候文字贴边");
 assert.match(app, /\.local-home-page\s*\{[^}]*gap:\s*42px/, "本地主页组件之间需要保留更舒展的纵向间距");
 assert.match(app, /local-home-track-title/, "本地主页缺少歌曲标题信息");
 assert.match(app, /local-home-track-meta/, "本地主页缺少歌曲格式信息");

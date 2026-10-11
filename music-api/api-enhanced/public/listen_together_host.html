@@ -251,12 +251,12 @@
       <details>
         <summary>加入房间</summary>
         <div class="input-group">
-          <label>房间ID:</label>
-          <input v-model="roomInfo.roomId" type="text" />
+          <label for="roomId">房间ID:</label>
+          <input id="roomId" v-model="roomInfo.roomId" type="text" />
         </div>
         <div class="input-group">
-          <label>邀请者ID:</label>
-          <input v-model="roomInfo.inviterId" type="text" />
+          <label for="inviterId">邀请者ID:</label>
+          <input id="inviterId" v-model="roomInfo.inviterId" type="text" />
         </div>
         <button class="btn" @click="joinRoom">加入房间</button>
       </details>
@@ -292,8 +292,8 @@
       <summary>播放列表</summary>
       <div class="section">
         <div class="input-group">
-          <label>歌单ID:</label>
-          <input v-model="playlistInfo.playlistId" type="text" />
+          <label for="playlistId">歌单ID:</label>
+          <input id="playlistId" v-model="playlistInfo.playlistId" type="text" />
         </div>
         <button class="btn" @click="loadPlaylist">加载歌单</button>
         <div style="margin-top: 12px; font-size: 14px; color: #555;">

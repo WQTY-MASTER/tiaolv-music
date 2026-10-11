@@ -23,6 +23,75 @@ import static org.mockito.Mockito.when;
 
 class LocalLyricsMatchServiceTest {
     @Test
+    void cachedQqWordLyricsAreReturnedWithoutSearchingAgain() {
+        TrackRepository tracks = mock(TrackRepository.class);
+        OnlineCatalogService catalog = mock(OnlineCatalogService.class);
+        LocalLyricsCache cache = mock(LocalLyricsCache.class);
+        Track local = localTrack("[00:01.00]local", "embedded", "LRC");
+        LyricData cached = new LyricData(
+            "[0,500]hello(0,500)", "[00:00.00]翻译", "QRC", "qq", List.of()
+        );
+        when(tracks.findById("local-1")).thenReturn(Optional.of(local));
+        when(cache.lookup("local-1")).thenReturn(Optional.of(new LocalLyricsCache.Lookup(true, cached)));
+
+        LocalLyricsMatchResult result = new LocalLyricsMatchService(
+            tracks, catalog, mock(AccountRepository.class), cache, mock(LocalLyricsSidecarWriter.class)
+        ).match("local-1");
+
+        assertTrue(result.matched());
+        assertEquals("online-qq", result.track().lyricsSource());
+        assertEquals(cached, result.lyricData());
+        verify(catalog, never()).search(
+            org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyInt()
+        );
+    }
+
+    @Test
+    void cachedNotFoundResultPreventsRepeatedOnlineSearch() {
+        TrackRepository tracks = mock(TrackRepository.class);
+        OnlineCatalogService catalog = mock(OnlineCatalogService.class);
+        LocalLyricsCache cache = mock(LocalLyricsCache.class);
+        Track local = localTrack(null, null, null);
+        when(tracks.findById("local-1")).thenReturn(Optional.of(local));
+        when(cache.lookup("local-1")).thenReturn(Optional.of(new LocalLyricsCache.Lookup(false, null)));
+
+        LocalLyricsMatchResult result = new LocalLyricsMatchService(
+            tracks, catalog, mock(AccountRepository.class), cache, mock(LocalLyricsSidecarWriter.class)
+        ).match("local-1");
+
+        assertTrue(!result.matched());
+        verify(catalog, never()).search(
+            org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(),
+            org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyInt(),
+            org.mockito.ArgumentMatchers.anyInt()
+        );
+    }
+
+    @Test
+    void forcedMatchBypassesCachedNotFoundResult() {
+        TrackRepository tracks = mock(TrackRepository.class);
+        OnlineCatalogService catalog = mock(OnlineCatalogService.class);
+        LocalLyricsCache cache = mock(LocalLyricsCache.class);
+        Track local = localTrack(null, null, null);
+        LyricData lyrics = new LyricData("[00:01.00]hello", null, "LRC", "qq", List.of());
+        when(tracks.findById("local-1")).thenReturn(Optional.of(local));
+        when(cache.lookup("local-1")).thenReturn(Optional.of(new LocalLyricsCache.Lookup(false, null)));
+        when(catalog.search("心月辞 鸣潮先约电台", "qq", SearchType.SONG, 10, 0))
+            .thenReturn(new SearchResultPage(List.of(onlineTrack("qq:123", "心月辞", "鸣潮先约电台")), List.of(), List.of(), 1, false));
+        when(catalog.loadLyricsFresh("qq:123")).thenReturn(Optional.of(lyrics));
+
+        LocalLyricsMatchResult result = new LocalLyricsMatchService(
+            tracks, catalog, mock(AccountRepository.class), cache, mock(LocalLyricsSidecarWriter.class)
+        ).match("local-1", false, true);
+
+        assertTrue(result.matched());
+        verify(catalog).search("心月辞 鸣潮先约电台", "qq", SearchType.SONG, 10, 0);
+        verify(catalog).loadLyricsFresh("qq:123");
+    }
+
+    @Test
     void loggedInQqWordLyricsOverrideLocalWithoutDestroyingTheLocalFallback() {
         verifyQqPriority("[0,500]hello(0,500)", "QRC", true, true);
     }

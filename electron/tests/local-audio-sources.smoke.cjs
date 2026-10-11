@@ -24,7 +24,7 @@ async function main() {
     let delayOnline = false;
     let previewOnly = false;
     let searchCount = 0;
-    await page.route("http://127.0.0.1:17890/**", async route => {
+    await page.route(/^http:\/\/(?:127\.0\.0\.1|localhost):(?:17890\/|\d+\/backend\/)/, async route => {
       const url = new URL(route.request().url());
       if (url.pathname.includes("/audio")) {
         const online = url.pathname.includes("catalog");

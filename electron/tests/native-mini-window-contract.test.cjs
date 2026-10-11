@@ -4,6 +4,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const main = fs.readFileSync(path.join(root, "src/main/main.ts"), "utf8");
+const windows = fs.readFileSync(path.join(root, "src/main/miniPlayerWindows.ts"), "utf8");
 const preload = fs.readFileSync(path.join(root, "src/preload/preload.ts"), "utf8");
 const env = fs.readFileSync(path.join(root, "src/renderer/src/env.d.ts"), "utf8");
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
@@ -16,19 +17,14 @@ assert.match(main, /LOCALAPPDATA[\s\S]*ChromiumCache/, "Chromium 缓存应写入
 assert.match(main, /appendSwitch\("disk-cache-dir"/, "主进程应显式配置可写磁盘缓存目录");
 assert.match(main, /requestSingleInstanceLock\(\)/, "应用应阻止多个实例争用同一缓存目录");
 assert.match(main, /app\.on\("second-instance"[\s\S]*focus\(\)/, "重复启动时应聚焦已有窗口");
-assert.match(main, /interface MiniWindowState[\s\S]*bounds:[\s\S]*wasMaximized:[\s\S]*wasFullScreen:[\s\S]*wasAlwaysOnTop:[\s\S]*wasMenuBarVisible:[\s\S]*minimumSize:/, "进入前应保存窗口尺寸、位置、最大化、全屏、置顶、菜单栏和最小尺寸状态");
-assert.match(main, /getNormalBounds\(\)/, "最大化窗口应保存可恢复的普通窗口边界");
-assert.match(main, /setSkipTaskbar\(!options\.showInTaskbar\)/, "迷你模式应按引导选项决定是否显示在任务栏");
-assert.match(main, /setAlwaysOnTop\(options\.alwaysOnTop\)/, "迷你模式应按引导选项决定是否置顶");
+assert.match(windows, /frame:\s*false, thickFrame:\s*false, transparent:\s*true/, "迷你窗口应透明无原生厚边框");
+assert.match(windows, /win\.setShape\(getMiniWindowShape\(/, "原生窗口区域应与卡片圆角同步");
+assert.match(windows, /skipTaskbar:\s*!options\.showInTaskbar/, "迷你模式应按引导选项决定是否显示在任务栏");
+assert.match(windows, /alwaysOnTop:\s*options\.alwaysOnTop/, "迷你模式应按引导选项决定是否置顶");
 assert.match(main, /alwaysOnTop:\s*options\?\.alwaysOnTop\s*!==\s*false/, "未设置新选项时应保留原迷你播放器默认置顶行为");
-assert.match(main, /setMenuBarVisibility\(false\)/, "迷你模式应隐藏占用空间的应用菜单栏");
-assert.match(main, /animateWindowBounds/, "窗口尺寸切换应使用平滑边界动画");
-assert.match(main, /if \(win\.isMinimized\(\)\) win\.restore\(\)/, "切换迷你模式时应恢复 Windows 意外最小化的窗口");
-assert.match(main, /await stabilizeRestoredWindow\(win\)[\s\S]*await animateWindowBounds\(win, target\)[\s\S]*win\.setResizable\(false\)/, "应等待窗口还原稳定并完成缩放后再锁定尺寸");
-assert.match(main, /setMinimumSize\(MINI_WINDOW_WIDTH, MINI_WINDOW_HEIGHT\)/, "进入迷你模式前应解除主窗口最小尺寸限制");
-assert.match(main, /setAlwaysOnTop\(state\.wasAlwaysOnTop\)/, "退出时应恢复原置顶状态");
-assert.match(main, /setMenuBarVisibility\(state\.wasMenuBarVisible\)/, "退出时应恢复原菜单栏状态");
-assert.match(main, /state\.wasMaximized[\s\S]*maximize\(\)/, "退出时应恢复最大化状态");
+assert.doesNotMatch(windows, /main\.(setBounds|setMinimumSize|unmaximize|setFullScreen)\(/, "迷你模式不应修改主窗口的位置、尺寸、最大化或全屏状态");
+assert.match(windows, /setBackgroundThrottling\(false\)/, "隐藏主窗口时应保持播放时钟运行");
+assert.match(windows, /mini-resize-start/, "无边框迷你窗口应提供自定义缩放接口");
 assert.doesNotMatch(main, /\.on\("minimize"/, "迷你模式不应劫持系统最小化事件");
 assert.match(main, /win\.on\("close"[\s\S]{0,900}closeBehavior === "mini"|win\.on\("close"[\s\S]{0,900}webContents\.send\("window-close-behavior", closeBehavior\)/, "仅在用户明确选择时，关闭窗口才应切换迷你播放器");
 
@@ -48,7 +44,7 @@ assert.match(mini, /nativeWindow:\s*boolean/, "迷你播放器应支持原生窗
 assert.match(mini, /'is-native-window': props\.nativeWindow/, "原生模式应添加独立样式类");
 assert.match(mini, /-webkit-app-region:\s*drag/, "原生迷你卡片应可拖动整个窗口");
 assert.match(mini, /button[^}]*-webkit-app-region:\s*no-drag/, "迷你播放器按钮应保持可点击");
-assert.match(mini, /\.mini-close-button\s*\{[^}]*position:\s*absolute[^}]*top:[^}]*right:/, "关闭按钮应独立放在右上角");
+assert.match(mini, /\.mini-window-toolbar\s*\{[^}]*position:\s*absolute[^}]*top:[^}]*right:/, "窗口工具条应独立放在右上角");
 assert.match(mini, /\.mini-controls\s*\{[^}]*justify-content:\s*center/, "底部控制按钮应整体居中");
 
 console.log("原生迷你窗口契约通过");

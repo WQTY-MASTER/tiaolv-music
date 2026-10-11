@@ -5,4 +5,8 @@ public class AccountLoginRequiredException extends IllegalStateException {
     public AccountLoginRequiredException() {
         super("请先登录音乐源账号");
     }
+
+    public AccountLoginRequiredException(String message) {
+        super(message == null || message.isBlank() ? "请先登录音乐源账号" : message);
+    }
 }

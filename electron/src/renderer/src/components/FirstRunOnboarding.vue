@@ -740,6 +740,9 @@ onMounted(() => {
 
 <style scoped>
 .first-run-onboarding {
+  --onboarding-accent: #16b88a;
+  --onboarding-background: #f4f4f7;
+  --swatch: #16b88a;
   --density-theme-height: 78px;
   --density-theme-gap: 14px;
   --density-section-gap: 16px;

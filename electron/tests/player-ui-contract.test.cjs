@@ -51,6 +51,7 @@ assert.match(app, /\.player-bar\.song-detail-player-bar\s*\{[^}]*z-index:\s*70/,
 assert.match(app, /\.song-detail\s*\{[^}]*linear-gradient\([^}]*--detail-ambient-start[^}]*--detail-ambient-end/, "歌曲详情页应使用浅淡环境色渐变");
 assert.match(app, /\.song-detail\s*\{[^}]*background-color:\s*#fff/, "歌曲详情渐变下方应有不透明白色底层，不能透出下层页面内容");
 assert.match(app, /toggleDesktopLyricsWindow/, "播放器应通过 Electron 打开独立桌面歌词窗口");
+assert.match(app, /const bridge = window\.listenMusic[\s\S]{0,100}if \(!bridge\) return;[\s\S]{0,100}desktopLyricsVisible\.value = await bridge\.toggleDesktopLyricsWindow\(\)/, "桌面歌词窗口应在桥接存在时直接使用类型明确的布尔返回值");
 assert.doesNotMatch(app, /desktopLyricsPreview/, "应用不应继续渲染页内桌面歌词预览");
 assert.match(app, /\.app-shell\s*\{[^}]*height:\s*100vh/, "主应用容器应固定为视口高度，供内容区域滚动");
 assert.match(app, /\.main-scroll\s*\{[^}]*overflow:\s*auto/, "内容区域应自行滚动");
@@ -59,9 +60,12 @@ assert.match(app, /resumeLyricsFollow/, "歌词应在手动滚动后自动恢复
 assert.match(app, /resetLyricsFollowState/, "重新打开歌词页时应清理上一次的手动滚动状态");
 assert.match(
   app,
-  /root\.scrollTo\(\{\s*top:\s*Math\.max\(0, targetTop\),\s*behavior:\s*"smooth"\s*\}\)/,
-  "歌词自动跟随应使用平滑滚动过渡"
+  /function animateLyricScroll\([\s\S]*?requestAnimationFrame\(tick\)/,
+  "歌词自动跟随应使用可取消的逐帧滚动动画"
 );
+assert.match(app, /function handleLyricScroll\(\)[\s\S]*?if \(lyricAutoScrollActive/, "自动滚动期间不应逐帧扫描整列歌词位置");
+assert.match(app, /@scroll="handleLyricScroll"/, "歌词滚动事件应经由轻量调度器处理");
+assert.match(app, /function handleLyricsManualScroll\(\)[\s\S]*?cancelLyricAutoScroll\(\)/, "用户手动滚动时应立即接管自动动画");
 assert.match(app, /root\.scrollTop\s*=\s*lyricDragStartScrollTop\s*-\s*\(event\.clientY\s*-\s*lyricDragStartY\)/, "手动拖动歌词仍应即时滚动");
 assert.doesNotMatch(
   app,
@@ -69,7 +73,7 @@ assert.doesNotMatch(
   "切换到新歌词行时应始终将当前歌词移动到固定基准线"
 );
 assert.match(app, /playMode/, "歌曲详情页应维护播放模式");
-assert.match(app, /toggleDetailVolume/, "歌曲详情页应提供音量调节入口");
+assert.match(app, /<PlayerBar[\s\S]*:volume="volume"[\s\S]*@volume="updateVolume"/, "歌曲详情页复用的底部播放器应提供音量调节入口");
 assert.match(app, /song-detail-mode/, "上一首左侧应有播放模式按钮");
 assert.match(app, /play-mode-menu/, "播放模式按钮应打开播放模式菜单");
 assert.match(app, /随机播放/, "播放模式菜单应包含随机播放");
@@ -115,7 +119,7 @@ assert.match(app, /lyric-original/, "双语歌词应区分原歌词和翻译");
 assert.match(app, /characterCount/, "原歌词应根据当前播放时间计算逐字进度");
 assert.match(app, /v-for="\(character, characterIndex\) in lyricCharacters\(line\)"/, "原歌词应按字符拆分渲染");
 assert.match(app, /class="lyric-character"/, "原歌词字符应使用独立样式");
-assert.match(app, /song-detail-translation[^>]*>\{\{ line\.translation \}\}/, "翻译应作为整行文本单独渲染");
+assert.match(app, /song-detail-translation[^>]*>[\s\S]*?getLeadingLyricQuote\(line\.translation\)[\s\S]*?line\.translation\.slice\(1\) : line\.translation/, "翻译应保留完整文本，仅把开头引号悬挂对齐，不拆成逐字高亮");
 assert.match(lyricParser, /splitInlineTranslation/, "同一行中的原歌词和中文翻译应被拆分为上下两行");
 assert.match(
   app,
@@ -126,6 +130,17 @@ assert.match(
   app,
   /\.song-detail-lyrics-list \.is-active \.song-detail-translation\s*\{[^}]*font-size:\s*22px[^}]*font-weight:\s*400/,
   "当前翻译不应因播放而放大或加粗"
+);
+assert.doesNotMatch(app, /fitLyricTextLines|element\.style\.fontSize/, "长句歌词不应通过内联字号缩小来适配宽度");
+assert.match(
+  app,
+  /\.app-shell \.song-detail-lyrics-list \.lyric-original\s*\{[^}]*font-size:\s*var\(--lyric-font-size\)/,
+  "所有原歌词应固定使用与歌曲信息相同的字号变量"
+);
+assert.match(
+  app,
+  /\.song-detail-lyrics\s*\{[^}]*--lyric-overflow-room:\s*clamp\([^;]+;[^}]*width:\s*calc\(100% \+ var\(--lyric-gutter\) \+ var\(--lyric-overflow-room\)\)/,
+  "桌面歌词容器应向右预留放大后的长句空间"
 );
 assert.match(app, /song-detail-controls[\s\S]*song-detail-progress/, "歌曲详情页应先显示控制按钮，再显示进度条");
 assert.match(app, /song-detail-progress-wrap/, "详情页进度条应使用独立的限宽容器");
@@ -186,9 +201,29 @@ assert.match(lyricParser, /parseYrcContent/, "歌词解析应优先读取网易�
 assert.match(lyricParser, /parseLrcContent/, "歌词解析应支持本地普通 LRC 兜底");
 assert.match(app, /parseLyricCredits/, "歌曲详情页应展示歌词中的制作信息");
 assert.match(app, /song-detail-credits/, "歌曲制作信息应有独立的对齐布局");
+assert.match(
+  app,
+  /p\.lyric-line\.is-active \.lyric-original\s*\{[^}]*transform:\s*scale\(1\.25\)/,
+  "当前歌词应使用 transform 平滑放大，避免 font-size 动画触发布局重排"
+);
+assert.match(
+  app,
+  /songInfoCharacters\(`\$\{credit\.label\}：`\)/,
+  "歌曲制作信息的标签和值之间应显示中文冒号"
+);
+assert.match(
+  app,
+  /v-if="localLyricsMatchPending && currentTrack\.source === 'local' && !currentTrack\.lyrics\?\.trim\(\)"/,
+  "已有本地歌词时不应被联网匹配加载状态遮挡"
+);
+assert.match(api, /matchLocalTrackLyrics\(id:\s*string,\s*saveBesideAudio\s*=\s*false,\s*force\s*=\s*false\)/, "本地歌词匹配 API 应区分自动缓存读取与手动强制刷新");
+assert.match(app, /matchLocalTrackLyrics\(\s*track\.id,\s*saveMatchedLyricsBesideAudio\.value,\s*!automatic\s*\)/, "手动重新匹配应绕过缓存，自动播放应复用缓存");
 assert.doesNotMatch(app, /逐字同步|按句同步/, "界面不应显示歌词同步方式提示");
 assert.match(app, /song-detail-track-meta/, "歌曲标题下方应有独立的歌曲元信息布局");
-assert.doesNotMatch(app, /lyrics-source|song-detail-sync-badge/, "歌曲详情和播放区域不应显示同步方式标签");
+assert.match(app, /class="song-detail-artist"[^>]*>[\s\S]{0,360}songInfoCharacters\(currentTrack\.artist\)/, "歌曲详情应独立显示歌手");
+assert.match(app, /class="song-detail-album"[^>]*>[\s\S]{0,420}专辑：[\s\S]{0,240}songInfoCharacters\(currentTrack\.album\)/, "歌曲详情应使用明确标签独立显示专辑");
+assert.doesNotMatch(app, /currentTrack\.artist\s*\+\s*' \/ '\s*\+\s*currentTrack\.album/, "歌曲详情不应把专辑拼接成额外歌手");
+assert.doesNotMatch(app, /class="[^"]*\blyrics-source\b|song-detail-sync-badge/, "歌曲详情和播放区域不应显示同步方式标签");
 assert.match(app, /\.song-detail-content\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\)/, "歌曲详情内容区应限制栅格行高度，避免制作信息挤出标题");
 assert.match(app, /\.song-detail-title\s*\{[^}]*font-size:\s*22px[^}]*font-weight:\s*800/, "歌曲标题应与普通歌词同字号并加粗");
 assert.match(app, /\.song-detail-lyrics-list p\.lyric-line\s*\{[^}]*font-size:\s*22px/, "歌曲详情普通歌词字号应放大");
@@ -196,7 +231,7 @@ assert.match(app, /findActiveLyricIndex/, "歌词当前行定位应使用独立�
 assert.match(lyricMetadata, /"作词",\s*"作曲"/, "歌词解析应过滤作词、作曲等网易云元数据");
 assert.match(app, /@wheel\.stop="handleLyricsManualScroll"/, "歌词滚轮事件不应冒泡干扰外层页面滚动");
 assert.match(app, /overscroll-behavior:\s*contain/, "歌词区域滚动到边界时不应把滚轮传给外层页面");
-assert.match(app, /\.song-detail-lyrics\s*\{[^}]*-webkit-mask-image:\s*linear-gradient\(to bottom/, "歌词滚动区顶部和底部应有自然淡出的遮罩");
+assert.match(app, /\.song-detail-lyrics\s*\{[^}]*-webkit-mask-image:\s*-webkit-linear-gradient\(top/, "歌词滚动区顶部和底部应有自然淡出的 WebKit 遮罩");
 assert.match(app, /\.song-detail-lyrics\s*\{[^}]*mask-image:\s*linear-gradient\(to bottom/, "歌词滚动区应使用标准渐隐遮罩属性");
 assert.match(api, /loadCatalogTrack/, "前端应通过统一后端接口加载在线歌曲详情");
 assert.match(api, /loadCatalogLyrics/, "前端应通过统一后端接口加载在线歌词");
@@ -229,9 +264,8 @@ assert.match(api, /export function loadHomepage\b/, "首页应通过统一后端
 assert.match(app, /homepageState/, "首页应有独立的加载和错误状态");
 assert.match(app, /homepagePlaylists/, "首页推荐歌单应来自网易云首页数据");
 assert.match(app, /homepageSongs/, "首页推荐歌曲应来自网易云首页数据");
-assert.match(app, /homepageFeaturedIndex/, "首页今日精选应维护当前推荐歌曲索引");
-assert.match(app, /nextHomepageSong|previousHomepageSong/, "首页今日精选应支持切换歌曲");
-assert.match(app, /refreshHomepageRecommendations/, "首页推荐歌单应支持独立刷新");
+assert.match(app, /openStreamingDailyMix/, "流媒体首页每日推荐应进入当前音源的完整推荐列表");
+assert.match(app, /refreshStreamingDailyMix/, "流媒体每日推荐应使用当前首页数据刷新逻辑");
 assert.match(app, /每日推荐/, "首页应展示每日推荐入口");
 assert.match(api, /export function loadDailyRecommendations\b/, "每日推荐应通过统一后端接口加载");
 assert.match(app, /dailyRecommendationState/, "每日推荐应有独立加载状态");
@@ -240,7 +274,9 @@ assert.match(app, /canGoBack/, "顶部后退按钮应有页面历史状态");
 assert.match(app, /canGoForward/, "顶部前进按钮应有页面历史状态");
 assert.match(app, /navigateBack/, "顶部后退按钮应执行页面导航");
 assert.match(app, /navigateForward/, "顶部前进按钮应执行页面导航");
-assert.match(app, /homepageBanners/, "首页横幅应来自网易云首页数据");
+assert.match(app, /async function applyNavigation\(entry: NavigationEntry\)/, "页面导航应使用 async 函数表达异步加载流程");
+assert.match(app, /function submitSearch\(\)[\s\S]{0,140}return performSearch\(1\)/, "提交搜索应返回实际搜索 Promise，供调用方等待完成");
+assert.match(app, /streamingDailyCoverTracks/, "流媒体首页主视觉应来自当前音源的推荐歌曲封面");
 assert.match(app, /\.hero-card\s*\{[^}]*height:\s*253px[^}]*overflow:\s*hidden/, "首页今日精选容器应使用固定高度并裁剪溢出内容");
 assert.match(app, /\.hero-copy h2\s*\{[^}]*-webkit-line-clamp:\s*2/, "首页长歌曲名最多显示两行，不能撑大推荐容器");
 assert.match(app, /\.daily-recommendation-card\s*\{[^}]*height:\s*253px[^}]*max-height:\s*253px/, "首页每日推荐容器应与今日精选保持固定高度");
@@ -264,7 +300,7 @@ assert.match(app, /正在加载歌单歌曲/, "在线歌单加载中应给出状
 assert.match(app, /歌单歌曲加载失败/, "在线歌单加载失败应给出提示");
 assert.match(app, /playFromTime\(anchorPlaybackTime\)/, "固定定位线的播放按钮应从前奏或定位线歌词开始播放");
 assert.match(app, /alignPlaybackTargetToAnchor/, "点击固定播放按钮后应将目标行对齐到定位线");
-assert.match(app, /await alignPlaybackTargetToAnchor\(time, targetIsPreface, targetPrefaceLineIndex\)/, "切换播放时间后应立即重置歌词定位");
+assert.match(app, /await alignPlaybackTargetToAnchor\(targetIsPreface, targetPrefaceLineIndex\)/, "切换播放时间后应立即重置歌词定位");
 assert.match(app, /root\.scrollHeight\s*-\s*root\.clientHeight/, "目标歌词定位时应限制在可滚动边界内");
 assert.match(app, /lyricAnchorVisible/, "定位控件应只在手动浏览歌词时显示");
 assert.match(app, /handleLyricPointerDown/, "歌词区域应支持鼠标左键拖动浏览");
@@ -295,6 +331,7 @@ assert.match(app, /beginSeek/, "进度条开始拖动时应记录播放状态");
 assert.doesNotMatch(app, /function beginSeek\(\)[\s\S]{0,500}audio\.pause\(\)/, "拖动进度条时原歌曲应继续播放");
 assert.doesNotMatch(app, /function beginSeek\(\)[\s\S]{0,500}isPlaying\.value\s*=\s*false/, "拖动进度条时播放状态不应切换为暂停");
 assert.match(app, /previewSeek/, "进度条拖动过程中应只更新预览位置");
+assert.match(app, /function previewSeek\(value: number\)[\s\S]{0,220}progress\.value = Math\.min\(Number\(value\), previewProgressLimit\.value\)/, "进度预览应直接写入限制后的值");
 assert.doesNotMatch(app.match(/function previewSeek\(value: number\) \{([\s\S]*?)\n\}/)?.[1] ?? "", /lyricClockTime\s*=|currentTime\.value\s*=/, "进度条预览不应改变歌词播放时间");
 assert.doesNotMatch(app.match(/function beginSeek\(\) \{([\s\S]*?)\n\}/)?.[1] ?? "", /stopPlaybackClock\(\)|audio\.pause\(\)|isPlaying\.value\s*=\s*false/, "拖动进度条时原播放时钟应继续运行");
 assert.match(app, /finishSeek/, "进度条松开后才应提交最终播放位置");
@@ -374,7 +411,7 @@ assert.match(
 assert.match(app, /data-song-info-line/, "歌曲信息应按行分组以便上一行恢复原色");
 assert.match(app, /renderedSongInfoLineElements/, "歌曲信息应缓存逐行字符节点");
 assert.match(app, /getPrefaceHighlightState/, "歌曲信息应按当前行计算逐字高亮状态");
-assert.match(app, /playFromLyricLine/, "当前歌词行应保留从该句开始播放的方法");
+assert.match(app, /@click\.stop="playFromTime\(anchorPlaybackTime\)"/, "歌词定位线应支持从当前锚点开始播放");
 assert.match(app, /class="song-detail-song-info"/, "歌曲信息应放进歌词滚动区域");
 assert.match(
   app,
@@ -404,7 +441,7 @@ assert.match(
 assert.doesNotMatch(app, /\.lyric-line-content\s*\{[^}]*grid-column:\s*3/, "歌词正文不应再被推到第三列");
 assert.match(
   app,
-  /\.song-detail-lyrics\s*\{[^}]*margin-left:\s*calc\(var\(--lyric-gutter\)\s*\*\s*-1\)[^}]*padding-left:\s*var\(--lyric-gutter\)/,
+  /\.song-detail-lyrics\s*\{[^}]*margin-left:\s*calc\(var\(--lyric-gutter\)\s*\*\s*-1\)[^}]*padding:\s*0\s+10px\s+38px\s+var\(--lyric-gutter\)/,
   "歌词区域应为左侧播放控件预留可见空间，同时保持歌曲信息与歌词左对齐"
 );
 assert.match(

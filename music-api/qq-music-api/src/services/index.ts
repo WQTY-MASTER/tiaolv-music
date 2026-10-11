@@ -1,0 +1,181 @@
+import downloadQQMusic from './apis/downloadQQMusic';
+// search
+import getHotKey from './apis/search/getHotKey';
+import getSearchByKey from './apis/search/getSearchByKey';
+import getSmartbox from './apis/search/getSmartbox';
+import getSearchByType from './apis/search/getSearchByType';
+
+// song list
+import songLists from './apis/songLists/songLists';
+import songListCategories from './apis/songLists/songListCategories';
+import songListDetail from './apis/songLists/songListDetail';
+
+// MV
+import getMvByTag from './apis/mv/getMvByTag';
+import getMvCategory from './apis/mv/getMvCategory';
+
+// singer
+import getSingerCategory from './apis/singers/getSingerCategory';
+import getSimilarSinger from './apis/singers/getSimilarSinger';
+import getSingerMv from './apis/singers/getSingerMv';
+import getSingerDesc from './apis/singers/getSingerDesc';
+import getSingerStarNum from './apis/singers/getSingerStarNum';
+
+// radio
+import getRadioLists from './apis/radio/getRadioLists';
+
+// DigitalAlbum
+import getDigitalAlbumLists from './apis/digitalAlbum/getDigitalAlbumLists';
+
+// music
+import getLyric from './apis/music/getLyric';
+import getMusicPlay from './apis/music/getMusicPlay';
+import getRelatedMv from './apis/music/getRelatedMv';
+import getRelatedPlaylists from './apis/music/getRelatedPlaylists';
+
+// album
+import getAlbumInfo from './apis/album/getAlbumInfo';
+import getAlbumSongs from './apis/album/getAlbumSongs';
+
+// comments
+import getComments from './apis/comments/getComments';
+
+// UCommon
+import UCommon from './apis/UCommon/UCommon';
+
+// getTopLists
+import getTopLists from './apis/rank/getTopLists';
+
+// recommend
+import getRecommendBanner from './apis/recommend/getRecommendBanner';
+import { getDailyRecommend, getPrivateFM, getNewSongs } from './apis/recommend/getDailyRecommend';
+import { getPersonalRecommend, getSimilarSongs } from './apis/recommend/getPersonalRecommend';
+import { getPlaylistTags, getPlaylistsByTag, getHotComments, getSingerListByArea } from './apis/extend/getPlaylistTags';
+
+// getQQLoginQr
+import getQQLoginQr from './apis/user/getQQLoginQr';
+
+// checkQQLoginQr
+import checkQQLoginQr from './apis/user/checkQQLoginQr';
+
+// getWXLoginQr
+import getWXLoginQr from './apis/user/getWXLoginQr';
+
+// checkWXLoginQr
+import checkWXLoginQr from './apis/user/checkWXLoginQr';
+
+// getUserPlaylists
+import { getUserPlaylists } from './apis/user/getUserPlaylists';
+
+// getUserAvatar
+import { getUserAvatar } from './apis/user/getUserAvatar';
+
+// getUserLikedSongs
+import { getUserLikedSongs } from './apis/user/getUserLikedSongs';
+
+// user readonly extras
+import { getUserDetail } from './apis/user/getUserDetail';
+import { getUserCollectedAlbums, getUserCollectedSongLists } from './apis/user/getUserCollections';
+import { getUserFans, getUserFollowSingers, getUserFollowUsers } from './apis/user/getUserSocial';
+
+// user medal & profile extras (L-1124 research)
+import { getUserMedal } from './apis/user/getUserMedal';
+import { getMedalTabDetail } from './apis/user/getMedalTabDetail';
+import { getHideMedal } from './apis/user/getHideMedal';
+import { getListeningCalendar } from './apis/user/getListeningCalendar';
+import { getRecentPlay } from './apis/user/getRecentPlay';
+import { reportRecentPlay } from './apis/user/reportRecentPlay';
+import { deleteRecentPlay } from './apis/user/deleteRecentPlay';
+import { getVipInfo } from './apis/user/getVipInfo';
+import { getFriendList } from './apis/user/getFriendList';
+import { getMusicGene } from './apis/user/getMusicGene';
+import { getUserFavMv } from './apis/user/getUserFavMv';
+import { getDislikeList } from './apis/user/getDislikeList';
+import { getSingerSubscription, setSingerSubscription } from './apis/user/singerSubscription';
+import { setPlaylistSubscription } from './apis/user/playlistSubscription';
+import { setSongFavorite } from './apis/user/songFavorite';
+import { createPlaylist } from './apis/user/deletePlaylist';
+
+export {
+	downloadQQMusic,
+	// search
+	getHotKey,
+	getSearchByKey,
+	getSmartbox,
+	getSearchByType,
+	// song lists
+	songLists,
+	songListCategories,
+	songListDetail,
+	// MV
+	getMvByTag,
+	getMvCategory,
+	// singer
+	getSingerCategory,
+	getSimilarSinger,
+	getSingerMv,
+	getSingerDesc,
+	getSingerStarNum,
+	// radio
+	getRadioLists,
+	// DigitalAlbum
+	getDigitalAlbumLists,
+	// music
+	getLyric,
+	getMusicPlay,
+	getRelatedMv,
+	getRelatedPlaylists,
+	// album
+	getAlbumInfo,
+	getAlbumSongs,
+	// comments
+	getComments,
+	// UCommon
+	UCommon,
+	// getTopLists
+	getTopLists,
+	// recommend
+	getRecommendBanner,
+	getDailyRecommend,
+	getPrivateFM,
+	getNewSongs,
+	getPersonalRecommend,
+	getSimilarSongs,
+	getPlaylistTags,
+	getPlaylistsByTag,
+	getHotComments,
+	getSingerListByArea,
+	// login
+	getQQLoginQr,
+	checkQQLoginQr,
+	getWXLoginQr,
+	checkWXLoginQr,
+	// user
+	getUserPlaylists,
+	getUserAvatar,
+	getUserLikedSongs,
+	getUserDetail,
+	getUserCollectedSongLists,
+	getUserCollectedAlbums,
+	getUserFollowSingers,
+	getUserFollowUsers,
+	getUserFans,
+	// medal & profile extras
+	getUserMedal,
+	getMedalTabDetail,
+	getHideMedal,
+	getListeningCalendar,
+	getRecentPlay,
+	reportRecentPlay,
+	deleteRecentPlay,
+	getVipInfo,
+	getFriendList,
+	getMusicGene,
+	getUserFavMv,
+	getDislikeList,
+	getSingerSubscription,
+	setSingerSubscription,
+	setPlaylistSubscription,
+	setSongFavorite,
+	createPlaylist,
+};

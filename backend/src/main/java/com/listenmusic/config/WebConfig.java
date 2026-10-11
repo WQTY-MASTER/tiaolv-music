@@ -9,8 +9,9 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
+            // File-based Electron pages still require LocalAccessFilter's private token.
             .allowedOrigins("http://127.0.0.1:5173", "http://localhost:5173", "null")
-            .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-            .allowedHeaders("*");
+            .allowedMethods("GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS")
+            .allowedHeaders("Content-Type", "X-Tiaolv-Token");
     }
 }

@@ -2,15 +2,17 @@ package com.listenmusic.api;
 
 import com.listenmusic.domain.Track;
 import com.listenmusic.provider.HomepagePlaylist;
+import com.listenmusic.provider.FavoriteOperationException;
+import com.listenmusic.provider.PlaylistOrderConflictException;
 import com.listenmusic.service.AccountCatalogService;
 import com.listenmusic.service.AccountLoginRequiredException;
 import com.listenmusic.auth.AccountView;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.List;
@@ -27,10 +29,25 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @WebMvcTest(AccountController.class)
 @Import(com.listenmusic.config.WebConfig.class)
 class AccountControllerTest {
+    @Test
+    void exposesQqRecentReportAndReturnsItsFailureReason() throws Exception {
+        String session = "cf3dac35-7a99-4706-9c69-11a4742486a1";
+        given(accountCatalogService.reportRecentPlay("200", "qq:mid1", session, 30, 180)).willReturn(List.of());
+        String body = "{\"accountId\":\"200\",\"trackId\":\"qq:mid1\",\"sessionId\":\"" + session
+            + "\",\"listenedSeconds\":30,\"totalSeconds\":180}";
+        mockMvc.perform(post("/account/qq/recent-play-reports").contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true)).andExpect(jsonPath("$.tracks").isArray());
+        given(accountCatalogService.reportRecentPlay("200", "qq:mid1", session, 30, 180))
+            .willThrow(new com.listenmusic.provider.RecentPlayReportException("QQ 音乐接口返回错误: 80105"));
+        mockMvc.perform(post("/account/qq/recent-play-reports").contentType(MediaType.APPLICATION_JSON).content(body))
+            .andExpect(status().isBadGateway()).andExpect(jsonPath("$.code").value("RECENT_PLAY_REPORT_FAILED"))
+            .andExpect(jsonPath("$.message").value("QQ 音乐接口返回错误: 80105"));
+    }
+
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private AccountCatalogService accountCatalogService;
 
     @Test
@@ -43,6 +60,60 @@ class AccountControllerTest {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.provider").value("netease"))
             .andExpect(jsonPath("$.userId").value("100"));
+    }
+
+    @Test
+    void preservesFavoriteProviderRejectionWithoutReturningGeneric500() throws Exception {
+        org.mockito.Mockito.doThrow(new FavoriteOperationException("QQ 音乐接口返回错误: 80105"))
+            .when(accountCatalogService).addFavorite(org.mockito.ArgumentMatchers.eq("qq"), any(Track.class));
+        org.mockito.Mockito.doThrow(new FavoriteOperationException("QQ 音乐接口返回错误: 80105"))
+            .when(accountCatalogService).removeFavorite("qq", "qq:0034QXzv2ptMdw");
+
+        mockMvc.perform(post("/account/qq/favorites")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"id\":\"qq:0034QXzv2ptMdw\",\"title\":\"歌曲\",\"artist\":\"歌手\",\"source\":\"qq\"}"))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("FAVORITE_WRITE_FAILED"))
+            .andExpect(jsonPath("$.message").value("QQ 音乐接口返回错误: 80105"));
+        mockMvc.perform(delete("/account/qq/favorites/qq:0034QXzv2ptMdw"))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("FAVORITE_WRITE_FAILED"))
+            .andExpect(jsonPath("$.message").value("QQ 音乐接口返回错误: 80105"));
+    }
+
+    @Test
+    void routesPlaylistDeletionToTheAccountService() throws Exception {
+        mockMvc.perform(delete("/account/qq/playlists/qq:900"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));
+        verify(accountCatalogService).deletePlaylist("qq", "qq:900");
+    }
+
+    @Test
+    void removesOnlyTheRequestedPlaylistTrack() throws Exception {
+        mockMvc.perform(delete("/account/qq/playlists/qq:900/tracks/qq:mid1"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));
+        verify(accountCatalogService).removePlaylistTrack("qq", "qq:900", "qq:mid1");
+    }
+
+    @Test
+    void routesOrderAndPreviousSnapshotToTheService() throws Exception {
+        mockMvc.perform(post("/account/qq/playlists/qq:900/order").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"qq:b\",\"qq:a\"],\"previousTrackIds\":[\"qq:a\",\"qq:b\"]}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));
+        verify(accountCatalogService).reorderPlaylistTracks("qq", "qq:900", List.of("qq:b", "qq:a"), List.of("qq:a", "qq:b"));
+    }
+
+    @Test
+    void returnsConflictWithAnActionableMessageForAStalePlaylistOrder() throws Exception {
+        org.mockito.Mockito.doThrow(new PlaylistOrderConflictException("QQ 歌单已发生变化，请刷新后重新排序"))
+            .when(accountCatalogService).reorderPlaylistTracks(
+                "qq", "qq:900", List.of("qq:b", "qq:a"), List.of("qq:a", "qq:b")
+            );
+
+        mockMvc.perform(post("/account/qq/playlists/qq:900/order").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"qq:b\",\"qq:a\"],\"previousTrackIds\":[\"qq:a\",\"qq:b\"]}"))
+            .andExpect(status().isConflict())
+            .andExpect(jsonPath("$.message").value("QQ 歌单已发生变化，请刷新后重新排序"));
     }
 
     @Test
@@ -206,5 +277,62 @@ class AccountControllerTest {
             .andExpect(jsonPath("$.synced").value(false));
 
         verify(accountCatalogService).setPlaylistSubscribed("qq", "qq:778899", true);
+    }
+
+    @Test
+    void exposesRangeAwareListeningRankingAndQqDeltaRecording() throws Exception {
+        given(accountCatalogService.loadListeningRank("qq", "custom", "2026-10-01", "2026-10-08"))
+            .willReturn(List.of());
+
+        mockMvc.perform(get("/account/qq/listening-rank")
+                .param("period", "custom")
+                .param("from", "2026-10-01")
+                .param("to", "2026-10-08"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$").isArray());
+        mockMvc.perform(post("/account/qq/listening-stats")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("""
+                    {
+                      "accountId":"100",
+                      "accountNickname":"QQ用户",
+                      "accountAvatarUrl":"https://img.test/avatar.jpg",
+                      "track":{"id":"qq:mid","title":"歌曲","artist":"歌手","album":"专辑","duration":180,"source":"qq"},
+                      "listenedSeconds":15,
+                      "playCount":1
+                    }
+                    """))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.ok").value(true));
+
+        verify(accountCatalogService).loadListeningRank("qq", "custom", "2026-10-01", "2026-10-08");
+        verify(accountCatalogService).recordQqListeningDelta(
+            org.mockito.ArgumentMatchers.eq("qq"),
+            org.mockito.ArgumentMatchers.eq("100"),
+            org.mockito.ArgumentMatchers.eq("QQ用户"),
+            org.mockito.ArgumentMatchers.eq("https://img.test/avatar.jpg"),
+            any(Track.class),
+            org.mockito.ArgumentMatchers.eq(15.0), org.mockito.ArgumentMatchers.eq(1)
+        );
+    }
+
+    @Test
+    void exposesPersistentQqListeningSummariesAndExplicitDeletion() throws Exception {
+        given(accountCatalogService.loadQqListeningDataSummaries()).willReturn(List.of(
+            new com.listenmusic.domain.QqListeningDataSummary(
+                "100", "QQ用户", null, 2, 90, "2026-10-01", "2026-10-08"
+            )
+        ));
+
+        mockMvc.perform(get("/account/qq/listening-stats/accounts"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$[0].accountId").value("100"));
+        mockMvc.perform(delete("/account/qq/listening-stats/100")
+                .param("from", "2026-10-01")
+                .param("to", "2026-10-08"))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.ok").value(true));
+
+        verify(accountCatalogService).deleteQqListeningStats("100", false, "2026-10-01", "2026-10-08");
     }
 }

@@ -28,11 +28,13 @@ assert.match(miniPlayerSettings, /迷你播放器/, "迷你播放器高级入口
 assert.match(component, /const backgroundOpen = ref\(false\)/, "自定义背景默认应为收起状态");
 assert.match(component, /const lyricStyleOpen = ref\(false\)/, "歌词显示样式默认应为收起状态");
 assert.match(component, /const expandedPage = ref<AppearancePage \| null>\(null\)/, "分页面背景默认不应展开任一页面");
-assert.match(miniPlayerSettings, /const open = ref\(false\)/, "迷你播放器设置默认应为收起状态");
+assert.match(miniPlayerSettings, /const open = ref\(props\.standalone === true\)/, "主设置页默认收起，独立迷你外观编辑器应直接展开");
 assert.doesNotMatch(component, /播放条形态与可见性|播放条按钮编排|液态玻璃材质|卡片与背景自定义/, "外观页不应显示未开放的高级占位入口");
 assert.doesNotMatch(component, />\s*保存\s*</, "外观设置应实时生效，不应需要保存按钮");
 assert.match(app, /writeAppearancePreferences/, "外观参数应持久化");
 assert.match(app, /resolvePageBackground/, "应用应解析当前页面背景");
+assert.match(app, /appearanceImageError\.value = "背景图片读取失败。请确认文件仍然存在；更新软件后请完全退出并重新启动。"/, "背景读取返回空地址时应显示明确错误");
+assert.doesNotMatch(app, /throw new Error\("Background image unavailable"\)/, "背景读取返回空地址不应抛出后再由同一函数捕获");
 assert.match(app, /is-outside-focus/, "歌词聚焦行数应影响歌曲页渲染");
 assert.match(component, /自定义歌词配色[\s\S]*正文[\s\S]*当前行[\s\S]*扫光/, "自定义歌词配色应独立提供正文、当前行和扫光颜色");
 assert.match(app, /--lyric-sweep-color[\s\S]*--lyric-active-color[\s\S]*--lyric-inactive-color/, "三种歌词颜色应分别接入播放页变量");

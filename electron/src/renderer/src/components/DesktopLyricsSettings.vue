@@ -570,7 +570,10 @@ onBeforeUnmount(() => {
   outline: 0;
   background: #fff;
   color: #263247;
-  font: 700 12px/1 inherit;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .desktop-lyrics-field input[type="number"] {
@@ -632,6 +635,14 @@ onBeforeUnmount(() => {
 }
 
 .desktop-lyrics-preview {
+  --preview-radius: 18px;
+  --preview-background: rgb(19 21 25 / 72%);
+  --preview-played: #5b8cff;
+  --preview-unplayed: #fff;
+  --preview-font: "Microsoft YaHei UI", sans-serif;
+  --preview-font-size: 38px;
+  --preview-weight: 400;
+  --preview-align: center;
   display: grid;
   min-height: 154px;
   align-content: center;
@@ -644,7 +655,7 @@ onBeforeUnmount(() => {
   background: var(--preview-background);
   box-shadow: 0 16px 32px rgb(28 35 48 / 16%);
   color: var(--preview-unplayed);
-  font-family: var(--preview-font);
+  font-family: var(--preview-font, "Microsoft YaHei UI", sans-serif);
   font-synthesis: weight;
   text-align: var(--preview-align);
   transition: border-radius 160ms ease, background 160ms ease, box-shadow 160ms ease;

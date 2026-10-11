@@ -64,13 +64,17 @@ assert.match(app, /class="playlist-empty-state"[\s\S]*暂无内容[\s\S]*通过�
 assert.match(app, /class="playlist-name-dialog"/, "重命名应复用创建歌单弹窗风格");
 assert.match(app, /playlistNameDialogMode\.value === "create"/, "创建歌单应复用同一个弹窗样式");
 assert.match(app, /playlistNameError/, "重命名弹窗应校验歌单名不能为空");
+assert.match(app, /playlistNameError\.value = "创建成功，但未能读取新歌单"/, "平台返回无效新歌单时应在弹窗内显示错误");
+assert.doesNotMatch(app, /throw new Error\("创建成功，但未能读取新歌单"\)/, "可预期的新歌单解析失败不应抛出后再由同一函数捕获");
 assert.match(app, /persistLocalPlaylists/, "歌单重命名、复制、封面应持久化");
 assert.match(app, /resolvePlaylistCover/, "普通歌单封面应通过统一的首曲封面规则派生");
 assert.match(app, /orderedPlaylistTracksForCover/, "普通歌单封面应读取手动排序后的歌曲列表");
 assert.match(app, /PLAYLIST_COVER_PATH_STORAGE_KEY[\s\S]*persistPlaylistCoverPaths/, "用户设置的歌单封面应独立持久化");
 assert.match(api, /export async function selectPlaylistCoverImage/, "渲染层应提供选择歌单封面的 API");
 assert.match(api, /document\.createElement\("input"\)[\s\S]*input\.type\s*=\s*"file"/, "非 Electron 环境应回退到图片文件选择器");
-assert.match(api, /\^\(\?:https\?:\|file:\|data:\|blob:\)/, "已可直接加载的封面地址不应错误拼接后端地址");
+assert.match(api, /return resolveStandaloneBackendResourceUrl\(path, previewBackendOrigin\(\)\)/, "封面地址应使用共享的本地与在线资源边界");
+const backendRoutes = fs.readFileSync(path.join(root, "src/shared/backendRoutes.ts"), "utf8");
+assert.match(backendRoutes, /\^\(\?:file:\|data:\|blob:\)/, "本地文件和内存封面地址应直接加载");
 assert.match(main, /select-playlist-cover-image/, "主进程应提供图片文件选择 IPC");
 assert.match(preload, /selectCoverImage/, "预加载桥应暴露图片选择能力");
 assert.match(env, /selectCoverImage\(\): Promise<string \| null>/, "Window 类型应声明图片选择桥");

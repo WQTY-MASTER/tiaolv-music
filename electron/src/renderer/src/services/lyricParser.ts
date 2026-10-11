@@ -34,13 +34,19 @@ const yrcTimingPattern = /\((\d+),(\d+)(?:,\d+)?\)/gu;
 const qrcTokenPattern = /([^()]*)\((\d+),(\d+)(?:,\d+)?\)/gu;
 const inlineTranslationPattern = /^(.+?)\s+([\u4e00-\u9fff].*)$/u;
 const metadataCreditPattern = /^(.+?)\s*[:：]\s*(.*)$/u;
+const shortMetadataLabels = new Set(["词", "曲"]);
 const metadataHints = [
   "作词", "作曲", "编曲", "制作人", "监制", "混音", "母带", "企划", "录音",
-  "和声", "吉他", "贝斯", "鼓手", "弦乐", "合唱", "演唱", "乐器独奏",
-  "录音监督", "出品", "助理", "谱务", "承办人", "录音棚", "录音师",
+  "和声", "吉他", "贝斯", "鼓手", "弦乐", "合唱", "演唱", "乐器独奏", "人声编辑",
+  "录音监督", "出品", "助理", "谱务", "承办人", "录音棚", "录音师", "乐团", "统筹", "音乐总监", "音乐总指导",
+  "小提琴", "中提琴", "大提琴", "低音提琴", "钢琴", "键盘", "长笛", "双簧管",
+  "单簧管", "巴松", "萨克斯", "小号", "长号", "圆号", "打击乐", "琵琶", "二胡",
   "lyricist", "composer", "arranger", "producer", "vocal", "mixing",
   "mastering", "instrument", "guitar", "bass", "drum", "studio",
-  "recording", "contractor", "supervisor", "assistant", "scoring", "produced"
+  "recording", "contractor", "supervisor", "assistant", "scoring", "produced",
+  "orchestra", "strings", "violin", "viola", "cello", "piano", "keyboard",
+  "synthesizer", "flute", "oboe", "clarinet", "bassoon", "saxophone", "trumpet",
+  "trombone", "horn", "percussion", "pipa", "erhu", "opera", "coordinator", "music director", "musical director"
 ];
 
 export function splitLyricCharacters(text: string): string[] {
@@ -49,6 +55,10 @@ export function splitLyricCharacters(text: string): string[] {
     return Array.from(new segmenter(undefined, { granularity: "grapheme" }).segment(text), (item) => item.segment);
   }
   return Array.from(text);
+}
+
+export function getLeadingLyricQuote(text: string): string {
+  return /^[“‘"]/u.test(text) ? text[0] : "";
 }
 
 export function parseYrcTokens(body: string): KaraokeToken[] {
@@ -118,6 +128,7 @@ function parseWordTimedContent(
 ): LyricLine[] {
   const lines: LyricLine[] = [];
   const title = raw.match(/^\[ti:([^\]\r\n]+)\]/mu)?.[1]?.trim();
+  const artist = raw.match(/^\[ar:([^\]\r\n]+)\]/mu)?.[1]?.trim();
 
   for (const rawLine of raw.split(/\r?\n/)) {
     const yrcMatch = rawLine.match(yrcHeaderPattern);
@@ -133,13 +144,17 @@ function parseWordTimedContent(
       ? Number(yrcMatch[2]) / 1000
       : Number(clockMatch?.[4] ?? 0) / 1000;
     const body = yrcMatch?.[3] ?? clockMatch?.[5] ?? "";
+    const plainText = body.replace(/\(\d+,\d+(?:,\d+)?\)/gu, "").trim();
     const tokens = parseTokens(body);
     const characters = expandKaraokeTokens(tokens);
     const trimmedCharacters = trimCharacterData(characters);
     const text = trimmedCharacters.map((character) => character.text).join("");
 
-    const isOpeningTitle = lineTime < 2 && title
-      && (text === title || text.startsWith(`${title} - `));
+    const isOpeningTitle = lineTime < 2 && (
+      (title && (plainText === title || plainText.startsWith(`${title} - `)))
+      || (artist && plainText.endsWith(artist) && /\s[-–—]\s/u.test(plainText))
+      || isBracketedOpeningTitle(plainText)
+    );
     if (!text || isOpeningTitle || isLyricAnnotation(text) || isLyricMetadataText(text) || (duration > 0 && duration < 0.1)) {
       continue;
     }
@@ -192,8 +207,12 @@ export function parseLrcContent(raw: string): LyricLine[] {
 
     const lyricText = splitInlineTranslation(text);
     for (const match of matches) {
+      const time = parseClockTime(match[1], match[2], match[3]);
+      if (time < 2 && isBracketedOpeningTitle(text)) {
+        continue;
+      }
       entries.push({
-        time: parseClockTime(match[1], match[2], match[3]),
+        time,
         text: lyricText.text,
         translation: lyricText.translation
       });
@@ -237,41 +256,6 @@ function expandKaraokeTokens(tokens: KaraokeToken[]): LyricCharacter[] {
   });
 }
 
-function parseEnhancedCharacters(rawText: string, originalText: string) {
-  const matches = Array.from(rawText.matchAll(inlineTimestampPattern));
-  if (matches.length === 0 || !originalText) {
-    return undefined;
-  }
-
-  const characters: LyricCharacter[] = [];
-  for (const [index, match] of matches.entries()) {
-    const segmentStart = (match.index ?? 0) + match[0].length;
-    const segmentEnd = matches[index + 1]?.index ?? rawText.length;
-    const segmentCharacters = splitLyricCharacters(rawText.slice(segmentStart, segmentEnd));
-    if (segmentCharacters.length === 0) {
-      continue;
-    }
-
-    const start = parseClockTime(match[1], match[2], match[3]);
-    const nextStart = matches[index + 1]
-      ? parseClockTime(matches[index + 1][1], matches[index + 1][2], matches[index + 1][3])
-      : start + Math.max(0.6, segmentCharacters.length * 0.38);
-    const duration = Math.max(0.05, nextStart - start);
-    const characterDuration = duration / segmentCharacters.length;
-    characters.push(...segmentCharacters.map((text, characterIndex) => ({
-      text,
-      start: start + characterDuration * characterIndex,
-      duration: characterDuration
-    })));
-  }
-
-  const trimmedCharacters = trimCharacterData(characters);
-  const originalCharacterCount = splitLyricCharacters(originalText).length;
-  return trimmedCharacters.slice(0, originalCharacterCount).length === originalCharacterCount
-    ? trimmedCharacters.slice(0, originalCharacterCount)
-    : undefined;
-}
-
 function trimCharacterData(characters: LyricCharacter[]) {
   let start = 0;
   let end = characters.length;
@@ -304,13 +288,18 @@ function isLyricAnnotation(text: string) {
     || /^(?:duet|solo|verse|chorus|bridge|intro|outro)\s*[:：]\s*$/iu.test(text);
 }
 
+function isBracketedOpeningTitle(text: string) {
+  return /[-–—]{1,2}\s*《[^》]+》\s*$/u.test(text);
+}
+
 function isLyricMetadataText(text: string) {
   const match = text.trim().match(metadataCreditPattern);
   if (!match) {
     return false;
   }
   const label = match[1].trim().toLocaleLowerCase();
-  return metadataHints.some((hint) => label.includes(hint.toLocaleLowerCase()));
+  return shortMetadataLabels.has(label)
+    || metadataHints.some((hint) => label.includes(hint.toLocaleLowerCase()));
 }
 
 function parseTranslationByTime(raw: string | undefined) {
@@ -322,7 +311,7 @@ function parseTranslationByTime(raw: string | undefined) {
   for (const line of raw.split(/\r?\n/)) {
     const matches = Array.from(line.matchAll(timestampPattern));
     const text = line.replace(timestampPattern, "").trim();
-    if (!text) {
+    if (!text || isLyricAnnotation(text)) {
       continue;
     }
     for (const match of matches) {
@@ -338,13 +327,23 @@ function attachTranslations(lines: LyricLine[], translationRaw?: string) {
     return lines;
   }
 
-  return lines.map((line) => {
-    if (line.translation) {
-      return line;
+  const translatedLines = lines.map((line) => ({ ...line }));
+  for (const [translationTime, translationText] of [...translations.entries()].sort(([left], [right]) => left - right)) {
+    let closestIndex = -1;
+    let closestDistance = 0.2;
+    for (const [index, line] of translatedLines.entries()) {
+      if (line.translation) {
+        continue;
+      }
+      const distance = Math.abs(translationTime - line.time);
+      if (distance < closestDistance) {
+        closestIndex = index;
+        closestDistance = distance;
+      }
     }
-    const translation = [...translations.entries()]
-      .sort(([left], [right]) => Math.abs(left - line.time) - Math.abs(right - line.time))
-      .find(([time]) => Math.abs(time - line.time) < 0.2)?.[1];
-    return translation ? { ...line, translation } : line;
-  });
+    if (closestIndex >= 0) {
+      translatedLines[closestIndex] = { ...translatedLines[closestIndex], translation: translationText };
+    }
+  }
+  return translatedLines;
 }

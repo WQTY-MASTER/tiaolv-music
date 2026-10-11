@@ -9,13 +9,19 @@ const clockTimingPattern = /^\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?(?:,\d+)?\]/u;
 const wordLineTimingPattern = /^\[(\d+),(\d+)\]/u;
 const wordTimingPattern = /\(\d+,\d+(?:,\d+)?\)/gu;
 const creditPattern = /^(.+?)\s*[:：]\s*(.*)$/u;
+const shortCreditLabels = new Set(["词", "曲"]);
 const creditHints = [
   "作词", "作曲", "编曲", "制作人", "监制", "混音", "母带", "企划", "录音",
-  "和声", "吉他", "贝斯", "鼓手", "弦乐", "合唱", "演唱", "乐器独奏",
-  "录音监督", "出品", "助理", "谱务", "承办人", "录音棚", "录音师",
+  "和声", "吉他", "贝斯", "鼓手", "弦乐", "合唱", "演唱", "乐器独奏", "人声编辑",
+  "录音监督", "出品", "助理", "谱务", "承办人", "录音棚", "录音师", "乐团", "统筹", "音乐总监", "音乐总指导",
+  "小提琴", "中提琴", "大提琴", "低音提琴", "钢琴", "键盘", "长笛", "双簧管",
+  "单簧管", "巴松", "萨克斯", "小号", "长号", "圆号", "打击乐", "琵琶", "二胡",
   "lyricist", "composer", "arranger", "producer", "vocal", "mixing",
   "mastering", "instrument", "guitar", "bass", "drum", "studio",
-  "recording", "contractor", "supervisor", "assistant", "scoring", "produced"
+  "recording", "contractor", "supervisor", "assistant", "scoring", "produced",
+  "orchestra", "strings", "violin", "viola", "cello", "piano", "keyboard",
+  "synthesizer", "flute", "oboe", "clarinet", "bassoon", "saxophone", "trumpet",
+  "trombone", "horn", "percussion", "pipa", "erhu", "opera", "coordinator", "music director", "musical director"
 ];
 
 export function parseLyricCredits(raw: string | undefined): LyricCredit[] {
@@ -97,7 +103,7 @@ function parseCreditText(text: string, time?: number): LyricCredit | null {
 
   const label = match[1].trim();
   const normalized = label.toLocaleLowerCase();
-  if (!creditHints.some((hint) => normalized.includes(hint))) {
+  if (!shortCreditLabels.has(normalized) && !creditHints.some((hint) => normalized.includes(hint))) {
     return null;
   }
 

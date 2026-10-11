@@ -1,7 +1,10 @@
 import { contextBridge, ipcRenderer } from "electron";
+import { standaloneBackendRequestUrl } from "../shared/backendRoutes";
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../shared/about";
 import type { CloseBehavior } from "../shared/desktopIntegration";
+import type { MiniPlayerPreferences } from "../renderer/src/services/appearanceSettings";
+import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../shared/miniPlayer";
 import type {
   DesktopLyricsAction,
   DesktopLyricsBounds,
@@ -28,18 +31,38 @@ interface SystemTrayState {
   miniPlayerVisible: boolean;
 }
 
-const backendBaseUrl = "http://127.0.0.1:17890";
-
 async function request(path: string, init?: RequestInit) {
-  const response = await fetch(`${backendBaseUrl}${path}`, init);
+  const response = await fetch(standaloneBackendRequestUrl(path), init);
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status}`);
   }
   return response.json();
 }
 
-contextBridge.exposeInMainWorld("listenMusic", {
+const miniBridge = {
+  getMiniPlayerSnapshot: (): Promise<MiniWindowSnapshot | null> => ipcRenderer.invoke("mini-player-get-snapshot"),
+  onMiniPlayerSnapshot: (listener: (snapshot: MiniWindowSnapshot) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, snapshot: MiniWindowSnapshot) => listener(snapshot);
+    ipcRenderer.on("mini-player-snapshot", handler);
+    return () => ipcRenderer.removeListener("mini-player-snapshot", handler);
+  },
+  onMiniPlayerTime: (listener: (time: { currentTime: number; progress: number }) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, time: { currentTime: number; progress: number }) => listener(time);
+    ipcRenderer.on("mini-player-time", handler);
+    return () => ipcRenderer.removeListener("mini-player-time", handler);
+  },
+  sendMiniPlayerAction: (action: MiniPlayerAction) => ipcRenderer.send("mini-player-action", action),
+  miniWindowCommand: (command: MiniWindowCommand): Promise<boolean> => ipcRenderer.invoke("mini-window-command", command),
+  setMiniQueueExpanded: (expanded: boolean): Promise<boolean> => ipcRenderer.invoke("set-mini-queue-expanded", expanded),
+  startMiniResize: (edge: MiniResizeEdge): Promise<boolean> => ipcRenderer.invoke("mini-resize-start", edge),
+  moveMiniResize: (): Promise<boolean> => ipcRenderer.invoke("mini-resize-move"),
+  endMiniResize: (): Promise<boolean> => ipcRenderer.invoke("mini-resize-end"),
+  setMiniPlayerAppearance: (preferences: MiniPlayerPreferences): Promise<boolean> => ipcRenderer.invoke("mini-player-set-appearance", preferences)
+};
+
+const mainBridge = {
   isWindows: process.platform === "win32",
+  setWindowTitlebarTheme: (dark: boolean): Promise<boolean> => ipcRenderer.invoke("set-window-titlebar-theme", dark),
   getShortcuts: (): Promise<ShortcutSnapshot> => ipcRenderer.invoke("get-shortcuts"),
   updateShortcuts: (patch: ShortcutPatch, reset = false): Promise<ShortcutSnapshot> => ipcRenderer.invoke("update-shortcuts", patch, reset),
   setShortcutRecording: (recording: boolean): Promise<ShortcutSnapshot> => ipcRenderer.invoke("set-shortcut-recording", recording),
@@ -91,6 +114,9 @@ contextBridge.exposeInMainWorld("listenMusic", {
   readAppearanceBackground: (imagePath: string): Promise<string> => (
     ipcRenderer.invoke("read-appearance-background", imagePath)
   ),
+  readCoverDataUrl: (coverUrl: string): Promise<string | null> => (
+    ipcRenderer.invoke("read-cover-data-url", coverUrl)
+  ),
   getBackgroundCacheStatistics: () => ipcRenderer.invoke("background-cache-statistics"),
   clearBackgroundCache: () => ipcRenderer.invoke("clear-background-cache"),
   getLegacyAggregatePlaylists: () => ipcRenderer.invoke("get-legacy-aggregate-playlists"),
@@ -101,6 +127,18 @@ contextBridge.exposeInMainWorld("listenMusic", {
   enterMiniMode: (options: { showInTaskbar: boolean; alwaysOnTop: boolean }) => ipcRenderer.invoke("enter-mini-mode", options),
   exitMiniMode: () => ipcRenderer.invoke("exit-mini-mode"),
   setMiniQueueExpanded: (expanded: boolean) => ipcRenderer.invoke("set-mini-queue-expanded", expanded),
+  updateMiniPlayerSnapshot: (snapshot: MiniPlayerSnapshot) => ipcRenderer.send("update-mini-player-snapshot", snapshot),
+  updateMiniPlayerTime: (currentTime: number, progress: number) => ipcRenderer.send("update-mini-player-time", currentTime, progress),
+  onMiniPlayerAction: (listener: (action: MiniPlayerAction) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, action: MiniPlayerAction) => listener(action);
+    ipcRenderer.on("mini-player-action", handler);
+    return () => ipcRenderer.removeListener("mini-player-action", handler);
+  },
+  onMiniModeVisibility: (listener: (visible: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, visible: boolean) => listener(visible);
+    ipcRenderer.on("mini-mode-visibility", handler);
+    return () => ipcRenderer.removeListener("mini-mode-visibility", handler);
+  },
   setTaskbarThumbnailButtons: (enabled: boolean, isPlaying: boolean) => (
     ipcRenderer.invoke("set-taskbar-thumbnail-buttons", enabled, isPlaying)
   ),
@@ -198,4 +236,15 @@ contextBridge.exposeInMainWorld("listenMusic", {
     return () => ipcRenderer.removeListener("desktop-lyrics-action", handler);
   },
   copyText: (value: string) => ipcRenderer.invoke("copy-text", value)
-});
+};
+
+const windowMode = new URLSearchParams(window.location.search).get("window");
+contextBridge.exposeInMainWorld("listenMusic", windowMode === "mini-player" ? miniBridge
+  : windowMode === "mini-editor" ? {
+    getMiniPlayerSnapshot: miniBridge.getMiniPlayerSnapshot,
+    onMiniPlayerSnapshot: miniBridge.onMiniPlayerSnapshot,
+    miniWindowCommand: miniBridge.miniWindowCommand,
+    setMiniPlayerAppearance: miniBridge.setMiniPlayerAppearance,
+    selectCoverImage: mainBridge.selectCoverImage,
+    readAppearanceBackground: mainBridge.readAppearanceBackground
+  } : mainBridge);

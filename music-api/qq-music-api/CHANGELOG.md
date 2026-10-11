@@ -1,0 +1,217 @@
+## 2.6.0 (2026-08-27)
+
+### Features
+
+* 增加微信登录二维码相关接口与功能 (#45) ([15a38f8](https://github.com/sansenjian/qq-music-api/commit/15a38f8b8e0663aa7afea1440f92c6dd3b36100f))
+
+## 2.5.0 (2026-08-10)
+
+### Bug Fixes
+
+* address PR 41 review comments (#42) ([ba107d1](https://github.com/sansenjian/qq-music-api/commit/ba107d1b427436d03ea138f68ad86efe5f08c76b))
+
+## 2.4.0 (2026-06-10)
+
+### Features
+
+* release MCP package and readonly API updates (#28) ([e501776](https://github.com/sansenjian/qq-music-api/commit/e501776cea81f311f4138f9be6e1788ecf61ad65))
+
+## 2.3.4 (2026-06-01)
+
+### Other Changes
+
+* promote dev changes to main (#20) ([add5156](https://github.com/sansenjian/qq-music-api/commit/add5156c2b91f1066196e9837dd8eb6719476e66))
+
+## 2.3.3 (2026-05-28)
+
+### Code Refactoring
+
+* complete structure migration (#17) ([da92126](https://github.com/sansenjian/qq-music-api/commit/da9212607e58e56772e427e71b41328629686f39))
+
+## 2.3.2 (2026-05-22)
+
+### Bug Fixes
+
+* support ESM/CJS and harden responses (#16) ([36dd7f9](https://github.com/sansenjian/qq-music-api/commit/36dd7f9c467ce73b7e06264f479ad41e1e1f9891))
+
+## 2.3.1 (2026-05-17)
+
+
+### Features
+
+* refresh docs and package contents ([#15](https://github.com/sansenjian/qq-music-api/issues/15)) ([2b8cca1](https://github.com/sansenjian/qq-music-api/commit/2b8cca11ef9eff1daca4bbc5c3c5783124434471))
+
+
+
+## 2.2.11 (2026-03-21)
+
+
+### Bug Fixes
+
+* Dockerfile to reduce vulnerabilities ([#14](https://github.com/sansenjian/qq-music-api/issues/14)) ([a1e439d](https://github.com/sansenjian/qq-music-api/commit/a1e439d25bd5f19c93aeb4f67a6f26ba660248d0))
+
+
+
+## 2.2.10 (2026-03-14)
+
+
+### Bug Fixes
+
+* stabilize lyric flow and refresh CI/Vercel config ([#13](https://github.com/sansenjian/qq-music-api/issues/13)) ([34ed7b1](https://github.com/sansenjian/qq-music-api/commit/34ed7b164fa74e12d753867b5a7b49d3b5bf0200))
+
+
+
+## 2.2.9 (2026-03-14)
+
+
+### Bug Fixes
+
+* rewrite getMusicPlay url logic ([#12](https://github.com/sansenjian/qq-music-api/issues/12)) ([ec9823b](https://github.com/sansenjian/qq-music-api/commit/ec9823be7821f6c83427f1aada8848729936e1d2))
+
+
+
+## 2.2.8 (2026-03-08)
+
+
+
+## 2.2.7 (2026-03-08)
+
+
+
+## [2.2.6](https://github.com/sansenjian/qq-music-api/compare/2.0.0...2.2.6) (2026-03-08)
+
+
+### Bug Fixes
+
+* 添加向后兼容的路由别名并改进文档 ([5e04b5d](https://github.com/sansenjian/qq-music-api/commit/5e04b5df489857e7c9088d0bc36464d15bfbf5d3))
+* 修复代码审查发现的问题 ([dfee3ee](https://github.com/sansenjian/qq-music-api/commit/dfee3ee8196ba69f744d2c09814fb4583795dcbf))
+* 修复代码审查发现的问题 ([90dfc16](https://github.com/sansenjian/qq-music-api/commit/90dfc1613a5e5195d46a084e2b762f852941d373))
+* 修复代码审查意见 ([a5e08b3](https://github.com/sansenjian/qq-music-api/commit/a5e08b3ef7a6fe9a5b798c5d62f33fb09e453ece))
+* 修复代码审查意见 ([ab7ff6e](https://github.com/sansenjian/qq-music-api/commit/ab7ff6e056eac5c0b2c9cf8127ea8c7a12e86cfe))
+* 优化代码并修复向后兼容性问题 ([331b8cb](https://github.com/sansenjian/qq-music-api/commit/331b8cbd41fc3b59e435da7ccaf2bde6bf6aec2a))
+* add error handling to version bump step ([f393c6e](https://github.com/sansenjian/qq-music-api/commit/f393c6e7f515b47ba9d357638679569ffc713449))
+* add GET/POST methods to axios mock for CI compatibility ([14825c6](https://github.com/sansenjian/qq-music-api/commit/14825c617b515996654ee494fd1bcfe355ea290d))
+* address code review feedback ([e39d90b](https://github.com/sansenjian/qq-music-api/commit/e39d90b298be6bf5cb40acdc3b45bcc2c7840b8c))
+* address code review feedback ([1675b53](https://github.com/sansenjian/qq-music-api/commit/1675b538183721d3197d0c63539e1755b06d905c))
+* address second round review feedback for QR login and docs ([5a00bd5](https://github.com/sansenjian/qq-music-api/commit/5a00bd519b766b7ecad08a3bccda9e3ca3ba63ff))
+* disable npm cache in test workflow ([4293012](https://github.com/sansenjian/qq-music-api/commit/4293012959c0c755ba5a6e799bf807dff20e032a))
+* handle array-type cookie parameter in recommend controllers ([efb0283](https://github.com/sansenjian/qq-music-api/commit/efb0283474e655dd5b970aea23c0157769371586))
+* improve bump-version.js script ([6c47d18](https://github.com/sansenjian/qq-music-api/commit/6c47d180b32addc68bb2a7ffd796e64ec51cdc09))
+* improve version.yml workflow ([c4964f0](https://github.com/sansenjian/qq-music-api/commit/c4964f0ceed2373b213cd91922fba67e9eca0607))
+* remove .babelrc and add .npmrc to disable package-lock ([8f49ed0](https://github.com/sansenjian/qq-music-api/commit/8f49ed01542d1f0f5ac87d88114a568b5b4165a9))
+* remove npm cache from all GitHub Actions workflows ([b2a5eec](https://github.com/sansenjian/qq-music-api/commit/b2a5eecb220b7cca036a3e4780a9044dd7c1509e))
+* remove npm cache from GitHub Actions (no package-lock.json) ([f057955](https://github.com/sansenjian/qq-music-api/commit/f057955d7decbe58422115f9dd61b5cbeaa8a8c1))
+* resolve review feedback and test compatibility ([36796a5](https://github.com/sansenjian/qq-music-api/commit/36796a5d03bf039218a880c920fbe9955c20069c))
+* resolve VitePress build errors in README.md ([00c5d47](https://github.com/sansenjian/qq-music-api/commit/00c5d47e43d440e73f3aae9fe0471bf83cf4cd53))
+* simplify API tests and update Node.js versions to 20, 22, 24 ([b52a783](https://github.com/sansenjian/qq-music-api/commit/b52a78359201918010862cc7ad1eb5c1d17fc648))
+* simplify axios mock with default resolved value ([a23139a](https://github.com/sansenjian/qq-music-api/commit/a23139a568c6ca666206af6849adaeb1dec1989c))
+* simplify publish workflow to only publish to NPM ([8cd1874](https://github.com/sansenjian/qq-music-api/commit/8cd1874e869d4573845196f9ed5b4204203a06d1))
+* suppress error logs in test environment ([838c841](https://github.com/sansenjian/qq-music-api/commit/838c8411df20630df7029d000f4bad5b6396cb42))
+* update GitHub Actions to use v4 versions ([55ce670](https://github.com/sansenjian/qq-music-api/commit/55ce670417b3cfa2e825d97d21fcc6331738f02e))
+* use computed version in GitHub Release ([75accbf](https://github.com/sansenjian/qq-music-api/commit/75accbf60f9d95350857f5723e7c85acf84e99db))
+* use UserInfo type from global.d.ts in cookie.ts ([fbf8f1c](https://github.com/sansenjian/qq-music-api/commit/fbf8f1ccb964cdeb44bbd9bc6e2b80ccae81e62e))
+
+
+### Features
+
+* 配置同时发布到 NPM 和 GitHub Packages ([a1d6633](https://github.com/sansenjian/qq-music-api/commit/a1d66337cf7341c783ce4700037e57f5083c68c5))
+* 迁移到 VitePress 文档系统并添加 GitHub Pages 部署 ([afc0062](https://github.com/sansenjian/qq-music-api/commit/afc00621f465835c6a551bd96cd10f32d3fbb271))
+* 添加获取用户喜欢的歌曲接口 (getUserLikedSongs) ([e9c8217](https://github.com/sansenjian/qq-music-api/commit/e9c82172ce6e669d0bf663704be70664cb47c2b6))
+* add bump-version script to avoid triggering version lifecycle ([e44fa12](https://github.com/sansenjian/qq-music-api/commit/e44fa128c8321afb14d2233b001db1f12172eeed))
+* add CHANGELOG and version.json generation to bump-version script ([6dc35ec](https://github.com/sansenjian/qq-music-api/commit/6dc35ec0fc17552d38d3c9736861150bf8042e4e))
+* add GitHub Packages publishing back ([7d30b2c](https://github.com/sansenjian/qq-music-api/commit/7d30b2c607b71895a40e209fa86f882fb0ee7949))
+* add test infrastructure and fix router compatibility ([863daba](https://github.com/sansenjian/qq-music-api/commit/863daba59a7382bc57528b0da04d0511bbb91bc5))
+* auto-detect version from package.json in release workflow ([f90c097](https://github.com/sansenjian/qq-music-api/commit/f90c0974bf72fce413d7b82b7d693c2e7fa6c139))
+* complete release workflow refactoring and ESLint configuration ([de415ef](https://github.com/sansenjian/qq-music-api/commit/de415efe92bd1911bc71c22f4ebd72f818f965d9))
+* rename release.yml to package.yml ([500c235](https://github.com/sansenjian/qq-music-api/commit/500c235eec4a71dca5d21881a4cc508413ae1b73))
+* update release automation workflow ([ad6871b](https://github.com/sansenjian/qq-music-api/commit/ad6871b11f732f1985d7e4199522c0257bdbaf57))
+
+
+
+## [2.2.6](https://github.com/sansenjian/qq-music-api/compare/2.0.0...2.2.6) (2026-03-08)
+
+
+### Bug Fixes
+
+* 改进 cookie 处理逻辑 ([b0ab900](https://github.com/sansenjian/qq-music-api/commit/b0ab900150ae405e3ff1143b19ed48e6a75682a1))
+* 添加向后兼容的路由别名并改进文档 ([5e04b5d](https://github.com/sansenjian/qq-music-api/commit/5e04b5df489857e7c9088d0bc36464d15bfbf5d3))
+* 修复代码审查发现的多个问题 ([21f9c2f](https://github.com/sansenjian/qq-music-api/commit/21f9c2fa4d810c17c101b7ba4684c448e52ce298))
+* 修复代码审查发现的更多问题 ([e2a971e](https://github.com/sansenjian/qq-music-api/commit/e2a971e066a763060dcf586889fc7aaa0e0e387c))
+* 修复代码审查发现的问题 ([dfee3ee](https://github.com/sansenjian/qq-music-api/commit/dfee3ee8196ba69f744d2c09814fb4583795dcbf))
+* 修复代码审查发现的问题 ([90dfc16](https://github.com/sansenjian/qq-music-api/commit/90dfc1613a5e5195d46a084e2b762f852941d373))
+* 修复代码审查发现的问题 ([7f68957](https://github.com/sansenjian/qq-music-api/commit/7f68957079d26b91b5910961b0eacca51a6e497e))
+* 修复代码审查意见 ([a5e08b3](https://github.com/sansenjian/qq-music-api/commit/a5e08b3ef7a6fe9a5b798c5d62f33fb09e453ece))
+* 修复代码审查意见 ([ab7ff6e](https://github.com/sansenjian/qq-music-api/commit/ab7ff6e056eac5c0b2c9cf8127ea8c7a12e86cfe))
+* 修复设置 cookie 也不能获取 vip 歌曲下载链接 [#91](https://github.com/sansenjian/qq-music-api/issues/91) [#49](https://github.com/sansenjian/qq-music-api/issues/49) ([#94](https://github.com/sansenjian/qq-music-api/issues/94)) ([fb7a1b1](https://github.com/sansenjian/qq-music-api/commit/fb7a1b132485f3505cd263b1ed3e3fd43ad15ba7))
+* 优化代码并修复向后兼容性问题 ([331b8cb](https://github.com/sansenjian/qq-music-api/commit/331b8cbd41fc3b59e435da7ccaf2bde6bf6aec2a))
+* add error handling to version bump step ([f393c6e](https://github.com/sansenjian/qq-music-api/commit/f393c6e7f515b47ba9d357638679569ffc713449))
+* add GET/POST methods to axios mock for CI compatibility ([14825c6](https://github.com/sansenjian/qq-music-api/commit/14825c617b515996654ee494fd1bcfe355ea290d))
+* address code review feedback ([e39d90b](https://github.com/sansenjian/qq-music-api/commit/e39d90b298be6bf5cb40acdc3b45bcc2c7840b8c))
+* address code review feedback ([1675b53](https://github.com/sansenjian/qq-music-api/commit/1675b538183721d3197d0c63539e1755b06d905c))
+* address second round review feedback for QR login and docs ([5a00bd5](https://github.com/sansenjian/qq-music-api/commit/5a00bd519b766b7ecad08a3bccda9e3ca3ba63ff))
+* bug about search by key https://github.com/Rain120/qq-music-api/issues/28 ([12b7d66](https://github.com/sansenjian/qq-music-api/commit/12b7d667c05f92ad61545c5f75a82d878ad3220c))
+* build docker image sh ([fe395a4](https://github.com/sansenjian/qq-music-api/commit/fe395a435efc0678d3d387abbcd6b33786bb72fa))
+* cookies not set ([#36](https://github.com/sansenjian/qq-music-api/issues/36)) ([50c7def](https://github.com/sansenjian/qq-music-api/commit/50c7def9caf676161e8eee7e8dfc25df9afc386b))
+* correct syntax errors ([#66](https://github.com/sansenjian/qq-music-api/issues/66)) ([9aaf39d](https://github.com/sansenjian/qq-music-api/commit/9aaf39d7699e7affd907cb902afa548b1e0be50c))
+* disable npm cache in test workflow ([4293012](https://github.com/sansenjian/qq-music-api/commit/4293012959c0c755ba5a6e799bf807dff20e032a))
+* doc screenshot png path ([fe811e2](https://github.com/sansenjian/qq-music-api/commit/fe811e26c0c0a2ed468728b0323866bd27b5a404))
+* doc screenshot png path ([cb8b253](https://github.com/sansenjian/qq-music-api/commit/cb8b25358219ca1cc3e973e6f46a3f75bb3b8b29))
+* get ranks song list not mid ([e2c0330](https://github.com/sansenjian/qq-music-api/commit/e2c0330950c1c17062220ef99ac2dbf6c437ff30))
+* getComment ([#26](https://github.com/sansenjian/qq-music-api/issues/26)) ([9e62be5](https://github.com/sansenjian/qq-music-api/commit/9e62be539b3b78cdf0eea3e1696d9505ab242756))
+* getSearchByKey is null with https://github.com/Rain120/qq-music-api/issues/68 ([339efc3](https://github.com/sansenjian/qq-music-api/commit/339efc3b3736d9ce9b5fb29aa33c3928c255b8a4))
+* getSingerHotsong pagination ([#19](https://github.com/sansenjian/qq-music-api/issues/19)) ([9bb705a](https://github.com/sansenjian/qq-music-api/commit/9bb705a1b6eb4e2577ba20f0a279ccb63112390d))
+* getSingerHotsong pagination ([#22](https://github.com/sansenjian/qq-music-api/issues/22)) ([6d6dbf3](https://github.com/sansenjian/qq-music-api/commit/6d6dbf36c545269ad7a6138e711e436a90d61e28))
+* google analysis not data ([53e0a8c](https://github.com/sansenjian/qq-music-api/commit/53e0a8c17e84aeba568608be89fd3fc8ddc75e88))
+* handle array-type cookie parameter in recommend controllers ([efb0283](https://github.com/sansenjian/qq-music-api/commit/efb0283474e655dd5b970aea23c0157769371586))
+* improve bump-version.js script ([6c47d18](https://github.com/sansenjian/qq-music-api/commit/6c47d180b32addc68bb2a7ffd796e64ec51cdc09))
+* improve version.yml workflow ([c4964f0](https://github.com/sansenjian/qq-music-api/commit/c4964f0ceed2373b213cd91922fba67e9eca0607))
+* issue 14 about getRank topId was invalid ([024096f](https://github.com/sansenjian/qq-music-api/commit/024096fa63144391680f1d6ec376929fee697c37))
+* issue 14 about getRank which bug about period change by qq music api ([f13d2b5](https://github.com/sansenjian/qq-music-api/commit/f13d2b540d860994600cc2728e4d848df574b2f4))
+* issue: 12 -> (getHotkey -> getHotKey); axios option error; ([ee0371b](https://github.com/sansenjian/qq-music-api/commit/ee0371b32352546feb8b60b7725dc3ff66a412ef))
+* issue: 12, require getHotkey Camel-Case bug ([0eb9297](https://github.com/sansenjian/qq-music-api/commit/0eb9297ff19773ef2d61377f341937f20a70d6a4))
+* music play url quality; docs about cookie, music play; ([#35](https://github.com/sansenjian/qq-music-api/issues/35)) ([f0b7923](https://github.com/sansenjian/qq-music-api/commit/f0b7923b9feb7e32c44bc9417c2d426148ab3865))
+* mv params bug: https://github.com/Rain120/qq-music-api/issues/16\#issuecomment-638230301 ([8f29b87](https://github.com/sansenjian/qq-music-api/commit/8f29b874705ab0638310bcc13781a5599ab9de4d)), closes [#issuecomment-638230301](https://github.com/sansenjian/qq-music-api/issues/issuecomment-638230301)
+* remove .babelrc and add .npmrc to disable package-lock ([8f49ed0](https://github.com/sansenjian/qq-music-api/commit/8f49ed01542d1f0f5ac87d88114a568b5b4165a9))
+* remove npm cache from all GitHub Actions workflows ([b2a5eec](https://github.com/sansenjian/qq-music-api/commit/b2a5eecb220b7cca036a3e4780a9044dd7c1509e))
+* remove npm cache from GitHub Actions (no package-lock.json) ([f057955](https://github.com/sansenjian/qq-music-api/commit/f057955d7decbe58422115f9dd61b5cbeaa8a8c1))
+* resolve review feedback and test compatibility ([36796a5](https://github.com/sansenjian/qq-music-api/commit/36796a5d03bf039218a880c920fbe9955c20069c))
+* resolve VitePress build errors in README.md ([00c5d47](https://github.com/sansenjian/qq-music-api/commit/00c5d47e43d440e73f3aae9fe0471bf83cf4cd53))
+* set cookies maxAge ([fac30d6](https://github.com/sansenjian/qq-music-api/commit/fac30d6702c49a2871c7f9d8ac1efcd55de9fbac))
+* simplify API tests and update Node.js versions to 20, 22, 24 ([b52a783](https://github.com/sansenjian/qq-music-api/commit/b52a78359201918010862cc7ad1eb5c1d17fc648))
+* simplify axios mock with default resolved value ([a23139a](https://github.com/sansenjian/qq-music-api/commit/a23139a568c6ca666206af6849adaeb1dec1989c))
+* simplify publish workflow to only publish to NPM ([8cd1874](https://github.com/sansenjian/qq-music-api/commit/8cd1874e869d4573845196f9ed5b4204203a06d1))
+* song list params bug: https://github.com/Rain120/qq-music-api/issues/16 ([d9fb973](https://github.com/sansenjian/qq-music-api/commit/d9fb9732f546cb76f208053a8dabd164aad893c5))
+* suppress error logs in test environment ([838c841](https://github.com/sansenjian/qq-music-api/commit/838c8411df20630df7029d000f4bad5b6396cb42))
+* update GitHub Actions to use v4 versions ([55ce670](https://github.com/sansenjian/qq-music-api/commit/55ce670417b3cfa2e825d97d21fcc6331738f02e))
+* use computed version in GitHub Release ([75accbf](https://github.com/sansenjian/qq-music-api/commit/75accbf60f9d95350857f5723e7c85acf84e99db))
+* use UserInfo type from global.d.ts in cookie.ts ([fbf8f1c](https://github.com/sansenjian/qq-music-api/commit/fbf8f1ccb964cdeb44bbd9bc6e2b80ccae81e62e))
+
+
+### Features
+
+* 配置同时发布到 NPM 和 GitHub Packages ([a1d6633](https://github.com/sansenjian/qq-music-api/commit/a1d66337cf7341c783ce4700037e57f5083c68c5))
+* 迁移到 VitePress 文档系统并添加 GitHub Pages 部署 ([afc0062](https://github.com/sansenjian/qq-music-api/commit/afc00621f465835c6a551bd96cd10f32d3fbb271))
+* 添加获取用户喜欢的歌曲接口 (getUserLikedSongs) ([e9c8217](https://github.com/sansenjian/qq-music-api/commit/e9c82172ce6e669d0bf663704be70664cb47c2b6))
+* 依赖现代化升级 v1.1.7 ([45dc7b3](https://github.com/sansenjian/qq-music-api/commit/45dc7b31169585396125e226c634a17cb0e829cc))
+* add bump-version script to avoid triggering version lifecycle ([e44fa12](https://github.com/sansenjian/qq-music-api/commit/e44fa128c8321afb14d2233b001db1f12172eeed))
+* add CHANGELOG and version.json generation to bump-version script ([6dc35ec](https://github.com/sansenjian/qq-music-api/commit/6dc35ec0fc17552d38d3c9736861150bf8042e4e))
+* add GitHub Packages publishing back ([7d30b2c](https://github.com/sansenjian/qq-music-api/commit/7d30b2c607b71895a40e209fa86f882fb0ee7949))
+* add song list ([c0e8de8](https://github.com/sansenjian/qq-music-api/commit/c0e8de86dd93a907aa75e838c18d967b1434493d))
+* add test infrastructure and fix router compatibility ([863daba](https://github.com/sansenjian/qq-music-api/commit/863daba59a7382bc57528b0da04d0511bbb91bc5))
+* auto-detect version from package.json in release workflow ([f90c097](https://github.com/sansenjian/qq-music-api/commit/f90c0974bf72fce413d7b82b7d693c2e7fa6c139))
+* batch get song info ([0ac4cfc](https://github.com/sansenjian/qq-music-api/commit/0ac4cfca38e15e727d79f76c39e729a0ff3abc16))
+* batch get songlist ([facc3cb](https://github.com/sansenjian/qq-music-api/commit/facc3cbf7a44fbeb1db48bfa0c18e7918938b21c))
+* complete release workflow refactoring and ESLint configuration ([de415ef](https://github.com/sansenjian/qq-music-api/commit/de415efe92bd1911bc71c22f4ebd72f818f965d9))
+* docker build images to hub for docker env run ([dcbbf95](https://github.com/sansenjian/qq-music-api/commit/dcbbf95e70b305cd2ad4d00a7cc0bd4db5d0f8ab))
+* docker repository version ([d74a425](https://github.com/sansenjian/qq-music-api/commit/d74a4251da8c0c2dac2f5e4251e91f288f732d43))
+* eslint + prettier + commitlint + changelog + editorconfig ([e547ca3](https://github.com/sansenjian/qq-music-api/commit/e547ca3c43db052769a06f5e0090a29749b721d5))
+* get song info; rebuild the axios request, cut down route params ([4d79041](https://github.com/sansenjian/qq-music-api/commit/4d79041a5e5712c0c6bc6e6d55045f732636c80f))
+* getImageUrl; commit push shell; ([69f257a](https://github.com/sansenjian/qq-music-api/commit/69f257a41d5d4746dce306c84ff902358a0d391c))
+* rebuild router and axios ([0b737df](https://github.com/sansenjian/qq-music-api/commit/0b737df8971a560119af2bcae199a1ea5549859c))
+* rebuild router for lost ([2165b6a](https://github.com/sansenjian/qq-music-api/commit/2165b6a8b5527bb2b68592b17e28846fce1e856f))
+* rebuild routers ([1278008](https://github.com/sansenjian/qq-music-api/commit/1278008d57bd8fb4bced800c3de6c6f16f0aee8f))
+* rename release.yml to package.yml ([500c235](https://github.com/sansenjian/qq-music-api/commit/500c235eec4a71dca5d21881a4cc508413ae1b73))
+* update change log ([2c1d09d](https://github.com/sansenjian/qq-music-api/commit/2c1d09d9de5e0b3daec818311cf4156de386f7d2))
+* update google analysis id ([4b1ca9d](https://github.com/sansenjian/qq-music-api/commit/4b1ca9de2cd884f18724197f8cf20854334c0445))
+* update release automation workflow ([ad6871b](https://github.com/sansenjian/qq-music-api/commit/ad6871b11f732f1985d7e4199522c0257bdbaf57))
+* user cookie ([#32](https://github.com/sansenjian/qq-music-api/issues/32)) ([5a32dae](https://github.com/sansenjian/qq-music-api/commit/5a32daeca351c7b18352f9267db0c173fef9bff6))

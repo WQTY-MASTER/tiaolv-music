@@ -356,7 +356,7 @@
                     </div>
                 </div>
                 <div class="param-panel" id="jsonPanel">
-                    <textarea id="data" name="data">
+                    <textarea id="data" name="data" aria-label="请求参数 JSON">
 {
     "cp": false,
     "id": "2058263032",
@@ -626,9 +626,9 @@
 
             if (headersParam) {
                 try {
-                    var parsed = JSON.parse(headersParam);
-                    Object.keys(parsed).forEach(function (k) {
-                        addHeaderRow(k, parsed[k]);
+                    var parsedHeaders = JSON.parse(headersParam);
+                    Object.keys(parsedHeaders).forEach(function (k) {
+                        addHeaderRow(k, parsedHeaders[k]);
                     });
                 } catch (_) {
                     // fallback: 用默认 header
@@ -644,10 +644,10 @@
 
             if (kvParams) {
                 try {
-                    var parsed = JSON.parse(kvParams);
+                    var parsedParams = JSON.parse(kvParams);
                     // 先填充 kv 列表，再切换到 kv 模式
-                    Object.keys(parsed).forEach(function (k) {
-                        addKvRow(k, String(parsed[k]));
+                    Object.keys(parsedParams).forEach(function (k) {
+                        addKvRow(k, String(parsedParams[k]));
                     });
                     if (paramMode === 'kv') {
                         switchParamTab('kv');

@@ -1,6 +1,8 @@
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../../shared/about";
 import type { CloseBehavior } from "../../shared/desktopIntegration";
+import type { MiniPlayerPreferences } from "./services/appearanceSettings";
+import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../../shared/miniPlayer";
 import type {
   DesktopLyricsAction,
   DesktopLyricsBounds,
@@ -29,6 +31,7 @@ interface SystemTrayState {
 
 interface ListenMusicBridge {
   isWindows: boolean;
+  setWindowTitlebarTheme(dark: boolean): Promise<boolean>;
   getShortcuts(): Promise<ShortcutSnapshot>;
   updateShortcuts(patch: ShortcutPatch, reset?: boolean): Promise<ShortcutSnapshot>;
   setShortcutRecording(recording: boolean): Promise<ShortcutSnapshot>;
@@ -49,6 +52,7 @@ interface ListenMusicBridge {
   selectDirectory(): Promise<string | null>;
   selectCoverImage(): Promise<string | null>;
   readAppearanceBackground(imagePath: string): Promise<string>;
+  readCoverDataUrl(coverUrl: string): Promise<string | null>;
   getBackgroundCacheStatistics(): Promise<{ directory: string; bytes: number; entries: number }>;
   clearBackgroundCache(): Promise<{ directory: string; bytes: number; entries: number }>;
   getLegacyAggregatePlaylists(): Promise<unknown[]>;
@@ -57,6 +61,19 @@ interface ListenMusicBridge {
   enterMiniMode(options: { showInTaskbar: boolean; alwaysOnTop: boolean }): Promise<boolean>;
   exitMiniMode(): Promise<boolean>;
   setMiniQueueExpanded(expanded: boolean): Promise<boolean>;
+  getMiniPlayerSnapshot(): Promise<MiniWindowSnapshot | null>;
+  onMiniPlayerSnapshot(listener: (snapshot: MiniWindowSnapshot) => void): () => void;
+  onMiniPlayerTime(listener: (time: { currentTime: number; progress: number }) => void): () => void;
+  sendMiniPlayerAction(action: MiniPlayerAction): void;
+  miniWindowCommand(command: MiniWindowCommand): Promise<boolean>;
+  startMiniResize(edge: MiniResizeEdge): Promise<boolean>;
+  moveMiniResize(): Promise<boolean>;
+  endMiniResize(): Promise<boolean>;
+  setMiniPlayerAppearance(preferences: MiniPlayerPreferences): Promise<boolean>;
+  updateMiniPlayerSnapshot(snapshot: MiniPlayerSnapshot): void;
+  updateMiniPlayerTime(currentTime: number, progress: number): void;
+  onMiniPlayerAction(listener: (action: MiniPlayerAction) => void): () => void;
+  onMiniModeVisibility(listener: (visible: boolean) => void): () => void;
   setTaskbarThumbnailButtons(enabled: boolean, isPlaying: boolean): Promise<boolean>;
   updateTaskbarPlaybackState(isPlaying: boolean): Promise<boolean>;
   onTaskbarMediaAction(listener: (action: TaskbarMediaAction) => void): () => void;

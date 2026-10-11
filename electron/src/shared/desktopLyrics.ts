@@ -40,6 +40,7 @@ export interface DesktopLyricsBounds {
 }
 
 export interface DesktopLyricsPlaybackState {
+  trackId?: string;
   title: string;
   artist: string;
   isPlaying: boolean;
@@ -101,6 +102,7 @@ export const DEFAULT_DESKTOP_LYRICS_PREFERENCES: DesktopLyricsPreferences = Obje
 });
 
 export const DEFAULT_DESKTOP_LYRICS_PLAYBACK_STATE: DesktopLyricsPlaybackState = Object.freeze({
+  trackId: "",
   title: "调律音乐",
   artist: "暂无歌曲",
   isPlaying: false,

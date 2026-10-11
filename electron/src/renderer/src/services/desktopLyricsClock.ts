@@ -30,3 +30,24 @@ export function reconcileDesktopLyricsTime(
   }
   return Math.max(safeRenderedTime, safeSynchronizedTime);
 }
+
+type DesktopLyricsTrackIdentity = {
+  trackId?: string;
+  title?: string;
+  artist?: string;
+  source?: string;
+};
+
+export function desktopLyricsTrackChanged(
+  previous: DesktopLyricsTrackIdentity,
+  next: DesktopLyricsTrackIdentity
+) {
+  const previousTrackId = previous.trackId?.trim();
+  const nextTrackId = next.trackId?.trim();
+  if (previousTrackId || nextTrackId) {
+    return previousTrackId !== nextTrackId;
+  }
+  return previous.title !== next.title
+    || previous.artist !== next.artist
+    || previous.source !== next.source;
+}

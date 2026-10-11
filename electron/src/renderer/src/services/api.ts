@@ -1,4 +1,21 @@
-const backendBaseUrl = "http://127.0.0.1:17890";
+import { createPageDataCache } from "./pageDataCache";
+import type { QqRecentPlayReportPayload } from "./qqListeningSession";
+import {
+  LOCAL_BACKEND_ORIGIN,
+  resolveStandaloneBackendResourceUrl,
+  standaloneBackendRequestUrl
+} from "../../../shared/backendRoutes";
+
+const backendBaseUrl = LOCAL_BACKEND_ORIGIN;
+
+function previewBackendOrigin() {
+  const preview = typeof window !== "undefined" && !window.listenMusic && window.location?.protocol === "http:";
+  return preview ? window.location.origin : undefined;
+}
+
+function backendRequestUrl(path: string) {
+  return standaloneBackendRequestUrl(path, previewBackendOrigin());
+}
 
 export interface CatalogLyrics {
   lyrics: string;
@@ -68,6 +85,41 @@ export interface ListeningScrobblePayload {
   totalSeconds: number;
 }
 
+export type QqListeningRankPeriod = "week" | "all";
+
+export interface QqListeningRankOptions {
+  period?: QqListeningRankPeriod;
+  from?: string;
+  to?: string;
+  refresh?: boolean;
+}
+
+export interface QqListeningRankEntry {
+  track: PersistedTrack;
+  playCount: number;
+  listenedSeconds: number;
+  lastListenedAt: string;
+}
+
+export interface QqListeningDeltaPayload {
+  accountId: string;
+  accountNickname?: string;
+  accountAvatarUrl?: string;
+  track: PersistedTrack;
+  listenedSeconds: number;
+  playCount: 0 | 1;
+}
+
+export interface QqListeningDataSummary {
+  accountId: string;
+  nickname?: string;
+  avatarUrl?: string;
+  trackCount: number;
+  listenedSeconds: number;
+  firstDate: string;
+  lastDate: string;
+}
+
 export interface AccountView {
   provider: string;
   userId: string;
@@ -95,6 +147,13 @@ export interface AccountPlaylistView {
   imageUrl?: string;
   count: number;
   createdByAccount: boolean;
+  deletable?: boolean;
+  favorite?: boolean;
+}
+
+export interface RecentTracksDeleteResult {
+  deletedTrackIds: string[];
+  tracks: unknown[];
 }
 
 export interface CloudTrackView {
@@ -249,23 +308,110 @@ export interface ListeningStatsSummaryPayload {
 }
 
 export class ApiRequestError extends Error {
-  constructor(message: string, public readonly status: number) {
+  public readonly status: number;
+
+  constructor(message: string, status: number) {
     super(message);
     this.name = "ApiRequestError";
+    this.status = status;
   }
 }
 
 const jsonHeaders = { "Content-Type": "application/json" };
 const REQUEST_TIMEOUT_MS = 12_000;
+const pageDataCache = createPageDataCache({ ttlMs: 300_000, maxEntries: 100 });
+const pageDataCacheAccountScopes = new Map<string, string>();
+
+function normalizeProvider(provider: string) {
+  return provider.trim().toLowerCase();
+}
+
+function accountScope(provider: string, userId?: string) {
+  const normalizedProvider = normalizeProvider(provider);
+  const normalizedUserId = userId?.trim() || pageDataCacheAccountScopes.get(normalizedProvider) || "anonymous";
+  return `account:${normalizedProvider}:${normalizedUserId}`;
+}
+
+function accountProviderFromRequest(path: string) {
+  const match = /^\/account\/([^/?]+)(?:\/|$)/.exec(path);
+  if (match) return decodeURIComponent(match[1]);
+  const provider = new URL(path, backendBaseUrl).searchParams.get("provider");
+  return provider ? decodeURIComponent(provider) : null;
+}
+
+function isPageDataRequest(path: string, method: string) {
+  if (method !== "GET") return false;
+  return ![
+    "/health",
+    "/auth",
+    "/account/current",
+    "/cache",
+    "/playback",
+    "/library/select-directory"
+  ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`));
+}
+
+function pageDataCacheKey(path: string) {
+  const provider = accountProviderFromRequest(path);
+  const url = new URL(path, backendBaseUrl);
+  url.searchParams.delete("refresh");
+  const normalizedPath = `${url.pathname}${url.search}`;
+  return `${provider ? accountScope(provider) : "public"}|${normalizedPath}`;
+}
+
+function invalidateAfterMutation(path: string) {
+  const provider = accountProviderFromRequest(path);
+  if (provider) {
+    pageDataCache.clearScope(accountScope(provider));
+    return;
+  }
+  pageDataCache.clear();
+}
+
+function mutationChangesPageData(path: string, method: string) {
+  if (/^\/account\/[^/?]+\/listening-scrobbles(?:\/|\?|$)/.test(path)) return false;
+  if (method === "POST" && /^\/account\/qq\/listening-stats(?:\?|$)/.test(path)) return false;
+  if (method === "POST" && path === "/account/qq/recent-play-reports") return false;
+  if (/^\/catalog\/playlists\/[^/?]+\/play-count(?:\/|\?|$)/.test(path)) return false;
+  return !["/auth", "/cache", "/playback"].some((prefix) => (
+    path === prefix || path.startsWith(`${prefix}/`) || path.startsWith(`${prefix}?`)
+  ));
+}
+
+export function setPageDataCacheAccountScope(provider: string, userId: string) {
+  const normalizedProvider = normalizeProvider(provider);
+  if (!normalizedProvider || !userId.trim()) return;
+  pageDataCacheAccountScopes.set(normalizedProvider, userId.trim());
+}
+
+export function clearPageDataCacheAccountScope(provider: string, userId?: string) {
+  const normalizedProvider = normalizeProvider(provider);
+  const currentUserId = pageDataCacheAccountScopes.get(normalizedProvider);
+  const targetUserId = userId?.trim() || currentUserId;
+  if (targetUserId) pageDataCache.clearScope(accountScope(normalizedProvider, targetUserId));
+  if (!userId || currentUserId === targetUserId) pageDataCacheAccountScopes.delete(normalizedProvider);
+}
+
+export function invalidatePageDataCache(match?: string | ((key: string) => boolean)) {
+  if (!match) {
+    pageDataCache.clear();
+    return;
+  }
+  pageDataCache.invalidate(match);
+}
+
+export function invalidatePageDataCacheForProvider(provider: string) {
+  pageDataCache.clearScope(accountScope(provider));
+}
 
 export function resolveBackendUrl(path: string | null | undefined) {
   if (!path) {
     return "";
   }
-  return /^(?:https?:|file:|data:|blob:)/i.test(path) ? path : `${backendBaseUrl}${path}`;
+  return resolveStandaloneBackendResourceUrl(path, previewBackendOrigin());
 }
 
-async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+async function performRequest<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
   let timedOut = false;
   const abortFromCaller = () => controller.abort();
@@ -280,7 +426,7 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_
   }, timeoutMs);
   let response: Response;
   try {
-    response = await fetch(`${backendBaseUrl}${path}`, { ...init, signal: controller.signal });
+    response = await fetch(backendRequestUrl(path), { ...init, signal: controller.signal });
   } catch (error) {
     if (timedOut) {
       throw new Error("请求超时，请稍后重试。");
@@ -303,6 +449,17 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_
     throw new ApiRequestError(message || `Request failed: ${response.status}`, response.status);
   }
   return response.json() as Promise<T>;
+}
+
+async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const method = (init?.method || "GET").toUpperCase();
+  if (isPageDataRequest(path, method)) {
+    const force = new URL(path, backendBaseUrl).searchParams.get("refresh") === "true";
+    return pageDataCache.load(pageDataCacheKey(path), () => performRequest<T>(path, init, timeoutMs), { force });
+  }
+  const result = await performRequest<T>(path, init, timeoutMs);
+  if (method !== "GET" && mutationChangesPageData(path, method)) invalidateAfterMutation(path);
+  return result;
 }
 
 export function pingBackend() {
@@ -424,8 +581,65 @@ export function loadAccountRecentTracks(provider = "netease") {
   return request<unknown[]>(`/account/${encodeURIComponent(provider)}/recent-tracks`);
 }
 
-export function loadAccountListeningRank(provider = "netease") {
-  return request<unknown[]>(`/account/${encodeURIComponent(provider)}/listening-rank`);
+export async function reportQqRecentPlay(payload: QqRecentPlayReportPayload) {
+  if (pageDataCacheAccountScopes.get("qq") !== payload.accountId) {
+    throw new Error("QQ 账号已切换，本次播放不会上报到其他账号");
+  }
+  const key = `${accountScope("qq", payload.accountId)}|/account/qq/recent-tracks`;
+  const result = await request<{ ok: boolean; tracks: unknown[] }>("/account/qq/recent-play-reports", {
+    method: "POST", headers: jsonHeaders, body: JSON.stringify(payload)
+  }, 30_000);
+  if (result.ok !== true || !Array.isArray(result.tracks)) throw new Error("QQ 音乐未确认云端最近播放");
+  pageDataCache.set(key, result.tracks);
+  return result;
+}
+
+export function deleteAccountRecentTracks(trackIds: string[], provider = "netease") {
+  return request<RecentTracksDeleteResult>(`/account/${encodeURIComponent(provider)}/recent-tracks`, {
+    method: "DELETE",
+    headers: jsonHeaders,
+    body: JSON.stringify({ trackIds })
+  });
+}
+
+export function loadAccountListeningRank(provider = "netease", options: QqListeningRankOptions = {}) {
+  const path = `/account/${encodeURIComponent(provider)}/listening-rank`;
+  const params = new URLSearchParams({ period: options.period || "week" });
+  if (options.from) params.set("from", options.from);
+  if (options.to) params.set("to", options.to);
+  if (options.refresh) params.set("refresh", "true");
+  return request<unknown[]>(`${path}?${params.toString()}`);
+}
+
+export async function reportQqListeningDelta(payload: QqListeningDeltaPayload) {
+  const result = await request<{ ok: boolean }>("/account/qq/listening-stats", {
+    method: "POST",
+    headers: jsonHeaders,
+    body: JSON.stringify(payload)
+  });
+  const prefix = `${accountScope("qq", payload.accountId)}|/account/qq/featured-playlists`;
+  pageDataCache.invalidate(key => key === prefix || key.startsWith(`${prefix}?`));
+  return result;
+}
+
+export function loadQqListeningDataSummaries(refresh = false) {
+  const params = refresh ? "?refresh=true" : "";
+  return request<QqListeningDataSummary[]>(`/account/qq/listening-stats/accounts${params}`);
+}
+
+export function deleteQqListeningStats(
+  accountId: string,
+  options: { all?: boolean; from?: string; to?: string }
+) {
+  const params = new URLSearchParams();
+  if (options.all) params.set("all", "true");
+  if (options.from) params.set("from", options.from);
+  if (options.to) params.set("to", options.to);
+  const query = params.size ? `?${params.toString()}` : "";
+  return request<{ ok: boolean }>(
+    `/account/qq/listening-stats/${encodeURIComponent(accountId)}${query}`,
+    { method: "DELETE" }
+  );
 }
 
 export function reportListeningScrobble(provider: string, payload: ListeningScrobblePayload) {
@@ -438,6 +652,26 @@ export function reportListeningScrobble(provider: string, payload: ListeningScro
 
 export function loadAccountPlaylists(provider = "netease") {
   return request<AccountPlaylistView[]>(`/account/${encodeURIComponent(provider)}/playlists`);
+}
+
+export function deleteAccountPlaylist(id: string, provider: string) {
+  return request<{ ok: boolean }>(`/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export function removeAccountPlaylistTrack(id: string, trackId: string, provider: string) {
+  return request<{ ok: boolean }>(`/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}/tracks/${encodeURIComponent(trackId)}`, { method: "DELETE" });
+}
+
+export function addAccountPlaylistTracks(id: string, trackIds: string[], provider: string) {
+  return request<{ ok: boolean }>(`/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}/tracks`, {
+    method: "POST", headers: jsonHeaders, body: JSON.stringify({ trackIds })
+  });
+}
+
+export function reorderAccountPlaylistTracks(id: string, trackIds: string[], previousTrackIds: string[], provider: string) {
+  return request<{ ok: boolean }>(`/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}/order`, {
+    method: "POST", headers: jsonHeaders, body: JSON.stringify({ trackIds, previousTrackIds })
+  });
 }
 
 export function setAccountPlaylistSubscription(playlistId: string, subscribed: boolean, provider = "netease") {
@@ -483,8 +717,10 @@ export function createAccountPlaylist(name: string, provider = "netease") {
   });
 }
 
-export function loadFeaturedPlaylists(provider = "netease") {
-  return request<unknown[]>(`/account/${encodeURIComponent(provider)}/featured-playlists`);
+export function loadFeaturedPlaylists(provider = "netease", refresh = false) {
+  const query = refresh ? "?refresh=true" : "";
+  return request<unknown[]>(`/account/${encodeURIComponent(provider)}/featured-playlists${query}`,
+    undefined, provider === "qq" ? 35_000 : REQUEST_TIMEOUT_MS);
 }
 
 export function loadAccountPlaylist(playlistId: string, provider = "netease") {
@@ -665,7 +901,7 @@ export function loadCatalogPlaylist(id: string) {
 
 export function loadCatalogAudio(id: string, quality = "auto") {
   const params = new URLSearchParams({ quality });
-  return `${backendBaseUrl}/catalog/tracks/${encodeURIComponent(id)}/audio?${params.toString()}`;
+  return backendRequestUrl(`/catalog/tracks/${encodeURIComponent(id)}/audio?${params.toString()}`);
 }
 
 export function loadCatalogLyrics(id: string) {
@@ -722,8 +958,11 @@ export function reparseLibraryMetadata(directory: string, useFilenameMetadata = 
   }, 120_000);
 }
 
-export function matchLocalTrackLyrics(id: string, saveBesideAudio = false) {
-  const params = new URLSearchParams({ saveBesideAudio: String(saveBesideAudio) });
+export function matchLocalTrackLyrics(id: string, saveBesideAudio = false, force = false) {
+  const params = new URLSearchParams({
+    saveBesideAudio: String(saveBesideAudio),
+    force: String(force)
+  });
   return request<LocalLyricsMatchResponse>(
     `/library/tracks/${encodeURIComponent(id)}/lyrics/match?${params.toString()}`,
     { method: "POST" }
@@ -796,7 +1035,7 @@ export async function selectPlaylistCoverImage() {
 }
 
 export async function loadCurrentAccount(): Promise<AccountView | null> {
-  const response = await fetch(`${backendBaseUrl}/auth/current`);
+  const response = await fetch(backendRequestUrl("/auth/current"));
   if (response.status === 204 || response.status === 404) {
     return null;
   }

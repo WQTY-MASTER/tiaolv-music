@@ -1,4 +1,5 @@
 server:
+  address: 127.0.0.1
   port: 17890
 
 spring:
@@ -8,6 +9,8 @@ spring:
       max-request-size: 512MB
 
 listenmusic:
+  local-access:
+    token-file: ${LISTENMUSIC_LOCAL_ACCESS_TOKEN_FILE:${user.home}/.tiaolv-music/local-access.token}
   catalog:
     provider: netease
   providers:

@@ -17,6 +17,7 @@ import java.time.format.DateTimeParseException;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 
 @Repository
@@ -294,10 +295,10 @@ public class UserDataRepository {
         }
         String fromDate = from.toString();
         String toDate = to.toString();
-        int rangeTrackCount = jdbcTemplate.queryForObject("""
+        int rangeTrackCount = Objects.requireNonNull(jdbcTemplate.queryForObject("""
             select count(distinct track_id) from listening_track_day_stats
             where profile_id = ? and listen_date between ? and ?
-            """, Integer.class, profileId, fromDate, toDate);
+            """, Integer.class, profileId, fromDate, toDate), "Listening track count must not be null");
         Map<String, Object> range = jdbcTemplate.queryForMap("""
             select count(*) as active_days, coalesce(sum(listened_seconds), 0) as listened_seconds
             from listening_day_stats where profile_id = ? and listen_date between ? and ?
@@ -332,12 +333,12 @@ public class UserDataRepository {
     @Transactional
     public ListeningStats deleteAllListeningStats(String profileId) {
         ensureListeningStatsMeta(profileId);
-        long storedRows = jdbcTemplate.queryForObject("""
+        long storedRows = Objects.requireNonNull(jdbcTemplate.queryForObject("""
             select
               (select count(*) from listening_track_day_stats where profile_id = ?)
               + (select count(*) from listening_track_stats where profile_id = ?)
               + (select count(*) from listening_day_stats where profile_id = ?)
-            """, Long.class, profileId, profileId, profileId);
+            """, Long.class, profileId, profileId, profileId), "Listening row count must not be null");
         jdbcTemplate.update("delete from listening_track_day_stats where profile_id = ?", profileId);
         jdbcTemplate.update("delete from listening_track_stats where profile_id = ?", profileId);
         jdbcTemplate.update("delete from listening_day_stats where profile_id = ?", profileId);
@@ -377,11 +378,11 @@ public class UserDataRepository {
     }
 
     private long currentListeningStatsRevision(String profileId) {
-        return jdbcTemplate.queryForObject(
+        return Objects.requireNonNull(jdbcTemplate.queryForObject(
             "select revision from listening_stats_meta where profile_id = ?",
             Long.class,
             profileId
-        );
+        ), "Listening stats revision must not be null");
     }
 
     private void incrementListeningStatsRevision(String profileId) {

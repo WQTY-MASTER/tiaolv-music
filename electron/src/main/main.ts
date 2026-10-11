@@ -10,10 +10,10 @@ import {
   net,
   protocol,
   screen,
+  session,
   shell,
   Tray,
-  type MenuItemConstructorOptions,
-  type Rectangle
+  type MenuItemConstructorOptions
 } from "electron";
 import path from "node:path";
 import os from "node:os";
@@ -21,6 +21,11 @@ import { mkdirSync, openAsBlob, readFileSync, renameSync, writeFileSync } from "
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { BackgroundImageCache } from "./backgroundImageCache";
+import { MiniPlayerWindows } from "./miniPlayerWindows";
+import type { MiniPlayerSnapshot } from "../shared/miniPlayer";
+import { authorizeBackendHeaders, BACKEND_TOKEN_HEADER, isTrustedRendererUrl, readLocalAccessToken, stripBackendTokenHeaders } from "./backendAccess";
+import { createServiceRuntime } from "./serviceRuntime";
+import { isLocalBackendUrl, standaloneBackendRequestUrl } from "../shared/backendRoutes";
 import {
   DEFAULT_DESKTOP_LYRICS_PLAYBACK_STATE,
   DEFAULT_DESKTOP_LYRICS_PREFERENCES,
@@ -47,16 +52,45 @@ import {
 } from "../shared/about";
 import type { CloseBehavior } from "../shared/desktopIntegration";
 
-const rendererUrl = process.env.ELECTRON_RENDERER_URL;
+const rendererUrl = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
 protocol.registerSchemesAsPrivileged([
   { scheme: "tiaolv-background", privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ]);
 let backgroundImageCache: BackgroundImageCache;
-const MINI_WINDOW_WIDTH = 412;
-const MINI_WINDOW_HEIGHT = 184;
-const MINI_QUEUE_WINDOW_HEIGHT = 396;
-const WINDOW_ANIMATION_DURATION = 220;
-const BACKEND_BASE_URL = "http://127.0.0.1:17890";
+const rendererFileUrl = pathToFileURL(path.join(__dirname, "../renderer/index.html")).href;
+const localAccessTokenFile = process.env.LISTENMUSIC_LOCAL_ACCESS_TOKEN_FILE || path.join(os.homedir(), ".tiaolv-music", "local-access.token");
+let localAccessToken = "";
+let serviceRuntime: ReturnType<typeof createServiceRuntime> | null = null;
+let serviceShutdownComplete = false;
+
+function installBackendAccess() {
+  localAccessToken = readLocalAccessToken(localAccessTokenFile);
+  session.defaultSession.webRequest.onBeforeSendHeaders({ urls: ["http://*/*", "https://*/*"] }, (details, callback) => {
+    if (!isLocalBackendUrl(details.url)) {
+      callback({ requestHeaders: stripBackendTokenHeaders(details.requestHeaders) });
+      return;
+    }
+    const owner = [mainWindow, desktopLyricsWindow, miniPlayerWindows.window].find(win => win && !win.isDestroyed() && win.webContents.id === details.webContentsId);
+    if (owner === miniPlayerWindows.window && details.url !== miniPlayerWindows.getSnapshot().playback?.coverUrl) {
+      callback({ cancel: true });
+      return;
+    }
+    const headers = authorizeBackendHeaders({
+      url: details.url, owned: Boolean(owner), ownerUrl: owner?.webContents.getURL() || "",
+      frameUrl: details.frame?.url, rendererFileUrl, rendererUrl, headers: details.requestHeaders
+    }, localAccessToken);
+    callback(headers ? { requestHeaders: headers } : { cancel: true });
+  });
+}
+
+function restrictWindowNavigation(win: BrowserWindow) {
+  win.webContents.on("will-navigate", (event, url) => {
+    if (!isTrustedRendererUrl(url, rendererFileUrl, rendererUrl)) event.preventDefault();
+  });
+  win.webContents.on("will-frame-navigate", details => {
+    if (!isTrustedRendererUrl(details.url, rendererFileUrl, rendererUrl)) details.preventDefault();
+  });
+}
 const DESKTOP_LYRICS_DEFAULT_WIDTH = 960;
 const DESKTOP_LYRICS_DEFAULT_HEIGHT = 220;
 const DESKTOP_LYRICS_UNLOCK_HOTSPOT_HEIGHT = 36;
@@ -81,18 +115,6 @@ interface SystemTrayState {
   miniPlayerVisible: boolean;
 }
 
-interface MiniWindowState {
-  windowId: number;
-  bounds: Rectangle;
-  wasMaximized: boolean;
-  wasFullScreen: boolean;
-  wasAlwaysOnTop: boolean;
-  wasMenuBarVisible: boolean;
-  minimumSize: [number, number];
-  wasResizable: boolean;
-  queueExpanded: boolean;
-}
-
 interface MiniWindowOptions {
   showInTaskbar: boolean;
   alwaysOnTop: boolean;
@@ -113,8 +135,6 @@ let updateCheckResult: UpdateCheckResult = {
   currentVersion: app.getVersion()
 };
 let desktopLyricsWindow: BrowserWindow | null = null;
-let miniWindowState: MiniWindowState | null = null;
-let windowAnimationId = 0;
 let taskbarThumbnailButtonsEnabled = false;
 let taskbarPlaybackIsPlaying = false;
 let systemTray: Tray | null = null;
@@ -128,6 +148,7 @@ let desktopLyricsPointerInside = false;
 let desktopLyricsPlaybackState: DesktopLyricsPlaybackState = {
   ...DEFAULT_DESKTOP_LYRICS_PLAYBACK_STATE
 };
+let desktopLyricsConfigInitialized = false;
 let desktopLyricsConfig: DesktopLyricsConfig = {
   preferences: { ...DEFAULT_DESKTOP_LYRICS_PREFERENCES }
 };
@@ -141,6 +162,19 @@ let systemTrayState: SystemTrayState = {
   miniPlayerVisible: false
 };
 
+const miniPlayerWindows = new MiniPlayerWindows({
+  getMainWindow: () => mainWindow,
+  rendererFile: path.join(__dirname, "../renderer/index.html"),
+  rendererUrl,
+  icon: applicationIconPath(),
+  get dataDirectory() { return app.getPath("userData"); },
+  setupWindow: win => { restrictWindowNavigation(win); attachWindowShortcuts(win); },
+  onAction: action => mainWindow?.webContents.send("mini-player-action", action),
+  onVisibility: visible => mainWindow?.webContents.send("mini-mode-visibility", visible),
+  ensureRecovery: () => setSystemTrayEnabled(true)
+});
+miniPlayerWindows.installIpc(ipcMain);
+
 const chromiumCachePath = path.join(
   process.env.LOCALAPPDATA || app.getPath("temp"),
   "tiaolv-music-electron",
@@ -148,8 +182,10 @@ const chromiumCachePath = path.join(
 );
 mkdirSync(chromiumCachePath, { recursive: true });
 app.setName("调律音乐");
+if (process.platform === "win32") Menu.setApplicationMenu(null);
 app.commandLine.appendSwitch("disk-cache-dir", chromiumCachePath);
-app.disableHardwareAcceleration();
+// Keep Chromium's default compositor: forced software rendering leaves stale
+// accent-colored pixels around transparent windows on Windows 11.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 
 function taskbarIcon(name: keyof typeof TASKBAR_ICON_DATA) {
@@ -385,6 +421,7 @@ function readDesktopLyricsConfig() {
       preferences: { ...DEFAULT_DESKTOP_LYRICS_PREFERENCES }
     };
   }
+  desktopLyricsConfigInitialized = true;
 }
 
 function getDesktopLyricsBounds(): DesktopLyricsBounds {
@@ -412,6 +449,7 @@ function getDesktopLyricsBounds(): DesktopLyricsBounds {
 }
 
 function saveDesktopLyricsConfig() {
+  if (!desktopLyricsConfigInitialized) return;
   const win = desktopLyricsWindow;
   if (win && !win.isDestroyed()) {
     desktopLyricsConfig.bounds = win.getBounds();
@@ -598,6 +636,8 @@ function createDesktopLyricsWindow() {
     }
   });
   desktopLyricsWindow = win;
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  restrictWindowNavigation(win);
   attachWindowShortcuts(win);
   desktopLyricsWindow.setAlwaysOnTop(desktopLyricsConfig.preferences.alwaysOnTop, "floating");
   desktopLyricsWindow.on("move", () => {
@@ -687,6 +727,7 @@ function applyTaskbarThumbnailButtons(win: BrowserWindow) {
 }
 
 function showMainWindow() {
+  if (miniPlayerWindows.window) miniPlayerWindows.exit();
   const win = mainWindow;
   if (!win || win.isDestroyed()) return;
   if (win.isMinimized()) win.restore();
@@ -820,6 +861,10 @@ function createWindow() {
     title: "调律音乐",
     icon: applicationIconPath(),
     backgroundColor: "#111111",
+    ...(process.platform === "win32" ? {
+      titleBarStyle: "hidden" as const,
+      titleBarOverlay: { color: "#00000000", symbolColor: "#27313c", height: 32 }
+    } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
       contextIsolation: true,
@@ -827,6 +872,8 @@ function createWindow() {
     }
   });
   mainWindow = win;
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  restrictWindowNavigation(win);
   attachWindowShortcuts(win);
   win.on("close", (event) => {
     if (appQuitting || closeBehavior === "exit") return;
@@ -840,145 +887,30 @@ function createWindow() {
   });
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = null;
-    if (miniWindowState?.windowId === win.id) miniWindowState = null;
+    miniPlayerWindows.dispose();
   });
 
   if (rendererUrl) {
-    win.loadURL(rendererUrl);
+    void win.loadURL(rendererUrl).catch(error => console.error("Failed to load the main window", error));
     return;
   }
 
-  win.loadFile(path.join(__dirname, "../renderer/index.html"));
+  void win.loadFile(path.join(__dirname, "../renderer/index.html"))
+    .catch(error => console.error("Failed to load the main window", error));
 }
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-function getMiniWindowBounds(win: BrowserWindow): Rectangle {
-  const current = win.getBounds();
-  const workArea = screen.getDisplayMatching(current).workArea;
-  return {
-    width: MINI_WINDOW_WIDTH,
-    height: MINI_WINDOW_HEIGHT,
-    x: clamp(current.x + current.width - MINI_WINDOW_WIDTH, workArea.x, workArea.x + workArea.width - MINI_WINDOW_WIDTH),
-    y: clamp(current.y + 48, workArea.y, workArea.y + workArea.height - MINI_WINDOW_HEIGHT)
-  };
-}
-
-function animateWindowBounds(win: BrowserWindow, target: Rectangle) {
-  const animationId = ++windowAnimationId;
-  const start = win.getBounds();
-  const startedAt = Date.now();
-
-  return new Promise<void>((resolve) => {
-    function step() {
-      if (win.isDestroyed() || animationId !== windowAnimationId) {
-        resolve();
-        return;
-      }
-
-      const progress = Math.min(1, (Date.now() - startedAt) / WINDOW_ANIMATION_DURATION);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      win.setBounds({
-        x: Math.round(start.x + (target.x - start.x) * eased),
-        y: Math.round(start.y + (target.y - start.y) * eased),
-        width: Math.round(start.width + (target.width - start.width) * eased),
-        height: Math.round(start.height + (target.height - start.height) * eased)
-      });
-
-      if (progress >= 1) {
-        resolve();
-        return;
-      }
-      setTimeout(step, 16);
-    }
-
-    step();
+ipcMain.handle("set-window-titlebar-theme", (event, dark: unknown) => {
+  if (process.platform !== "win32" || typeof dark !== "boolean"
+    || !mainWindow || BrowserWindow.fromWebContents(event.sender) !== mainWindow) return false;
+  mainWindow.setTitleBarOverlay({
+    color: "#00000000", symbolColor: dark ? "#edf1f7" : "#27313c", height: 32
   });
-}
-
-async function stabilizeRestoredWindow(win: BrowserWindow) {
-  if (win.isMinimized()) win.restore();
-  win.show();
-  await new Promise((resolve) => setTimeout(resolve, 80));
-  if (win.isMinimized()) win.restore();
-  await new Promise((resolve) => setTimeout(resolve, 32));
-}
-
-async function enterMiniMode(win: BrowserWindow, options: MiniWindowOptions) {
-  if (miniWindowState?.windowId === win.id) return true;
-  if (miniWindowState) return false;
-
-  const wasMaximized = win.isMaximized();
-  miniWindowState = {
-    windowId: win.id,
-    bounds: wasMaximized ? win.getNormalBounds() : win.getBounds(),
-    wasMaximized,
-    wasFullScreen: win.isFullScreen(),
-    wasAlwaysOnTop: win.isAlwaysOnTop(),
-    wasMenuBarVisible: win.isMenuBarVisible(),
-    minimumSize: win.getMinimumSize() as [number, number],
-    wasResizable: win.isResizable(),
-    queueExpanded: false
-  };
-
-  const target = getMiniWindowBounds(win);
-  win.setMinimumSize(MINI_WINDOW_WIDTH, MINI_WINDOW_HEIGHT);
-  if (win.isFullScreen()) win.setFullScreen(false);
-  if (win.isMaximized()) win.unmaximize();
-  win.setMenuBarVisibility(false);
-  await stabilizeRestoredWindow(win);
-  win.setSkipTaskbar(!options.showInTaskbar);
-  win.setAlwaysOnTop(options.alwaysOnTop);
-  await animateWindowBounds(win, target);
-  win.setResizable(false);
-  if (!win.isDestroyed()) win.focus();
-  return !win.isDestroyed();
-}
-
-async function setMiniQueueExpanded(win: BrowserWindow, expanded: boolean) {
-  const state = miniWindowState;
-  if (!state || state.windowId !== win.id) return false;
-  if (state.queueExpanded === expanded) return true;
-
-  const current = win.getBounds();
-  const workArea = screen.getDisplayMatching(current).workArea;
-  const height = expanded ? Math.min(MINI_QUEUE_WINDOW_HEIGHT, workArea.height) : MINI_WINDOW_HEIGHT;
-  const target: Rectangle = {
-    x: current.x,
-    y: Math.min(current.y, workArea.y + workArea.height - height),
-    width: MINI_WINDOW_WIDTH,
-    height
-  };
-
-  win.setResizable(true);
-  await animateWindowBounds(win, target);
-  if (win.isDestroyed()) return false;
-  win.setResizable(false);
-  state.queueExpanded = expanded;
   return true;
-}
-
-async function exitMiniMode(win: BrowserWindow) {
-  const state = miniWindowState;
-  if (!state || state.windowId !== win.id) return false;
-
-  win.setResizable(true);
-  await animateWindowBounds(win, state.bounds);
-  if (win.isDestroyed()) return false;
-
-  win.setMinimumSize(...state.minimumSize);
-  win.setResizable(state.wasResizable);
-  win.setSkipTaskbar(false);
-  win.setAlwaysOnTop(state.wasAlwaysOnTop);
-  win.setMenuBarVisibility(state.wasMenuBarVisible);
-  if (state.wasMaximized) win.maximize();
-  if (state.wasFullScreen) win.setFullScreen(true);
-  miniWindowState = null;
-  win.focus();
-  return true;
-}
+});
 
 ipcMain.handle("select-music-directory", async () => {
   const result = await dialog.showOpenDialog({
@@ -987,28 +919,52 @@ ipcMain.handle("select-music-directory", async () => {
   return result.canceled ? null : result.filePaths[0] ?? null;
 });
 
-ipcMain.handle("select-playlist-cover-image", async () => {
-  const result = await dialog.showOpenDialog({
+ipcMain.handle("select-playlist-cover-image", async (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win !== mainWindow && !miniPlayerWindows.owns(event.sender, true)) return null;
+  const options = {
     properties: ["openFile"],
     filters: [
       { name: "Images", extensions: ["jpg", "jpeg", "png", "webp"] }
     ]
-  });
-  return result.canceled ? null : result.filePaths[0] ?? null;
+  } as Electron.OpenDialogOptions;
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  const selected = result.canceled ? null : result.filePaths[0] ?? null;
+  if (selected) miniPlayerWindows.rememberSelectedImage(event.sender, selected);
+  return selected;
 });
 
-ipcMain.handle("read-appearance-background", async (_event, imagePath: unknown) => {
+ipcMain.handle("read-appearance-background", async (event, imagePath: unknown) => {
   if (typeof imagePath !== "string") throw new Error("Invalid background path");
+  const mainOwner = BrowserWindow.fromWebContents(event.sender) === mainWindow;
+  if (!mainOwner && !miniPlayerWindows.consumeSelectedImage(event.sender, imagePath)) throw new Error("Background image was not selected in this editor");
   if (imagePath.startsWith("tiaolv-background:")) {
     await backgroundImageCache.resolve(imagePath);
     return imagePath;
   }
-  return backgroundImageCache.importImage(imagePath);
+  const imported = await backgroundImageCache.importImage(imagePath);
+  if (!mainOwner) miniPlayerWindows.rememberImportedImage(imported);
+  return imported;
 });
 ipcMain.handle("background-cache-statistics", () => backgroundImageCache.statistics());
 ipcMain.handle("clear-background-cache", async () => {
   await backgroundImageCache.clear();
   return backgroundImageCache.statistics();
+});
+
+ipcMain.handle("read-cover-data-url", async (event, rawUrl: string) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return null;
+  const url = new URL(String(rawUrl || ""));
+  if (!['http:', 'https:'].includes(url.protocol)) return null;
+  const response = isLocalBackendUrl(url)
+    ? await fetch(url.toString(), { headers: { [BACKEND_TOKEN_HEADER]: localAccessToken }, redirect: "error" })
+    : await net.fetch(url.toString());
+  if (!response.ok) return null;
+  const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim() || "";
+  if (!contentType.startsWith("image/")) return null;
+  const bytes = Buffer.from(await response.arrayBuffer());
+  if (!bytes.length || bytes.length > 12 * 1024 * 1024) return null;
+  return `data:${contentType};base64,${bytes.toString("base64")}`;
 });
 
 ipcMain.handle("upload-cloud-audio", async (event) => {
@@ -1029,8 +985,8 @@ ipcMain.handle("upload-cloud-audio", async (event) => {
     const form = new FormData();
     form.append("file", await openAsBlob(filePath), path.basename(filePath));
     const response = await fetch(
-      `${BACKEND_BASE_URL}/account/netease/cloud/tracks`,
-      { method: "POST", body: form }
+      standaloneBackendRequestUrl("/account/netease/cloud/tracks"),
+      { method: "POST", body: form, headers: { [BACKEND_TOKEN_HEADER]: localAccessToken }, redirect: "error" }
     );
     if (!response.ok) {
       const detail = await response.json().catch(() => null) as { message?: string } | null;
@@ -1058,7 +1014,10 @@ ipcMain.handle("download-cloud-track", async (event, audioUrl: string, fileName:
     : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) return false;
 
-  const response = await fetch(source);
+  const response = await fetch(source, {
+    headers: isLocalBackendUrl(source) ? { [BACKEND_TOKEN_HEADER]: localAccessToken } : undefined,
+    redirect: isLocalBackendUrl(source) ? "error" : "follow"
+  });
   if (!response.ok) throw new Error(`下载失败: ${response.status}`);
   await writeFile(result.filePath, new Uint8Array(await response.arrayBuffer()));
   return true;
@@ -1066,20 +1025,27 @@ ipcMain.handle("download-cloud-track", async (event, audioUrl: string, fileName:
 
 ipcMain.handle("enter-mini-mode", async (event, options?: Partial<MiniWindowOptions>) => {
   const win = BrowserWindow.fromWebContents(event.sender);
-  return win ? enterMiniMode(win, {
+  return win === mainWindow ? miniPlayerWindows.enter({
     showInTaskbar: options?.showInTaskbar !== false,
     alwaysOnTop: options?.alwaysOnTop !== false
   }) : false;
 });
 
 ipcMain.handle("exit-mini-mode", async (event) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  return win ? exitMiniMode(win) : false;
+  return BrowserWindow.fromWebContents(event.sender) === mainWindow ? miniPlayerWindows.exit() : false;
 });
 
 ipcMain.handle("set-mini-queue-expanded", async (event, expanded: boolean) => {
-  const win = BrowserWindow.fromWebContents(event.sender);
-  return win ? setMiniQueueExpanded(win, Boolean(expanded)) : false;
+  return miniPlayerWindows.owns(event.sender) && typeof expanded === "boolean" ? miniPlayerWindows.expandQueue(expanded) : false;
+});
+
+ipcMain.on("update-mini-player-snapshot", (event, snapshot: MiniPlayerSnapshot) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) return;
+  if (!snapshot?.track || !Array.isArray(snapshot.queue) || !snapshot.preferences) return;
+  miniPlayerWindows.updateSnapshot(snapshot);
+});
+ipcMain.on("update-mini-player-time", (event, currentTime: number, progress: number) => {
+  if (BrowserWindow.fromWebContents(event.sender) === mainWindow) miniPlayerWindows.updateTime(currentTime, progress);
 });
 
 ipcMain.handle("set-taskbar-thumbnail-buttons", (event, enabled: boolean, isPlaying: boolean) => {
@@ -1266,12 +1232,28 @@ if (!hasSingleInstanceLock) {
 } else {
   app.on("second-instance", () => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (miniPlayerWindows.window) miniPlayerWindows.exit();
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
   });
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    if (app.isPackaged) {
+      serviceRuntime = createServiceRuntime({
+        resourcesDirectory: path.join(process.resourcesPath, "runtime"),
+        nodeExecutable: process.execPath,
+        dataDirectory: path.join(app.getPath("userData"), "runtime"),
+        logDirectory: path.join(app.getPath("userData"), "logs", "runtime"),
+        tokenFile: localAccessTokenFile,
+        onFatalError: () => {
+          dialog.showErrorBox("本地服务已停止", "后端或音乐 API 意外退出，请重新启动调律音乐。");
+          app.quit();
+        }
+      });
+      await serviceRuntime.start();
+    }
+    installBackendAccess();
     backgroundImageCache = new BackgroundImageCache(path.join(app.getPath("userData"), "cache", "backgrounds"));
     protocol.handle("tiaolv-background", async (request) => {
       try {
@@ -1297,6 +1279,11 @@ if (!hasSingleInstanceLock) {
         createWindow();
       }
     });
+  }).catch(async error => {
+    await serviceRuntime?.stop().catch(() => undefined);
+    const detail = error instanceof Error ? error.message : "无法连接受保护的本地服务";
+    dialog.showErrorBox("调律音乐启动失败", `${detail}\n请关闭占用端口的服务后重试。开发模式请先启动后端。`);
+    app.quit();
   });
 }
 
@@ -1306,8 +1293,19 @@ app.on("window-all-closed", () => {
   }
 });
 
-app.on("before-quit", () => {
+app.on("before-quit", event => {
   appQuitting = true;
+  miniPlayerWindows.dispose();
+  if (serviceRuntime && !serviceShutdownComplete) {
+    event.preventDefault();
+    void serviceRuntime.stop().then(() => {
+      serviceShutdownComplete = true;
+      app.quit();
+    }).catch(() => {
+      dialog.showErrorBox("服务退出失败", "本地服务未能完全退出，请确认后台进程已结束后再启动程序。");
+      app.exit(1);
+    });
+  }
   if (shortcutRecordingTimer) clearTimeout(shortcutRecordingTimer);
   shortcutManager?.dispose();
   if (desktopLyricsSaveTimer) clearTimeout(desktopLyricsSaveTimer);

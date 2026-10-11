@@ -38,8 +38,8 @@ assert.match(playerBar, /\.player-bar\.is-ambient\.is-theme-ready[^}]*linear-gra
 assert.match(playerBar, /\.player-bar\.is-ambient\.is-theme-ready[\s\S]*\.track-copy strong[\s\S]*transition:\s*color\s+400ms\s+ease/, "播放器文字主题色应同步平滑过渡");
 assert.match(playerBar, /@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*transition-duration:\s*0\.01ms/, "系统减少动态效果时应关闭颜色动画");
 assert.match(playerBar, /box-shadow:\s*0\s+-8px\s+24px/, "通栏播放器应使用轻柔的顶部阴影");
-assert.match(playerBar, /\.transport-controls \.player-control-button\.play-button\.compact\s*\{[^}]*background:\s*#68369a/, "底部播放按钮应使用参考图的紫色");
-assert.match(playerBar, /\.transport-controls \.play-button:hover\s*\{[^}]*background:\s*#572985/, "底部播放按钮悬停应使用更深的紫色");
+assert.match(playerBar, /\.transport-controls \.player-control-button\.play-button\.compact\s*\{[^}]*background:\s*var\(--player-accent/, "底部播放按钮应使用当前封面主色");
+assert.match(playerBar, /\.transport-controls button:hover\s*\{[^}]*color:\s*var\(--player-accent/, "上下首按钮悬停时应使用当前封面主色而不是固定紫色");
 assert.match(playerBar, /playMode:\s*\"shuffle\"\s*\|\s*\"sequence\"\s*\|\s*\"single\"\s*\|\s*\"loop\"/, "底部播放器需要读取全局播放模式");
 assert.match(playerBar, /mode:\s*\[\]/, "底部播放器播放模式按钮需要触发切换事件");
 assert.match(playerBar, /mini:\s*\[\]/, "底部播放器需要提供迷你播放器事件");

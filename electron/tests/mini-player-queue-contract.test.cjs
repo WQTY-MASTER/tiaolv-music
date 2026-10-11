@@ -6,6 +6,7 @@ const root = path.resolve(__dirname, "..");
 const app = fs.readFileSync(path.join(root, "src/renderer/src/App.vue"), "utf8");
 const mini = fs.readFileSync(path.join(root, "src/renderer/src/components/MiniPlayer.vue"), "utf8");
 const main = fs.readFileSync(path.join(root, "src/main/main.ts"), "utf8");
+const windows = fs.readFileSync(path.join(root, "src/main/miniPlayerWindows.ts"), "utf8");
 const preload = fs.readFileSync(path.join(root, "src/preload/preload.ts"), "utf8");
 const env = fs.readFileSync(path.join(root, "src/renderer/src/env.d.ts"), "utf8");
 
@@ -34,8 +35,8 @@ assert.match(mini, /从播放列表移除[\s\S]*添加到歌单[\s\S]*复制歌�
 assert.match(mini, /props\.playlists[\s\S]*新建歌单/, "添加到歌单界面应列出已有歌单并支持新建");
 assert.match(mini, /window\.addEventListener\("blur", dismissQueue\)/, "原生迷你窗口失焦时应收起队列");
 assert.match(mini, /document\.addEventListener\("pointerdown", handleOutsidePointerDown, true\)/, "点击迷你播放器外部时应收起队列");
-assert.match(mini, /\.mini-close-button\s*\{[^}]*opacity:\s*0[^}]*pointer-events:\s*none/, "关闭按钮平时应隐藏且不可点击");
-assert.match(mini, /\.mini-player:hover \.mini-close-button[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/, "悬浮迷你播放器时才显示关闭按钮");
+assert.match(mini, /\.mini-window-toolbar\s*\{[^}]*opacity:\s*0[^}]*pointer-events:\s*none/, "窗口工具条平时应隐藏且不可点击");
+assert.match(mini, /\.mini-player:hover \.mini-window-toolbar[^}]*opacity:\s*1[^}]*pointer-events:\s*auto/, "悬浮迷你播放器时应显示窗口工具条");
 assert.match(mini, /\.mini-queue-track\.active[^}]*color:\s*#16a36a/, "当前播放歌曲应使用绿色高亮");
 assert.match(mini, /\.mini-queue-list\s*\{[^}]*overflow-y:\s*auto/, "歌曲过多时队列应垂直滚动");
 assert.match(mini, /\.mini-queue-list\s*\{[^}]*height:\s*208px/, "迷你队列视口应固定容纳四首歌曲");
@@ -47,7 +48,7 @@ assert.match(mini, /<Transition name="mini-queue" @after-leave="finishQueueLeave
 assert.match(mini, /\.mini-queue-enter-active,\.mini-queue-leave-active\s*\{[^}]*transform-origin:\s*top center[^}]*will-change:\s*opacity,transform[^}]*transition:[^}]*opacity 220ms[^}]*transform 220ms/, "播放列表动效应与卡片及原生窗口使用相同的 220ms 时长");
 assert.match(mini, /\.mini-queue-enter-from,\.mini-queue-leave-to\s*\{[^}]*opacity:\s*0[^}]*transform:\s*translateY\(-10px\) scaleY\(\.96\)/, "播放列表应从顶部平滑展开并向上收起");
 assert.match(mini, /\.mini-player\s*\{[^}]*grid-template-rows:\s*132px minmax\(0,1fr\)/, "卡片收缩时顶部播放器必须固定高度，不能被剩余空间拉到中间");
-assert.match(mini, /\.mini-player\.is-native-window\s*\{[^}]*grid-template-rows:\s*129px minmax\(0,1fr\)/, "原生窗口缩放期间顶部播放器也必须保持固定高度");
+assert.match(mini, /\.mini-player\.is-native-window\s*\{[^}]*grid-template-rows:\s*minmax\(0,1fr\) auto/, "原生窗口的播放器应自适应手动调整的高度，队列保持独立高度");
 
 assert.match(app, /const miniQueueVisible = ref\(false\)/, "应用应维护迷你队列展开状态");
 assert.match(app, /const miniQueueShellOpen = ref\(false\)/, "应用应单独维护队列窗口壳层状态");
@@ -60,9 +61,9 @@ assert.match(app, /@queue-transition-end="handleMiniQueueTransitionEnd"/, "应�
 assert.match(app, /@queue="toggleMiniQueue"[\s\S]*@queue-track-play="playQueueTrack"[\s\S]*@queue-track-like="toggleTrackLiked"[\s\S]*@queue-track-remove="removeQueueTrack"/, "迷你队列应复用现有播放、收藏和移除逻辑");
 assert.match(app, /@queue-track-add-playlist="addMiniQueueTrackToPlaylist"[\s\S]*@queue-track-create-playlist="createMiniPlaylistWithTrack"[\s\S]*@queue-track-copy="copyMiniQueueTrackInfo"/, "迷你队列更多菜单应接入歌单与复制逻辑");
 
-assert.match(main, /MINI_QUEUE_WINDOW_HEIGHT\s*=\s*396/, "原生迷你队列高度应固定容纳四首歌曲");
+assert.match(windows, /current\.height \+ MINI_QUEUE_HEIGHT/, "原生队列应在手动窗口尺寸基础上增加四首歌曲的高度");
 assert.match(main, /ipcMain\.handle\("set-mini-queue-expanded"/, "主进程应提供迷你队列窗口尺寸切换 IPC");
-assert.match(main, /async function setMiniQueueExpanded[\s\S]*animateWindowBounds/, "队列展开与收起应平滑调整窗口尺寸");
+assert.match(windows, /expandQueue\(expanded: boolean\)[\s\S]*collapsedBounds\?\.height/, "队列关闭后应恢复手动调整的窗口高度");
 assert.match(main, /ipcMain\.handle\("copy-text"[\s\S]*clipboard\.writeText/, "复制歌曲信息应由主进程可靠写入系统剪贴板");
 assert.match(preload, /setMiniQueueExpanded:\s*\(expanded:\s*boolean\)\s*=>\s*ipcRenderer\.invoke\("set-mini-queue-expanded", expanded\)/, "preload 应暴露迷你队列尺寸切换方法");
 assert.match(preload, /copyText:\s*\(value:\s*string\)\s*=>\s*ipcRenderer\.invoke\("copy-text", value\)/, "preload 应通过 IPC 提供歌曲信息复制能力");

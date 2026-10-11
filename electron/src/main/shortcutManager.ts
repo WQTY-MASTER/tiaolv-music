@@ -13,9 +13,9 @@ export class ShortcutManager {
   private conflicts: ShortcutSnapshot["conflicts"] = {};
   private registered = new Set<ShortcutAction>();
   private recording = false;
-  private registry: ShortcutRegistry;
-  private dispatch: (action: ShortcutAction) => void;
-  private save: (config: ShortcutConfig) => void;
+  private readonly registry: ShortcutRegistry;
+  private readonly dispatch: (action: ShortcutAction) => void;
+  private readonly save: (config: ShortcutConfig) => void;
 
   constructor(registry: ShortcutRegistry, stored: unknown, dispatch: (action: ShortcutAction) => void, save: (config: ShortcutConfig) => void) {
     this.registry = registry;

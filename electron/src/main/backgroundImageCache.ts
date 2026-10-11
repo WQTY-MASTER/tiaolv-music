@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const CACHE_FILE = /^[a-f0-9]{64}\.(png|jpg|webp)$/;
 
 export class BackgroundImageCache {
-  private directory: string;
+  private readonly directory: string;
   private pending: Promise<unknown> = Promise.resolve();
 
   constructor(directory: string) {

@@ -3,7 +3,6 @@ package com.listenmusic.api;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -27,6 +26,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 @WebMvcTest({HealthController.class, LibraryController.class})
 @Import(WebConfig.class)
@@ -34,10 +34,10 @@ class LibraryControllerTest {
     @Autowired
     private MockMvc mockMvc;
 
-    @MockBean
+    @MockitoBean
     private LibraryService libraryService;
 
-    @MockBean
+    @MockitoBean
     private LocalLyricsMatchService localLyricsMatchService;
 
     @Test
@@ -315,16 +315,17 @@ class LibraryControllerTest {
             "/audio", null, "[1,500](1,500,0)歌", "online-netease", "YRC",
             null, null, null
         );
-        given(localLyricsMatchService.match("local-1", true))
+        given(localLyricsMatchService.match("local-1", true, true))
             .willReturn(new LocalLyricsMatchResult(true, track, "联网匹配到逐字歌词（来自网易云）"));
 
         mockMvc.perform(post("/library/tracks/{id}/lyrics/match", "local-1")
-                .queryParam("saveBesideAudio", "true"))
+                .queryParam("saveBesideAudio", "true")
+                .queryParam("force", "true"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.matched").value(true))
             .andExpect(jsonPath("$.track.lyricsFormat").value("YRC"));
 
-        verify(localLyricsMatchService).match("local-1", true);
+        verify(localLyricsMatchService).match("local-1", true, true);
     }
 
     private String trackJson(String id) {

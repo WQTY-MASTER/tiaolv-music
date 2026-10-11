@@ -100,31 +100,35 @@ async function getModulesDefinitions(
  */
 async function checkVersion() {
   return new Promise((resolve) => {
-    exec('npm info NeteaseCloudMusicApiEnhanced version', (err, stdout) => {
-      if (!err) {
-        let version = stdout.trim()
+    exec(
+      'npm info NeteaseCloudMusicApiEnhanced version',
+      { timeout: 5000, windowsHide: true },
+      (err, stdout) => {
+        if (!err) {
+          let version = stdout.trim()
 
-        /**
-         * @param {VERSION_CHECK_RESULT} status
-         */
-        const resolveStatus = (status) =>
+          /**
+           * @param {VERSION_CHECK_RESULT} status
+           */
+          const resolveStatus = (status) =>
+            resolve({
+              status,
+              ourVersion: packageJSON.version,
+              npmVersion: version,
+            })
+
+          resolveStatus(
+            packageJSON.version < version
+              ? VERSION_CHECK_RESULT.NOT_LATEST
+              : VERSION_CHECK_RESULT.LATEST,
+          )
+        } else {
           resolve({
-            status,
-            ourVersion: packageJSON.version,
-            npmVersion: version,
+            status: VERSION_CHECK_RESULT.FAILED,
           })
-
-        resolveStatus(
-          packageJSON.version < version
-            ? VERSION_CHECK_RESULT.NOT_LATEST
-            : VERSION_CHECK_RESULT.LATEST,
-        )
-      } else {
-        resolve({
-          status: VERSION_CHECK_RESULT.FAILED,
-        })
-      }
-    })
+        }
+      },
+    )
   })
 }
 
@@ -421,21 +425,7 @@ async function serveNcmApi(options) {
 
   const spinner = createConsoleSpinner('服务启动中')
 
-  const checkVersionSubmission =
-    options.checkVersion &&
-    checkVersion().then(({ npmVersion, ourVersion, status }) => {
-      if (status == VERSION_CHECK_RESULT.NOT_LATEST) {
-        logger.warn(
-          `最新版本: ${npmVersion}, 当前版本: ${ourVersion}, 请及时更新`,
-        )
-      }
-    })
-  const constructServerSubmission = constructServer(options.moduleDefs)
-
-  const [_, app] = await Promise.all([
-    checkVersionSubmission,
-    constructServerSubmission,
-  ])
+  const app = await constructServer(options.moduleDefs)
 
   spinner.stop()
 
@@ -451,6 +441,21 @@ async function serveNcmApi(options) {
       `Server started successfully @ http://${host ? host : 'localhost'}:${port}`,
     )
   })
+
+  // The optional registry query must not delay API availability.
+  if (options.checkVersion) {
+    checkVersion()
+      .then(({ npmVersion, ourVersion, status }) => {
+        if (status == VERSION_CHECK_RESULT.NOT_LATEST) {
+          logger.warn(
+            `最新版本: ${npmVersion}, 当前版本: ${ourVersion}, 请及时更新`,
+          )
+        }
+      })
+      .catch(() => {
+        logger.warn('版本检查失败，已跳过，不影响 API 服务')
+      })
+  }
 
   return appExt
 }

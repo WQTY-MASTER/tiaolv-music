@@ -124,7 +124,7 @@ public class CatalogController {
     public ResponseEntity<Track> track(@PathVariable String id) {
         return onlineCatalogService.find(id)
             .map(ResponseEntity::ok)
-            .orElseGet(() -> ResponseEntity.<Track>notFound().build());
+            .orElseGet(() -> ResponseEntity.notFound().build());
     }
 
     @GetMapping("/tracks/{id}/audio")
@@ -143,7 +143,7 @@ public class CatalogController {
                     }
                     return new ResponseEntity<Void>(headers, HttpStatus.FOUND);
                 })
-                .orElseGet(() -> ResponseEntity.<Void>notFound().build());
+                .orElseGet(() -> ResponseEntity.notFound().build());
         } catch (ProviderLoginRequiredException exception) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         } catch (IllegalArgumentException exception) {

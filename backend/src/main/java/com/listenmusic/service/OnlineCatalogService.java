@@ -72,6 +72,19 @@ public class OnlineCatalogService {
         ));
     }
 
+    public Optional<LyricData> loadLyricsFresh(String trackId) {
+        return providerForTrack(trackId).flatMap(provider -> {
+            Optional<LyricData> loaded = provider.loadLyrics(trackId);
+            loaded.ifPresent(value -> resourceCache.write(
+                ProviderResourceCache.Category.LYRICS,
+                provider.id(),
+                trackId,
+                value
+            ));
+            return loaded;
+        });
+    }
+
     public List<Track> loadPlaylist(String playlistId) {
         return providerForTrack(playlistId)
             .map(provider -> provider.loadPlaylist(playlistId))

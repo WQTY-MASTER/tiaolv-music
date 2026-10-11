@@ -1,0 +1,56 @@
+name: Auto Bump Version
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: version-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  auto-bump-version:
+    runs-on: ubuntu-latest
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          package-manager-cache: false
+
+      - name: Setup npm 11
+        run: bash .github/scripts/setup-npm.sh 11.14.1
+
+      - name: Install dependencies
+        run: npm install --no-package-lock
+
+      - name: Bump version in package.json
+        id: bump_version
+        run: node scripts/bump-version.js
+
+      - name: Commit and push all changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+
+          # 添加所有生成的文件
+          git add package.json package-lock.json packages/mcp/package.json CHANGELOG.md docs/public/version.json
+
+          # 检查是否有更改
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+
+          git commit -m "chore(version): bump version to v${{ steps.bump_version.outputs.new_version }} [skip ci]"
+          git push origin HEAD:main

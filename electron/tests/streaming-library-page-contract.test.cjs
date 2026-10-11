@@ -42,6 +42,10 @@ assert.match(component, /我的歌单[\s\S]*个在线列表/, "我的歌单标�
 assert.match(component, /全部[\s\S]*我创建的[\s\S]*我收藏的/, "我的歌单应提供三类筛选标签");
 assert.match(component, /长按歌单拖动排序[\s\S]*Alt \+ ↑ \/ ↓/, "我的歌单应说明拖动与键盘排序方式");
 assert.match(component, /emit\('create-playlist'\)/, "创建歌单按钮应触发在线歌单创建流程");
+assert.match(component, /function requestCreatePlaylist\(\)\s*\{\s*emit\('create-playlist'\);?\s*\}/, "QQ 与网易云都应允许发起创建歌单");
+assert.doesNotMatch(component, /:disabled="provider !== 'netease'"/, "QQ 创建歌单按钮不应被禁用");
+assert.match(component, /playlist\?\.createdByAccount && playlist\.deletable\) emit\('delete-playlist', playlist\)/, "QQ 与网易云的自建普通歌单都应允许发起删除");
+assert.doesNotMatch(component, /provider !== 'qq' \|\| !playlistMenu\.playlist\.createdByAccount/, "删除菜单不应把网易云歌单误判成系统歌单");
 assert.match(component, /emit\('open-playlist', playlist\)/, "点击歌单项应打开对应在线歌单");
 assert.match(component, /event\.altKey[\s\S]*ArrowUp[\s\S]*ArrowDown/, "歌单项应支持 Alt 加方向键排序");
 assert.match(component, /@click\.stop="emit\('play-favorites'\)"/, "收藏卡应支持播放全部");
@@ -50,7 +54,7 @@ assert.match(component, /@click\.stop="emit\('open-following'\)"/, "关注统计
 assert.match(component, /@click\.stop="emit\('open-followers'\)"/, "粉丝统计应可进入粉丝列表");
 assert.match(component, /transition:\s*transform 300ms ease/, "卡片 hover 动画应为 300ms");
 assert.match(app, /<StreamingLibraryPage/);
-assert.match(app, /<StreamingLibraryPage[\s\S]*:playlists="accountPlaylists"[\s\S]*@open-playlist="openAccountPlaylistInUnifiedView"[\s\S]*@create-playlist="openStreamingPlaylistCreateDialog"/, "音乐库应向我的歌单模块传入账号歌单并连接操作");
+assert.match(app, /<StreamingLibraryPage[\s\S]*:playlists="accountLibraryPlaylists"[\s\S]*@open-playlist="openAccountPlaylistInUnifiedView"[\s\S]*@create-playlist="openStreamingPlaylistCreateDialog"/, "音乐库应向我的歌单模块传入账号歌单并连接操作");
 assert.match(app, /function openAccountPlaylistInUnifiedView\(playlist: Playlist\)[\s\S]*accountScoped:\s*true[\s\S]*streamingTemplate:\s*true[\s\S]*selectPlaylist/, "我的歌单应复用最近播放和听歌排行使用的统一歌单详情页");
 assert.match(app, /activeView === 'streaming-library'/);
 assert.match(app, /'is-library-heading': appMode === 'streaming' && activeView === 'streaming-library'/, "音乐库标题应使用独立的主页高度样式");
@@ -66,6 +70,13 @@ assert.match(
   /profileResult\.status === "fulfilled"[\s\S]*accounts\.value = accounts\.value\.map\([\s\S]*nickname:[\s\S]*avatarUrl:/,
   "音乐库刷新账号资料后应同步顶部账号头像与昵称",
 );
+assert.match(
+  app,
+  /loadAccountListeningRank\(provider, \{ period: qqListeningRankPeriod\.value \}\)/,
+  "QQ 与网易云音乐库概览应按同一周榜/全部筛选读取各自数据源",
+);
+assert.match(app, /provider !== 'qq' && provider !== 'netease'/, "歌单删除流程应支持 QQ 与网易云");
+assert.match(app, /providerName = provider === 'qq' \? 'QQ 音乐' : '网易云音乐'/, "删除确认应显示当前音乐平台");
 assert.doesNotMatch(app, /account-profile/, "旧个人主页路由应被移除");
 assert.match(app, /account-following/, "应提供关注列表路由");
 assert.match(app, /account-followers/, "应提供粉丝列表路由");
@@ -74,7 +85,10 @@ assert.match(app, /activeView === 'listening-ranking'/);
 assert.match(app, /<StreamingDailyMixPage[\s\S]*activeView === 'streaming-recent'/, "最近播放应复用歌单详情页面");
 assert.match(app, /activeView === 'streaming-recent'[\s\S]{0,700}:reorderable="false"[\s\S]{0,200}title="最近播放"[\s\S]{0,100}label="最近"/, "最近播放详情应保持历史顺序只读并显示正确标题");
 assert.match(app, /@play-all="playAccountRecentTrackList"[\s\S]*@play-random="playAccountRecentTrackListRandom"[\s\S]*@toggle-favorite="toggleAccountRecentFavorite"/, "最近播放详情应绑定真实播放与收藏交互");
+assert.match(app, /batch-mode="recent"[\s\S]*:run-batch="runAccountRecentTrackBatch"/, "最近播放应启用统一批量管理");
+assert.match(app, /deleteAccountRecentTracks[\s\S]*addAccountPlaylistTracks/, "最近播放批量清除与加入云端歌单应调用后端接口");
 assert.match(app, /<StreamingDailyMixPage[\s\S]*activeView === 'listening-ranking'/, "听歌排行应复用歌单详情页面");
+assert.match(app, /<template #toolbar-tools>[\s\S]{0,300}class="qq-listening-range"/, "听歌排行范围应插入歌曲工具栏");
 assert.match(app, /activeView === 'listening-ranking'[\s\S]{0,700}:reorderable="false"[\s\S]{0,200}title="听歌排行"[\s\S]{0,100}label="排行"/, "听歌排行详情应保持排行顺序只读并显示正确标题");
 assert.match(app, /v-if="[^"]*!\['streaming-recent', 'listening-ranking', 'account-following'[^"]*"\s*class="page-heading"/, "音乐库歌曲详情页不应叠加旧的全局页头");
 assert.match(app, /@play-all="playAccountListeningRankTrackList"[\s\S]*@play-random="playAccountListeningRankTrackListRandom"[\s\S]*@toggle-favorite="toggleAccountListeningRankFavorite"/, "听歌排行详情应绑定真实播放与收藏交互");

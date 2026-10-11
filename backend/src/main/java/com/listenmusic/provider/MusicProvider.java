@@ -131,8 +131,16 @@ public interface MusicProvider {
         return List.of();
     }
 
+    default RecentTracksDeleteResult deleteAccountRecentTracks(String accountId, List<String> trackIds, String credential) {
+        throw new UnsupportedOperationException("该音乐源暂不支持清除最近播放");
+    }
+
     default List<Track> loadAccountListeningRank(String accountId, String credential) {
         return List.of();
+    }
+
+    default List<Track> loadAccountListeningRank(String accountId, String credential, String period) {
+        return loadAccountListeningRank(accountId, credential);
     }
 
     default List<CloudTrack> loadAccountCloudTracks(String accountId, String credential) {
@@ -159,12 +167,34 @@ public interface MusicProvider {
         throw new UnsupportedOperationException("该音乐源暂不支持听歌打卡");
     }
 
+    default List<Track> reportAccountRecentTrack(
+        String accountId, String trackId, String sessionId, long listenedSeconds, long totalSeconds, String credential
+    ) {
+        throw new UnsupportedOperationException("该音乐源暂不支持最近播放上报");
+    }
+
     default List<HomepagePlaylist> loadAccountPlaylists(String accountId, String credential) {
         return List.of();
     }
 
     default HomepagePlaylist createAccountPlaylist(String accountId, String name, String credential) {
         throw new UnsupportedOperationException("该音乐源暂不支持创建歌单");
+    }
+
+    default void deleteAccountPlaylist(String accountId, String playlistId, String credential) {
+        throw new UnsupportedOperationException("该音乐源暂不支持删除歌单");
+    }
+
+    default void removeAccountPlaylistTrack(String accountId, String playlistId, String trackId, String credential) {
+        throw new UnsupportedOperationException("当前音源暂不支持移出歌单歌曲");
+    }
+
+    default void addAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, String credential) {
+        throw new UnsupportedOperationException("当前音源暂不支持添加歌单歌曲");
+    }
+
+    default void reorderAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, List<String> previousTrackIds, String credential) {
+        throw new UnsupportedOperationException("当前音源暂不支持同步歌曲顺序");
     }
 
     default List<HomepagePlaylist> loadAccountFeaturedPlaylists(String accountId, String credential) {

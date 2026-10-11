@@ -31,7 +31,6 @@ import org.springframework.core.io.support.ResourceRegion;
 import org.springframework.http.CacheControl;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
@@ -265,9 +264,10 @@ public class LibraryController {
     @PostMapping("/tracks/{id}/lyrics/match")
     public LocalLyricsMatchResult matchLyrics(
         @PathVariable String id,
-        @RequestParam(defaultValue = "false") boolean saveBesideAudio
+        @RequestParam(defaultValue = "false") boolean saveBesideAudio,
+        @RequestParam(defaultValue = "false") boolean force
     ) {
-        return localLyricsMatchService.match(id, saveBesideAudio);
+        return localLyricsMatchService.match(id, saveBesideAudio, force);
     }
 
     private static String requireDirectory(Map<String, Object> body) {

@@ -4,7 +4,11 @@ const path = require("node:path");
 const sourcePath = path.resolve(__dirname, "../src/renderer/src/services/desktopLyricsClock.ts");
 
 async function run() {
-  const { projectDesktopLyricsTime, reconcileDesktopLyricsTime } = await import(pathToFileUrl(sourcePath));
+  const {
+    desktopLyricsTrackChanged,
+    projectDesktopLyricsTime,
+    reconcileDesktopLyricsTime
+  } = await import(pathToFileUrl(sourcePath));
 
   assert.equal(
     projectDesktopLyricsTime(12.5, 1_000, 1_016, false),
@@ -39,6 +43,22 @@ async function run() {
     reconcileDesktopLyricsTime(12.5, 12.62, true, false),
     12.62,
     "较新的播放时间应立即校正桌面歌词"
+  );
+  assert.equal(
+    desktopLyricsTrackChanged(
+      { trackId: "qq:1", title: "同一首歌", artist: "歌手", source: "qq" },
+      { trackId: "qq:1", title: "同一首歌", artist: "歌手", source: "qq" }
+    ),
+    false,
+    "同一首歌的完整状态刷新不得触发时间回退"
+  );
+  assert.equal(
+    desktopLyricsTrackChanged(
+      { trackId: "qq:1", title: "上一首", artist: "歌手", source: "qq" },
+      { trackId: "qq:2", title: "下一首", artist: "歌手", source: "qq" }
+    ),
+    true,
+    "切歌时应允许桌面歌词时间从头开始"
   );
 
   console.log("桌面歌词平滑时钟测试通过");

@@ -10,19 +10,25 @@ const controlButton = fs.readFileSync(path.join(root, "src/renderer/src/componen
 
 assert.match(app, /import MiniPlayer from/, "应用应接入迷你悬浮播放器组件");
 assert.match(app, /const miniPlayerVisible = ref\(false\)/, "应用应维护迷你播放器显示状态");
-assert.match(app, /function openMiniPlayer\(\)\s*\{[\s\S]*miniPlayerVisible\.value\s*=\s*true[\s\S]*showSongDetail\.value\s*=\s*false/, "打开迷你播放器时应退出歌曲详情并切换到迷你模式");
+const openMini = app.slice(app.indexOf('async function openMiniPlayer()'), app.indexOf('function miniPresentationTrack'));
+assert.match(openMini, /showSongDetail\.value\s*=\s*false/, "打开迷你播放器时应退出歌曲详情");
+assert.match(openMini, /miniPlayerVisible\.value\s*=\s*!enterMiniMode/, "原生窗口准备期间应保留主界面，网页模式直接显示卡片");
+assert.match(openMini, /await enterMiniMode\([\s\S]*nativeMiniMode\.value\s*=\s*entered/, "内容准备完成后才切换原生迷你模式");
 assert.match(app, /<PlayerBar[\s\S]*v-if="!shouldHidePlayerBar && !miniPlayerVisible"/, "迷你播放器显示时应隐藏普通底部播放栏");
-assert.match(app, /<MiniPlayer[\s\S]*v-if="miniPlayerVisible"[\s\S]*:track="currentTrack"[\s\S]*:lyric="currentLyricText"[\s\S]*:theme-style="songDetailThemeStyle"/, "迷你播放器应复用当前歌曲、同步歌词和封面主题色");
+assert.match(app, /<MiniPlayer[\s\S]*v-if="miniPlayerVisible && !nativeMiniMode"[\s\S]*:track="currentTrack"[\s\S]*:lyric="currentLyricText"[\s\S]*:theme-style="songDetailThemeStyle"/, "网页迷你播放器应复用当前歌曲，原生模式不能重复渲染卡片");
 assert.match(app, /<MiniPlayer[\s\S]*@toggle="togglePlayback"[\s\S]*@previous="previousTrack"[\s\S]*@next="nextTrack"[\s\S]*@like="toggleLiked"[\s\S]*@queue="toggleMiniQueue"[\s\S]*@close="closeMiniPlayer"/, "迷你播放器应复用主播放器点击逻辑并切换内置队列");
 assert.match(app, /watch\(\s*\[currentCoverUrl,[^\]]*currentTrack\.value\.primary[^\]]*currentTrack\.value\.secondary\]/, "播放器应在当前歌曲封面或回退色变化时持续提取主题色");
 
 assert.match(miniPlayer, /class="mini-player"/, "迷你播放器应使用独立悬浮卡片");
 assert.match(miniPlayer, /position:\s*fixed/, "迷你播放器应悬浮在软件窗口内");
-assert.match(miniPlayer, /border-radius:\s*24px/, "迷你播放器应使用柔和大圆角卡片");
+assert.match(miniPlayer, /--mini-radius:\s*24px/, "迷你播放器应保留默认 24px 圆角");
+assert.match(miniPlayer, /border-radius:\s*var\(--mini-radius,\s*24px\)/, "迷你播放器圆角应支持用户设置和默认回退");
 assert.match(miniPlayer, /backdrop-filter:\s*blur/, "迷你播放器应使用半透明雾化背景");
 assert.match(miniPlayer, /conic-gradient\([^}]*--mini-progress/, "圆形封面外圈应按播放进度绘制进度环");
 assert.match(miniPlayer, /class="mini-cover-button"[\s\S]*@click\.stop="emit\('toggle'\)"/, "点击圆形封面应切换播放暂停");
-assert.match(miniPlayer, /v-if="props\.isPlaying"[\s\S]*class="mini-lyric"[\s\S]*v-else[\s\S]*class="mini-track-info"/, "播放时只显示歌词，暂停时应切换到歌曲信息");
+assert.match(miniPlayer, /<MiniPlayerLyrics v-if="props\.isPlaying \|\| props\.lyricLines\?\.length"[\s\S]*v-else[\s\S]*class="mini-track-info"/, "歌词可用时播放和暂停均保留歌词，无歌词暂停时显示歌曲信息");
+assert.doesNotMatch(miniPlayer, /mini-lyric-drift/, "短句不能使用无条件滚动动画");
+assert.match(miniPlayer, /\.mini-player\.is-native-window\s*\{[^}]*inset:\s*0[^}]*box-shadow:\s*none[^}]*clip-path:/, "原生圆角卡片外不能留下矩形阴影或留白");
 assert.match(miniPlayer, /props\.track\.title[\s\S]*props\.track\.artist[\s\S]*props\.track\.album/, "暂停状态应显示标题、歌手和专辑");
 assert.match(miniPlayer, /@pointerdown="startDrag"/, "迷你播放器应提供卡片拖拽入口");
 assert.match(miniPlayer, /Math\.min\([^)]*window\.innerWidth[\s\S]*Math\.min\([^)]*window\.innerHeight/, "迷你播放器拖拽位置应限制在窗口范围内");
@@ -33,7 +39,8 @@ assert.match(
   /class="mini-controls"[\s\S]*kind="like"[\s\S]*kind="previous"[\s\S]*kind="toggle"[\s\S]*kind="next"[\s\S]*kind="queue"/,
   "迷你控制栏应按收藏、上一首、播放暂停、下一首、队列排列"
 );
-assert.match(miniPlayer, /class="mini-close-button"/, "迷你播放器应保留独立关闭按钮");
+assert.match(miniPlayer, /class="mini-return-button"[^>]*aria-label="返回完整播放器"[\s\S]*<Maximize2/, "迷你播放器应使用斜箭头返回完整播放器");
+assert.doesNotMatch(miniPlayer, /mini-close-button/, "迷你播放器不应保留旧的叉号关闭按钮");
 assert.match(miniPlayer, /<PlayerControlButton/g, "迷你播放器应复用主播放器按钮组件");
 assert.match(miniPlayer, /--detail-player-start[\s\S]*transition:[^}]*400ms\s+ease/, "迷你播放器主题色应随封面平滑变化");
 

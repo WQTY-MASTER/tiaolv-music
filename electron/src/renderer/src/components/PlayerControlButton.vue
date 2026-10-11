@@ -94,7 +94,7 @@ const emit = defineEmits<{
 .player-like-button { line-height: 1; }
 .player-like-icon { display: grid; width: 20px; height: 20px; place-items: center; font-size: 21px; line-height: 1; }
 .player-like-button.liked { color: #ff6570; }
-.transport-icon,.player-queue-icon { display: block; width: 20px; height: 20px; background: currentColor; -webkit-mask: center / contain no-repeat; mask: center / contain no-repeat; }
+.transport-icon,.player-queue-icon { display: block; width: 20px; height: 20px; background: currentColor; -webkit-mask-position: center; mask-position: center; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: contain; mask-size: contain; }
 .transport-icon-previous { -webkit-mask-image: url("../assets/icons/previous.svg"); mask-image: url("../assets/icons/previous.svg"); }
 .transport-icon-next { -webkit-mask-image: url("../assets/icons/next.svg"); mask-image: url("../assets/icons/next.svg"); }
 .player-queue-icon { -webkit-mask-image: url("../assets/icons/play-list-2-fill.svg"); mask-image: url("../assets/icons/play-list-2-fill.svg"); }

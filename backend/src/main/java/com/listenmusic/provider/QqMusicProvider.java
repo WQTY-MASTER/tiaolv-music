@@ -1,5 +1,6 @@
 package com.listenmusic.provider;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.listenmusic.auth.CredentialStore;
@@ -22,11 +23,25 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Component
 public class QqMusicProvider implements MusicProvider {
     private static final String PROVIDER_ID = "qq";
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+    private static final Pattern LYRIC_LINE_TIMING = Pattern.compile("^\\[(\\d+),(\\d+)]");
+    private static final Pattern LYRIC_CLOCK_TIMING = Pattern.compile("^\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?(?:,\\d+)?]");
+    private static final Pattern LYRIC_WORD_TIMING = Pattern.compile("\\(\\d+,\\d+(?:,\\d+)?\\)");
+    private static final Pattern LYRIC_CREDIT = Pattern.compile("^(.+?)\\s*[:：]\\s*(.*)$");
+    private static final List<String> LYRIC_CREDIT_HINTS = List.of(
+        "作词", "作曲", "编曲", "制作人", "监制", "混音", "母带", "企划", "录音",
+        "和声", "吉他", "贝斯", "鼓手", "弦乐", "合唱", "演唱", "乐器独奏",
+        "录音监督", "出品", "助理", "谱务", "承办人", "录音棚", "录音师",
+        "lyricist", "composer", "arranger", "producer", "vocal", "mixing",
+        "mastering", "instrument", "guitar", "bass", "drum", "studio",
+        "recording", "contractor", "supervisor", "assistant", "scoring", "produced"
+    );
 
     private final RestClient restClient;
     private final AccountRepository accountRepository;
@@ -98,33 +113,22 @@ public class QqMusicProvider implements MusicProvider {
         };
         ensureSuccess(root);
 
+        if (type != SearchType.SONG) {
+            JsonNode localItems = searchItems(root, type);
+            if (localItems == null || localItems.isEmpty()) {
+                root = desktopSearch(query.trim(), type, pageSize, pageNumber);
+                ensureSuccess(root);
+            }
+        }
+
         JsonNode data = firstObject(
-            root, "response/req_1/data", "response/data", "data"
+            root,
+            "response/req_1/data", "music.search.SearchCgiService/data", "response/data", "data"
         );
         if (data == null) {
             data = OBJECT_MAPPER.createObjectNode();
         }
-        JsonNode items = switch (type) {
-            case SONG -> firstArray(
-                root, "response/data/song/list", "data/song/list", "data/list", "data/body/song/list", "list"
-            );
-            case PLAYLIST -> firstArray(
-                root,
-                "response/req_1/data/body/songlist/list",
-                "response/data/playlist/list",
-                "data/playlist/list",
-                "data/body/playlist/list"
-            );
-            case ARTIST -> firstArray(
-                root,
-                "response/req_1/data/body/singer/list",
-                "response/data/singer/itemlist",
-                "data/singer/itemlist",
-                "response/data/singer/list",
-                "data/singer/list",
-                "data/body/singer/list"
-            );
-        };
+        JsonNode items = searchItems(root, type);
         if (items == null) {
             items = OBJECT_MAPPER.createArrayNode();
         }
@@ -202,6 +206,67 @@ public class QqMusicProvider implements MusicProvider {
             List.copyOf(songs), List.copyOf(playlists), List.copyOf(artists), total,
             pageOffset + resultCount < total
         );
+    }
+
+    private JsonNode desktopSearch(String query, SearchType type, int limit, int page) {
+        int searchType = type == SearchType.PLAYLIST ? 3 : 1;
+        Map<String, Object> params = Map.of(
+            "search_type", searchType,
+            "query", query,
+            "page_num", page,
+            "num_per_page", limit
+        );
+        Map<String, Object> request = Map.of(
+            "music.search.SearchCgiService",
+            Map.of(
+                "module", "music.search.SearchCgiService",
+                "method", "DoSearchForQQMusicDesktop",
+                "param", params
+            )
+        );
+        try {
+            String responseBody = restClient.post()
+                .uri("https://u.y.qq.com/cgi-bin/musicu.fcg")
+                .contentType(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.REFERER, "https://y.qq.com/")
+                .body(request)
+                .retrieve()
+                .body(String.class);
+            if (responseBody == null || responseBody.isBlank()) {
+                return OBJECT_MAPPER.createObjectNode();
+            }
+            return OBJECT_MAPPER.readTree(responseBody);
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("QQ 音乐搜索响应格式错误", ex);
+        } catch (RestClientException ex) {
+            throw qqMusicApiFailure(ex);
+        }
+    }
+
+    private static JsonNode searchItems(JsonNode root, SearchType type) {
+        return switch (type) {
+            case SONG -> firstArray(
+                root, "response/data/song/list", "data/song/list", "data/list", "data/body/song/list", "list"
+            );
+            case PLAYLIST -> firstArray(
+                root,
+                "response/req_1/data/body/songlist/list",
+                "music.search.SearchCgiService/data/body/songlist/list",
+                "response/data/playlist/list",
+                "data/playlist/list",
+                "data/body/playlist/list"
+            );
+            case ARTIST -> firstArray(
+                root,
+                "response/req_1/data/body/singer/list",
+                "music.search.SearchCgiService/data/body/singer/list",
+                "response/data/singer/itemlist",
+                "data/singer/itemlist",
+                "response/data/singer/list",
+                "data/singer/list",
+                "data/body/singer/list"
+            );
+        };
     }
 
     @Override
@@ -452,8 +517,53 @@ public class QqMusicProvider implements MusicProvider {
             firstText(data.path("roma"), data.path("romanization"), response.path("roma")),
             qrc.isBlank() ? "LRC" : "QRC",
             PROVIDER_ID,
-            List.of()
+            parseLyricCredits(lyric)
         ));
+    }
+
+    private static List<LyricCredit> parseLyricCredits(String lyrics) {
+        Map<String, LyricCredit> credits = new LinkedHashMap<>();
+        for (String rawLine : lyrics.split("\\R")) {
+            Double time = parseLyricLineTime(rawLine);
+            String text = LYRIC_LINE_TIMING.matcher(rawLine).replaceFirst("");
+            text = LYRIC_CLOCK_TIMING.matcher(text).replaceFirst("");
+            text = LYRIC_WORD_TIMING.matcher(text).replaceAll("").trim();
+            Matcher matcher = LYRIC_CREDIT.matcher(text);
+            if (!matcher.matches()) {
+                continue;
+            }
+            String label = matcher.group(1).trim();
+            String value = matcher.group(2).trim();
+            if (value.isBlank() || !isLyricCreditLabel(label)) {
+                continue;
+            }
+            credits.putIfAbsent(label + '\0' + value, new LyricCredit(label, value, time));
+        }
+        return List.copyOf(credits.values());
+    }
+
+    private static boolean isLyricCreditLabel(String label) {
+        String normalized = label.toLowerCase(java.util.Locale.ROOT);
+        return normalized.equals("词")
+            || normalized.equals("曲")
+            || LYRIC_CREDIT_HINTS.stream().anyMatch(normalized::contains);
+    }
+
+    private static Double parseLyricLineTime(String line) {
+        Matcher wordLine = LYRIC_LINE_TIMING.matcher(line);
+        if (wordLine.find()) {
+            return Double.parseDouble(wordLine.group(1)) / 1000.0;
+        }
+        Matcher clockLine = LYRIC_CLOCK_TIMING.matcher(line);
+        if (!clockLine.find()) {
+            return null;
+        }
+        double fraction = clockLine.group(3) == null
+            ? 0
+            : Double.parseDouble("0." + clockLine.group(3));
+        return Double.parseDouble(clockLine.group(1)) * 60
+            + Double.parseDouble(clockLine.group(2))
+            + fraction;
     }
 
     @Override
@@ -466,6 +576,105 @@ public class QqMusicProvider implements MusicProvider {
     }
 
     @Override
+    public List<Track> loadAccountRecentTracks(String accountId, String credential) {
+        requireCredential(accountId, credential);
+        JsonNode root = get(uriBuilder -> uriBuilder
+            .path("/user/getRecentPlay")
+            .build(), credential);
+        ensureMusicuSuccess(root);
+        JsonNode items = firstArray(root, "response/req_1/data/data/songList");
+        if (items == null) {
+            return List.of();
+        }
+        List<Track> tracks = new ArrayList<>();
+        for (JsonNode item : items) {
+            JsonNode track = item.path("track");
+            if (track.isObject() && !songId(track).isBlank()) {
+                tracks.add(toTrack(track));
+            }
+        }
+        return List.copyOf(tracks);
+    }
+
+    @Override
+    public RecentTracksDeleteResult deleteAccountRecentTracks(String accountId, List<String> trackIds, String credential) {
+        requireCredential(accountId, credential);
+        if (trackIds == null || trackIds.isEmpty() || trackIds.size() > 100
+            || trackIds.stream().anyMatch(id -> id == null || !id.matches("qq:[a-zA-Z0-9]+"))) {
+            throw new IllegalArgumentException("无效的 QQ 最近播放歌曲 ID");
+        }
+        JsonNode root = post("/user/deleteRecentPlay", Map.of(
+            "trackIds", trackIds.stream().map(QqMusicProvider::rawId).toList()
+        ), credential);
+        ensureMusicuSuccess(root);
+        JsonNode response = root.path("response");
+        List<String> deleted = new ArrayList<>();
+        for (JsonNode id : response.path("deletedTrackIds")) {
+            if (id.isTextual() && !id.asText().isBlank()) deleted.add(PROVIDER_ID + ":" + id.asText());
+        }
+        List<Track> tracks = new ArrayList<>();
+        for (JsonNode item : response.path("songList")) {
+            JsonNode track = item.path("track").isObject() ? item.path("track") : item;
+            if (track.isObject() && !songId(track).isBlank()) tracks.add(toTrack(track));
+        }
+        return new RecentTracksDeleteResult(deleted, tracks);
+    }
+
+    @Override
+    public List<Track> reportAccountRecentTrack(
+        String accountId, String trackId, String sessionId, long listenedSeconds, long totalSeconds, String credential
+    ) {
+        requireCredential(accountId, credential);
+        var cookieUin = Pattern.compile("(?:^|;\\s*)uin=([^;]+)").matcher(credential);
+        if (!cookieUin.find() || !cookieUin.group(1).trim().replaceFirst("^o?0*", "")
+            .equals(accountId.replaceFirst("^o?0*", ""))) {
+            throw new IllegalArgumentException("QQ 播放账号与登录票据不匹配，本次不会上报");
+        }
+        if (trackId == null || !trackId.matches("qq:[a-zA-Z0-9]{1,64}")) {
+            throw new IllegalArgumentException("无效的 QQ 歌曲 ID");
+        }
+        try {
+            JsonNode root = post("/user/reportRecentPlay", Map.of(
+                "songMid", rawId(trackId), "sessionId", sessionId,
+                "listenedSeconds", listenedSeconds, "totalSeconds", totalSeconds
+            ), credential);
+            ensureMusicuSuccess(root);
+            JsonNode response = root.path("response");
+            if (!response.path("code").isNumber() || response.path("code").asInt(-1) != 0
+                || !response.path("confirmed").isBoolean() || !response.path("confirmed").asBoolean()
+                || !response.path("songList").isArray()) {
+                throw new RecentPlayReportException("QQ 音乐未确认云端最近播放；本次不会重复提交");
+            }
+            List<Track> tracks = new ArrayList<>();
+            for (JsonNode item : response.path("songList")) {
+                JsonNode track = item.path("track");
+                if (track.isObject() && !songId(track).isBlank()) tracks.add(toTrack(track));
+            }
+            if (tracks.stream().noneMatch(track -> trackId.equals(track.id()))) {
+                throw new RecentPlayReportException("QQ 云端返回的最近播放缺少当前歌曲；本次不会重复提交");
+            }
+            return List.copyOf(tracks);
+        } catch (ProviderLoginRequiredException | RecentPlayReportException | PlaylistOrderRateLimitException ex) {
+            throw ex;
+        } catch (IllegalStateException ex) {
+            String message = ex.getMessage();
+            if (ex.getCause() instanceof RestClientResponseException responseError) {
+                try {
+                    JsonNode error = OBJECT_MAPPER.readTree(responseError.getResponseBodyAsString()).path("error");
+                    if (error.isTextual() && error.asText().startsWith("QQ") && error.asText().length() <= 200) {
+                        message = error.asText();
+                    } else {
+                        message = "QQ 最近播放上报接口返回 HTTP " + responseError.getStatusCode().value();
+                    }
+                } catch (java.io.IOException ignored) {
+                    message = "QQ 最近播放上报接口返回 HTTP " + responseError.getStatusCode().value();
+                }
+            }
+            throw new RecentPlayReportException(message, ex);
+        }
+    }
+
+    @Override
     public List<HomepagePlaylist> loadAccountPlaylists(String accountId, String credential) {
         requireCredential(accountId, credential);
         JsonNode createdRoot = get(uriBuilder -> uriBuilder
@@ -475,7 +684,7 @@ public class QqMusicProvider implements MusicProvider {
             .queryParam("limit", 100)
             .build(), credential);
         List<HomepagePlaylist> playlists = new ArrayList<>();
-        appendAccountPlaylists(playlists, createdRoot, true);
+        appendAccountPlaylists(playlists, createdRoot, true, accountId, credential);
 
         JsonNode collectedRoot = get(uriBuilder -> uriBuilder
             .path("/user/getUserCollectedSongLists")
@@ -483,11 +692,11 @@ public class QqMusicProvider implements MusicProvider {
             .queryParam("page", 1)
             .queryParam("limit", 100)
             .build(), credential);
-        appendAccountPlaylists(playlists, collectedRoot, false);
+        appendAccountPlaylists(playlists, collectedRoot, false, accountId, credential);
         return List.copyOf(playlists);
     }
 
-    private void appendAccountPlaylists(List<HomepagePlaylist> playlists, JsonNode root, boolean createdByAccount) {
+    private void appendAccountPlaylists(List<HomepagePlaylist> playlists, JsonNode root, boolean createdByAccount, String accountId, String credential) {
         ensureSuccess(root);
         JsonNode items = firstArray(
             root,
@@ -502,21 +711,112 @@ public class QqMusicProvider implements MusicProvider {
             String title = firstText(
                 item.path("dissname"), item.path("diss_name"), item.path("title"), item.path("name")
             );
+            int directory = item.path("dirid").asInt(-1);
+            if (createdByAccount && (directory == 1 || directory == 205 || directory == 206)) {
+                continue;
+            }
             if (id.isBlank() || title.isBlank()) {
                 continue;
             }
+            String cover = firstText(item.path("diss_cover"), item.path("imgurl"), item.path("logo"),
+                item.path("picurl"), item.path("cover"), item.path("cover_url_small"), item.path("cover_url_medium"));
+            int count = firstInt(item.path("songnum"), item.path("song_cnt"), item.path("song_count"), item.path("count"));
+            if (!cover.startsWith("https://") && !cover.startsWith("http://")) cover = "";
+            if (createdByAccount && directory == 201 && !id.equals("0")) {
+                try {
+                    List<Track> tracks = loadAccountPlaylist(PROVIDER_ID + ":" + id, accountId, credential);
+                    count = tracks.size();
+                    if (!tracks.isEmpty() && tracks.getFirst().coverUrl() != null) cover = tracks.getFirst().coverUrl();
+                } catch (IllegalStateException ignored) {
+                    // A failed detail refresh must not hide the user's favorite playlist.
+                }
+            } else if (createdByAccount && cover.isBlank() && count > 0 && !id.equals("0")) {
+                try {
+                    List<Track> tracks = loadAccountPlaylist(PROVIDER_ID + ":" + id, accountId, credential);
+                    if (!tracks.isEmpty() && tracks.getFirst().coverUrl() != null) cover = tracks.getFirst().coverUrl();
+                } catch (IllegalStateException ignored) {
+                    // A missing optional cover must not hide the user's playlist.
+                }
+            }
+            boolean deletable = createdByAccount && !id.equals("0") && directory > 1
+                && directory != 201 && directory != 205 && directory != 206;
             playlists.add(new HomepagePlaylist(
                 PROVIDER_ID + ":" + id,
                 title,
                 firstNonBlank(firstText(item.path("creator_name"), item.path("subtitle")), "QQ 音乐歌单"),
-                firstText(
-                    item.path("imgurl"), item.path("logo"), item.path("picurl"), item.path("cover"),
-                    item.path("cover_url_small"), item.path("cover_url_medium")
-                ),
-                firstInt(item.path("songnum"), item.path("song_cnt"), item.path("song_count"), item.path("count")),
-                createdByAccount
+                cover, count, createdByAccount, deletable, createdByAccount && directory == 201
             ));
         }
+    }
+
+    @Override
+    public HomepagePlaylist createAccountPlaylist(String accountId, String name, String credential) {
+        requireCredential(accountId, credential);
+        JsonNode root = post("/user/createPlaylist", Map.of("name", name), credential);
+        ensureSuccess(root);
+        JsonNode item = root.path("response").path("data").path("playlist");
+        String id = firstText(item.path("tid"), item.path("dissid"), item.path("id"));
+        String title = firstText(item.path("diss_name"), item.path("dissname"), item.path("title"), item.path("name"));
+        int directory = item.path("dirid").asInt(-1);
+        if (id.isBlank() || title.isBlank() || directory <= 1 || directory == 201 || directory == 205 || directory == 206) {
+            throw new IllegalStateException("QQ 音乐未返回可编辑的新歌单");
+        }
+        return new HomepagePlaylist(
+            PROVIDER_ID + ":" + id,
+            title,
+            "QQ 音乐歌单",
+            "",
+            firstInt(item.path("songnum"), item.path("song_cnt"), item.path("song_count"), item.path("count")),
+            true,
+            true,
+            false
+        );
+    }
+
+    @Override
+    public void deleteAccountPlaylist(String accountId, String playlistId, String credential) {
+        requireCredential(accountId, credential);
+        if (playlistId == null || !playlistId.matches("(?:qq:)?[1-9][0-9]*")) {
+            throw new IllegalArgumentException("无效的 QQ 歌单 ID");
+        }
+        ensureMusicuSuccess(post("/user/deletePlaylist", java.util.Map.of("id", rawId(playlistId)), credential));
+    }
+
+    @Override
+    public void removeAccountPlaylistTrack(String accountId, String playlistId, String trackId, String credential) {
+        requireCredential(accountId, credential);
+        if (playlistId == null || !playlistId.matches("(?:qq:)?[1-9][0-9]*")
+            || trackId == null || !trackId.matches("qq:[a-zA-Z0-9]+")) {
+            throw new IllegalArgumentException("无效的 QQ 歌单或歌曲 ID");
+        }
+        ensureMusicuSuccess(post("/user/removePlaylistTrack", java.util.Map.of("id", rawId(playlistId), "songId", rawId(trackId)), credential));
+    }
+
+    @Override
+    public void addAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, String credential) {
+        requireCredential(accountId, credential);
+        if (playlistId == null || !playlistId.matches("qq:[1-9][0-9]*") || trackIds == null || trackIds.isEmpty()
+            || trackIds.size() > 100 || trackIds.stream().anyMatch(id -> id == null || !id.matches("qq:[a-zA-Z0-9]+"))) {
+            throw new IllegalArgumentException("无效的 QQ 歌单或歌曲 ID");
+        }
+        ensureMusicuSuccess(post("/user/addPlaylistTracks", Map.of(
+            "id", rawId(playlistId),
+            "trackIds", trackIds.stream().map(QqMusicProvider::rawId).toList()
+        ), credential));
+    }
+
+    @Override
+    public void reorderAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, List<String> previousTrackIds, String credential) {
+        requireCredential(accountId, credential);
+        if (playlistId == null || !playlistId.matches("qq:[1-9][0-9]*") || trackIds == null || previousTrackIds == null
+            || trackIds.isEmpty() || trackIds.size() > 10000 || trackIds.size() != previousTrackIds.size()
+            || trackIds.stream().anyMatch(id -> id == null || !id.matches("qq:[a-zA-Z0-9]+"))
+            || previousTrackIds.stream().anyMatch(id -> id == null || !id.matches("qq:[a-zA-Z0-9]+"))) {
+            throw new IllegalArgumentException("无效的 QQ 歌单歌曲顺序");
+        }
+        ensureMusicuSuccess(post("/user/reorderPlaylistTracks", java.util.Map.of("id", rawId(playlistId),
+            "trackIds", trackIds.stream().map(QqMusicProvider::rawId).toList(),
+            "previousTrackIds", previousTrackIds.stream().map(QqMusicProvider::rawId).toList()), credential));
     }
 
     @Override
@@ -606,7 +906,9 @@ public class QqMusicProvider implements MusicProvider {
         JsonNode items = firstArray(
             root,
             "response/req_1/data/vec_userinfo",
+            "response/req_1/data/List",
             "req_1/data/vec_userinfo",
+            "req_1/data/List",
             "data/vec_userinfo"
         );
         if (items == null) {
@@ -615,6 +917,28 @@ public class QqMusicProvider implements MusicProvider {
 
         List<AccountSocialUser> artists = new ArrayList<>();
         for (JsonNode item : items) {
+            String directMid = firstText(
+                item.path("MID"), item.path("mid"), item.path("SingerMid"), item.path("singer_mid")
+            );
+            String directName = firstText(
+                item.path("Name"), item.path("name"), item.path("SingerName"), item.path("singer_name")
+            );
+            if (!directMid.isBlank() && !directName.isBlank()) {
+                artists.add(new AccountSocialUser(
+                    PROVIDER_ID,
+                    PROVIDER_ID + ":" + directMid,
+                    directName,
+                    firstNonBlank(
+                        firstText(item.path("AvatarUrl"), item.path("avatarUrl"), item.path("SingerPic")),
+                        artistImageUrl(directMid)
+                    ),
+                    firstText(item.path("Desc"), item.path("desc"), item.path("signature")),
+                    "artist",
+                    0,
+                    0
+                ));
+                continue;
+            }
             if (item.path("usertype").asInt(1) != 1) {
                 continue;
             }
@@ -754,15 +1078,37 @@ public class QqMusicProvider implements MusicProvider {
     @Override
     public List<HomepagePlaylist> loadAccountFeaturedPlaylists(String accountId, String credential) {
         requireCredential(accountId, credential);
+        try {
+            JsonNode personalRoot = get(uriBuilder -> uriBuilder.path("/getPersonalRecommend")
+                .queryParam("type", 1).build(), credential);
+            if (accountId.equals(personalRoot.path("recommendationContext").path("accountId").asText(""))) {
+                List<HomepagePlaylist> personal = featuredPlaylistsFrom(personalRoot, "qq-personal");
+                if (!personal.isEmpty()) return personal;
+            }
+        } catch (IllegalStateException ignored) {
+            // Public hot playlists remain available when account recommendations fail.
+        }
         JsonNode root = get(uriBuilder -> uriBuilder.path("/getRecommend").build(), credential);
+        return featuredPlaylistsFrom(root, "hot");
+    }
+
+    private List<HomepagePlaylist> featuredPlaylistsFrom(JsonNode root, String source) {
         ensureSuccess(root);
-        JsonNode items = firstArray(root, "response/recomPlaylist/data/v_hot");
+        JsonNode response = root.path("response").isObject() ? root.path("response") : root;
+        if (response.path("code").asInt(0) != 0
+            || response.path("recomPlaylist").path("code").asInt(0) != 0) {
+            throw new IllegalStateException("QQ 音乐推荐接口暂不可用");
+        }
+        JsonNode items = "qq-personal".equals(source)
+            ? firstArray(root, "response/recomPlaylist/data/v_playlist", "response/data/recomPlaylist/v_playlist",
+                "response/recomPlaylist/data/list", "recomPlaylist/data/v_playlist", "data/recomPlaylist/v_playlist")
+            : firstArray(root, "response/recomPlaylist/data/v_hot", "recomPlaylist/data/v_hot");
         if (items == null) {
             return List.of();
         }
         List<HomepagePlaylist> playlists = new ArrayList<>();
         for (JsonNode item : items) {
-            String id = firstText(item.path("content_id"), item.path("dissid"), item.path("tid"));
+            String id = firstText(item.path("content_id"), item.path("dissid"), item.path("tid"), item.path("id"));
             String title = firstText(item.path("title"), item.path("dissname"), item.path("name"));
             if (id.isBlank() || title.isBlank()) {
                 continue;
@@ -770,10 +1116,11 @@ public class QqMusicProvider implements MusicProvider {
             playlists.add(new HomepagePlaylist(
                 PROVIDER_ID + ":" + id,
                 title,
-                firstNonBlank(firstText(item.path("username"), item.path("creator_name")), "QQ 音乐"),
-                firstText(item.path("cover"), item.path("imgurl"), item.path("cover_url_big")),
+                firstNonBlank(firstText(item.path("username"), item.path("creator_name"),
+                    item.path("creator").path("name"), item.path("creator").path("nick")), "QQ 音乐"),
+                firstText(item.path("cover"), item.path("imgurl"), item.path("cover_url_big"), item.path("picurl")),
                 firstInt(item.path("songnum"), item.path("song_count"), item.path("count"))
-            ));
+            ).withRecommendation(source, null));
         }
         return List.copyOf(playlists);
     }
@@ -905,37 +1252,80 @@ public class QqMusicProvider implements MusicProvider {
     @Override
     public List<Track> loadAccountFavorites(String accountId, String credential) {
         requireCredential(accountId, credential);
-        JsonNode favoriteRoot = get(uriBuilder -> uriBuilder
-            .path("/user/getUserLikedSongs")
-            .queryParam("uin", accountId)
-            .queryParam("offset", 0)
-            .queryParam("limit", 1000)
-            .build(), credential);
-        ensureMusicuSuccess(favoriteRoot);
-        String playlistId = firstText(
-            favoriteRoot.path("response").path("data").path("info").path("id"),
-            favoriteRoot.path("response").path("data").path("songs").path(0).path("id"),
-            favoriteRoot.path("data").path("info").path("id")
-        );
+        String playlistId;
+        try {
+            JsonNode favoriteRoot = get(uriBuilder -> uriBuilder
+                .path("/user/getUserLikedSongs")
+                .queryParam("uin", accountId)
+                .queryParam("offset", 0)
+                .queryParam("limit", 1000)
+                .build(), credential);
+            ensureMusicuSuccess(favoriteRoot);
+            List<Track> directTracks = tracksFrom(favoriteRoot);
+            if (!directTracks.isEmpty()) {
+                return directTracks;
+            }
+            playlistId = firstText(
+                favoriteRoot.path("response").path("data").path("info").path("id"),
+                favoriteRoot.path("response").path("data").path("songs").path(0).path("id"),
+                favoriteRoot.path("data").path("info").path("id")
+            );
+        } catch (IllegalStateException ex) {
+            if (!isProviderServerFailure(ex)) throw ex;
+            playlistId = loadFavoritePlaylistId(accountId, credential);
+        }
         if (playlistId.isBlank()) {
             return List.of();
         }
+        String resolvedPlaylistId = playlistId;
         JsonNode tracksRoot = get(uriBuilder -> uriBuilder
             .path("/getSongListDetail")
-            .queryParam("disstid", playlistId)
+            .queryParam("disstid", resolvedPlaylistId)
             .build(), credential);
         return tracksFrom(tracksRoot);
+    }
+
+    private String loadFavoritePlaylistId(String accountId, String credential) {
+        JsonNode root = get(uriBuilder -> uriBuilder
+            .path("/user/getUserPlaylists")
+            .queryParam("uin", accountId)
+            .queryParam("offset", 0)
+            .queryParam("limit", 100)
+            .build(), credential);
+        ensureSuccess(root);
+        JsonNode items = firstArray(
+            root,
+            "response/data/playlists", "response/data/list", "response/data/cdlist",
+            "data/playlists", "data/list", "data/cdlist", "playlists", "list"
+        );
+        if (items == null) return "";
+        for (JsonNode item : items) {
+            String title = firstText(
+                item.path("dissname"), item.path("diss_name"), item.path("title"), item.path("name")
+            );
+            if (item.path("dirid").asInt(-1) == 201 || title.contains("我喜欢")) {
+                return firstText(item.path("dissid"), item.path("id"), item.path("tid"));
+            }
+        }
+        return "";
     }
 
     @Override
     public void setAccountFavorite(String accountId, String trackId, boolean liked, String credential) {
         requireCredential(accountId, credential);
-        JsonNode root = post(
-            "/user/setSongFavorite",
-            Map.of("mid", rawId(trackId), "liked", liked),
-            credential
-        );
-        ensureMusicuSuccess(root);
+        try {
+            JsonNode root = post(
+                "/user/setSongFavorite",
+                Map.of("mid", rawId(trackId), "liked", liked),
+                credential
+            );
+            ensureMusicuSuccess(root);
+        } catch (ProviderLoginRequiredException | PlaylistOrderRateLimitException ex) {
+            throw ex;
+        } catch (IllegalStateException ex) {
+            // A failed response does not prove that an upstream write was not applied.
+            throw new FavoriteOperationException(ex.getMessage(), ex);
+        }
     }
 
     @Override
@@ -968,6 +1358,7 @@ public class QqMusicProvider implements MusicProvider {
             root,
             "response/recommend/data/songlist", "response/recommend/data/list",
             "response/data/song/list",
+            "response/req_1/data/songlist",
             "response/data/recommend/songlist", "response/data/recommend/playlist",
             "response/req_1/data/data/song",
             "response/singer/data/songlist",
@@ -1064,6 +1455,12 @@ public class QqMusicProvider implements MusicProvider {
 
     private static IllegalStateException qqMusicApiFailure(RestClientException cause) {
         if (cause instanceof RestClientResponseException responseError) {
+            if (responseError.getStatusCode().value() == 429 || responseError.getStatusCode().value() == 403) {
+                return new PlaylistOrderRateLimitException("QQ 音乐暂时限制操作，请稍后再试，勿连续重复提交", cause);
+            }
+            if (responseError.getStatusCode().value() == 409) {
+                return new PlaylistOrderConflictException("QQ 歌单已发生变化，请刷新后重新排序", cause);
+            }
             return new IllegalStateException(
                 "QQMusicAPI 接口返回 HTTP " + responseError.getStatusCode().value()
                     + "，请确认本地 API 版本与接口路径兼容",
@@ -1074,6 +1471,11 @@ public class QqMusicProvider implements MusicProvider {
             return new IllegalStateException("无法连接 QQMusicAPI，请确认 3300 端口服务已启动", cause);
         }
         return new IllegalStateException("QQMusicAPI 调用失败: " + cause.getMessage(), cause);
+    }
+
+    private static boolean isProviderServerFailure(IllegalStateException error) {
+        return error.getCause() instanceof RestClientResponseException responseError
+            && responseError.getStatusCode().is5xxServerError();
     }
 
     private static void ensureSuccess(JsonNode root) {
@@ -1092,15 +1494,25 @@ public class QqMusicProvider implements MusicProvider {
         JsonNode response = root.path("response");
         int responseCode = response.path("code").asInt(0);
         int requestCode = response.path("req_1").path("code").asInt(0);
-        if (responseCode != 0 || requestCode != 0) {
+        JsonNode data = response.path("req_1").path("data");
+        int dataCode = data.path("code").asInt(0);
+        int retCode = data.path("retCode").asInt(0);
+        for (int code : new int[] { responseCode, requestCode, dataCode, retCode }) {
+            if (code == 1000 || code == 104400 || code == 104401) {
+                throw new ProviderLoginRequiredException("QQ 音乐登录已失效，请重新登录");
+            }
+        }
+        if (responseCode != 0 || requestCode != 0 || dataCode != 0 || retCode != 0) {
             String message = firstText(
+                data.path("message"), data.path("msg"),
                 response.path("req_1").path("message"),
                 response.path("req_1").path("msg"),
                 response.path("message"),
                 response.path("msg")
             );
-            int code = requestCode != 0 ? requestCode : responseCode;
-            throw new IllegalStateException(message.isBlank() ? "QQ 音乐关注接口返回错误: " + code : message);
+            int code = responseCode != 0 ? responseCode
+                : requestCode != 0 ? requestCode : dataCode != 0 ? dataCode : retCode;
+            throw new IllegalStateException(message.isBlank() ? "QQ 音乐接口返回错误: " + code : message);
         }
     }
 

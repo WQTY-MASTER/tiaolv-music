@@ -23,10 +23,10 @@ import {
 
 type EditorTab = "theme" | "background" | "appearance" | "layout";
 
-const props = defineProps<{ modelValue: MiniPlayerPreferences }>();
+const props = defineProps<{ modelValue: MiniPlayerPreferences; standalone?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [preferences: MiniPlayerPreferences] }>();
 
-const open = ref(false);
+const open = ref(props.standalone === true);
 const activeTab = ref<EditorTab>("theme");
 const importing = ref(false);
 const importError = ref("");
@@ -139,8 +139,8 @@ async function chooseImage() {
 </script>
 
 <template>
-  <section class="mini-settings" :class="{ expanded: open }">
-    <div class="mini-settings-heading">
+  <section class="mini-settings" :class="{ expanded: open, standalone }">
+    <div v-if="!standalone" class="mini-settings-heading">
       <div><strong>迷你播放器</strong><span>自定义迷你播放器窗口的主题、背景与布局。</span></div>
       <button type="button" class="mini-settings-expand" :aria-expanded="open" aria-label="展开迷你播放器设置" @click="open = !open">
         <ChevronDown :size="17" />
@@ -234,6 +234,8 @@ async function chooseImage() {
 
 <style scoped>
 .mini-settings { margin: 0 28px; border-top: 1px solid #eaedf2; color: #11192b; }
+.mini-settings.standalone { margin: 0; border-top: 0; --appearance-accent: #159f80; }
+.mini-settings.standalone .mini-settings-editor { padding-inline: 0; }
 .mini-settings-heading { display: grid; min-height: 72px; grid-template-columns: minmax(260px,1fr) auto; align-items: center; gap: 24px; padding: 14px 0; }
 .mini-settings-heading>div { display: grid; gap: 5px; }.mini-settings-heading strong { font-size: 14px; font-weight: 800; }.mini-settings-heading span { color: #7b8799; font-size: 11px; line-height: 1.5; }
 .mini-settings-expand { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid #dfe5ed; border-radius: 7px; background: #f8f9fb; color: #8b97a8; cursor: pointer; }.mini-settings.expanded .mini-settings-expand svg { transform: rotate(180deg); }

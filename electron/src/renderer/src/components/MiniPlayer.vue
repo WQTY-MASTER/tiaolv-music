@@ -1,18 +1,23 @@
 <script setup lang="ts">
-import { CircleEllipsis, Heart, Pause, Play, Repeat2, Volume2 } from "lucide-vue-next";
+import { CircleEllipsis, Heart, LockKeyhole, LockKeyholeOpen, Maximize2, Minus, Pause, Pin, PinOff, Play, Repeat2, SlidersHorizontal, Volume2 } from "lucide-vue-next";
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import type { MiniPlayerPreferences } from "../services/appearanceSettings";
 import PlayerControlButton from "./PlayerControlButton.vue";
+import MiniPlayerLyrics from "./MiniPlayerLyrics.vue";
+import type { LyricLine } from "../services/lyricParser";
+import { getMiniPlayerLayout } from "../services/miniPlayerLyrics";
 
 interface MiniTrack {
   id: string;
   title: string;
   artist: string;
   album: string;
+  duration: number;
   primary: string;
   secondary: string;
   mark: string;
-  liked?: boolean;
+  liked: boolean;
+  history: boolean;
   queueKey?: string;
 }
 
@@ -34,8 +39,14 @@ const props = defineProps<{
   isPlaying: boolean;
   progress: number;
   lyric: string;
+  lyricLines?: LyricLine[];
+  source?: string;
+  lyricsFormat?: string;
+  lyricsSource?: string;
   themeStyle: Record<string, string>;
   nativeWindow: boolean;
+  locked?: boolean;
+  alwaysOnTop?: boolean;
   preferences: MiniPlayerPreferences;
   volume: number;
   playMode: "shuffle" | "sequence" | "single" | "loop";
@@ -60,6 +71,10 @@ const emit = defineEmits<{
   queueTrackCreatePlaylist: [track: MiniQueueTrack, name: string];
   queueTrackCopy: [track: MiniQueueTrack];
   close: [];
+  customize: [];
+  lock: [];
+  pin: [];
+  minimize: [];
 }>();
 
 const CARD_WIDTH = 380;
@@ -67,6 +82,10 @@ const CARD_HEIGHT = 132;
 const CARD_EXPANDED_HEIGHT = 341;
 const EDGE_GAP = 12;
 const miniPlayerElement = ref<HTMLElement | null>(null);
+const miniMainElement = ref<HTMLElement | null>(null);
+const contentSize = ref({ width: 412, height: 78 });
+let contentObserver: ResizeObserver | undefined;
+const responsiveLayout = computed(() => getMiniPlayerLayout(contentSize.value.width, contentSize.value.height));
 const position = ref({ x: EDGE_GAP, y: EDGE_GAP });
 const activeMenuKey = ref<string | null>(null);
 const playlistPickerKey = ref<string | null>(null);
@@ -90,6 +109,12 @@ const miniText = computed(() => props.preferences.appearance.textMode === "custo
 
 const cardStyle = computed(() => ({
   ...props.themeStyle,
+  ...(props.nativeWindow ? {
+    "--mini-cover-size": `${responsiveLayout.value.coverSize}px`,
+    "--mini-cover-column": `${responsiveLayout.value.columnWidth}px`,
+    "--mini-column-gap": `${responsiveLayout.value.gap}px`,
+    "--mini-main-padding": `${responsiveLayout.value.padding}px`
+  } : {}),
   ...(props.nativeWindow ? {} : {
     left: `${position.value.x}px`,
     top: `${position.value.y}px`,
@@ -271,7 +296,7 @@ function stopDrag() {
 }
 
 function startDrag(event: PointerEvent) {
-  if (props.nativeWindow || props.queueShellOpen || event.button !== 0 || (event.target as HTMLElement).closest("button,input")) return;
+  if (props.locked || props.nativeWindow || props.queueShellOpen || event.button !== 0 || (event.target as HTMLElement).closest("button,input")) return;
   dragging = true;
   dragOffsetX = event.clientX - position.value.x;
   dragOffsetY = event.clientY - position.value.y;
@@ -297,6 +322,14 @@ watch(() => props.preferences.layout.mode, async () => {
 });
 
 onMounted(() => {
+  contentObserver = new ResizeObserver(() => {
+    const main = miniMainElement.value;
+    if (!main) return;
+    const style = getComputedStyle(main);
+    contentSize.value = { width: miniPlayerElement.value?.clientWidth ?? 412,
+      height: main.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) };
+  });
+  if (miniMainElement.value) contentObserver.observe(miniMainElement.value);
   position.value = clampPosition(window.innerWidth - currentCardWidth() - 28, 88);
   window.addEventListener("resize", clampToWindow);
   window.addEventListener("blur", dismissQueue);
@@ -304,6 +337,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  contentObserver?.disconnect();
   stopDrag();
   if (actionNoticeTimer !== undefined) window.clearTimeout(actionNoticeTimer);
   if (queueScrollTimer !== undefined) window.clearTimeout(queueScrollTimer);
@@ -317,7 +351,7 @@ onBeforeUnmount(() => {
   <aside
     ref="miniPlayerElement"
     class="mini-player"
-    :class="[layoutClass, { 'is-playing': props.isPlaying, 'is-native-window': props.nativeWindow, 'is-queue-open': props.queueShellOpen, 'without-cover': !props.preferences.layout.showCover }]"
+    :class="[layoutClass, { 'is-playing': props.isPlaying, 'is-native-window': props.nativeWindow, 'is-locked': props.locked, 'is-queue-open': props.queueShellOpen, 'without-cover': !props.preferences.layout.showCover }]"
     :style="cardStyle"
     aria-label="迷你播放器"
     @pointerdown="startDrag"
@@ -325,7 +359,7 @@ onBeforeUnmount(() => {
     <div class="mini-background-layer" :style="backgroundStyle" aria-hidden="true"></div>
     <div class="mini-background-mask" aria-hidden="true"></div>
     <section class="mini-header">
-      <div class="mini-main">
+      <div ref="miniMainElement" class="mini-main">
         <button v-if="props.preferences.layout.showCover" class="mini-cover-button" type="button" :title="props.isPlaying ? '暂停' : '播放'" :aria-label="props.isPlaying ? '暂停' : '播放'" @click.stop="emit('toggle')">
           <span class="mini-cover-ring">
             <span class="mini-cover" :style="{ background: `linear-gradient(135deg, ${props.track.primary}, ${props.track.secondary})` }">
@@ -336,9 +370,7 @@ onBeforeUnmount(() => {
         </button>
 
         <div class="mini-copy">
-          <div v-if="props.isPlaying" class="mini-lyric" aria-live="polite">
-            <span :key="props.lyric">{{ props.lyric || "纯音乐，请欣赏" }}</span>
-          </div>
+          <MiniPlayerLyrics v-if="props.isPlaying || props.lyricLines?.length" :lines="props.lyricLines ?? []" :track-key="`${props.source ?? ''}:${props.track.id}`" :current-time="props.currentTime" :is-playing="props.isPlaying" :duration="props.duration" :source="props.source" :lyrics-format="props.lyricsFormat" :lyrics-source="props.lyricsSource" :fallback="props.lyric || '纯音乐，请欣赏'" />
           <div v-else class="mini-track-info">
             <strong>{{ props.track.title }}</strong>
             <span>{{ props.track.artist }}<template v-if="props.preferences.layout.showAlbum && props.track.album"> · {{ props.track.album }}</template></span>
@@ -348,7 +380,15 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <button class="mini-close-button" type="button" title="关闭迷你播放器" aria-label="关闭迷你播放器" @click="emit('close')">×</button>
+      <nav class="mini-window-toolbar" aria-label="迷你播放器窗口操作">
+        <template v-if="props.nativeWindow">
+          <button type="button" title="自定义迷你播放器" aria-label="自定义迷你播放器" @click="emit('customize')"><SlidersHorizontal :size="14" /></button>
+          <button type="button" :title="props.locked ? '解锁窗口位置' : '锁定窗口位置'" :aria-label="props.locked ? '解锁窗口位置' : '锁定窗口位置'" :aria-pressed="Boolean(props.locked)" @click="emit('lock')"><LockKeyhole v-if="props.locked" :size="14" /><LockKeyholeOpen v-else :size="14" /></button>
+          <button type="button" :title="props.alwaysOnTop ? '取消窗口置顶' : '保持窗口置顶'" :aria-label="props.alwaysOnTop ? '取消窗口置顶' : '保持窗口置顶'" :aria-pressed="Boolean(props.alwaysOnTop)" @click="emit('pin')"><Pin v-if="props.alwaysOnTop" :size="14" /><PinOff v-else :size="14" /></button>
+          <button type="button" title="最小化迷你播放器" aria-label="最小化迷你播放器" @click="emit('minimize')"><Minus :size="14" /></button>
+        </template>
+        <button class="mini-return-button" type="button" title="返回完整播放器" aria-label="返回完整播放器" @click="emit('close')"><Maximize2 :size="14" /></button>
+      </nav>
 
       <div class="mini-controls" aria-label="迷你播放器控制" @pointerdown.stop>
         <PlayerControlButton kind="like" compact :liked="props.track.liked" @activate="emit('like')" />
@@ -437,6 +477,18 @@ onBeforeUnmount(() => {
 @property --detail-player-end { syntax: "<color>"; inherits: true; initial-value: #f3f6f8; }
 
 .mini-player {
+  --mini-border-width: 1px;
+  --mini-border-color: rgba(255,255,255,.74);
+  --mini-radius: 24px;
+  --mini-shadow-alpha: .2;
+  --mini-text: #263338;
+  --mini-glass-blur: 18px;
+  --mini-mask-color: #fff;
+  --mini-mask-opacity: 0%;
+  --mini-surface-opacity: 0%;
+  --mini-accent: var(--player-accent,#20c98b);
+  --mini-progress: 0deg;
+  --mini-muted: color-mix(in srgb, var(--mini-text) 58%, transparent);
   position: fixed;
   z-index: 90;
   display: grid;
@@ -445,7 +497,6 @@ onBeforeUnmount(() => {
   grid-template-rows: 132px minmax(0,1fr);
   overflow: hidden;
   border: var(--mini-border-width,1px) solid var(--mini-border-color,rgba(255,255,255,.74));
-  border-radius: 24px;
   border-radius: var(--mini-radius,24px);
   background: linear-gradient(135deg,var(--detail-player-start,#f7f9fa),rgba(255,255,255,.9) 48%,var(--detail-player-end,#f3f6f8));
   box-shadow: 0 18px 45px rgba(35,47,55,var(--mini-shadow-alpha,.2)),0 3px 12px rgba(35,47,55,.08);
@@ -460,7 +511,21 @@ onBeforeUnmount(() => {
 .mini-player:active { cursor: grabbing; }
 .mini-player.is-queue-open:active { cursor: default; }
 .mini-player:hover { box-shadow: 0 21px 52px rgba(35,47,55,calc(var(--mini-shadow-alpha,.2) + .03)),0 4px 14px rgba(35,47,55,.1); }
-.mini-player.is-native-window { inset: 8px; width: auto; height: auto; grid-template-rows: 129px minmax(0,1fr); -webkit-app-region: drag; }
+.mini-player.is-native-window { inset: 0; width: auto; height: auto; border-radius: var(--mini-radius,24px); grid-template-rows: minmax(0,1fr) auto; box-shadow: none; backdrop-filter: none; clip-path: inset(0 round var(--mini-radius,24px)); transition: --detail-player-start 400ms ease,--detail-player-end 400ms ease; -webkit-app-region: drag; }
+.mini-player.is-native-window.is-locked { -webkit-app-region: no-drag; cursor: default; }
+.mini-player.is-native-window .mini-main { grid-template-columns: var(--mini-cover-column,82px) minmax(0,1fr); gap: var(--mini-column-gap,14px); padding: 40px 20px 50px var(--mini-main-padding,14px); }
+.mini-player.is-native-window .mini-cover-button { justify-self: center; }
+.mini-player.is-native-window .mini-cover-button,.mini-player.is-native-window .mini-cover-ring { width: var(--mini-cover-size,72px); height: var(--mini-cover-size,72px); }
+.mini-player.is-native-window .mini-cover { width: calc(var(--mini-cover-size,72px) - 8px); height: calc(var(--mini-cover-size,72px) - 8px); }
+.mini-player.is-native-window .mini-controls,
+.mini-player.is-native-window .mini-controls:has(.mini-extra-control) { left: 20px; right: 20px; }
+.mini-player.is-native-window.without-cover .mini-main { grid-template-columns: minmax(0,1fr); padding-left: 20px; }
+.mini-player.is-native-window.without-cover .mini-controls { left: 20px; }
+.mini-player.is-native-window .mini-copy { display: flex; height: 100%; min-height: 0; flex-direction: column; justify-content: center; }
+.mini-player.is-native-window .mini-copy .mini-lyrics { flex: 1 1 0; min-height: 26px; }
+.mini-player.is-native-window .mini-header::before { backdrop-filter: blur(var(--mini-glass-blur,18px)); }
+.mini-player.is-native-window .mini-equalizer,.mini-player.is-native-window .mini-time { flex: 0 0 auto; }
+.mini-player.is-native-window .mini-queue-panel { height: 208px; max-height: calc(100vh - 168px); }
 .mini-player.is-native-window button,.mini-player.is-native-window input,.mini-player.is-native-window .mini-queue-panel { -webkit-app-region: no-drag; }
 .mini-header { min-height: 0; }
 .mini-main { display: grid; height: 100%; grid-template-columns: 82px minmax(0,1fr); align-items: center; gap: 14px; padding: 14px 20px 40px 14px; }
@@ -470,8 +535,6 @@ onBeforeUnmount(() => {
 .mini-cover { display: grid; width: 64px; height: 64px; place-items: center; overflow: hidden; border: 3px solid rgba(255,255,255,.94); border-radius: 50%; color: #fff; font-size: 19px; font-weight: 850; }
 .mini-cover img { width: 100%; height: 100%; object-fit: cover; }
 .mini-copy { min-width: 0; overflow: hidden; padding-right: 24px; }
-.mini-lyric { width: 100%; overflow: hidden; color: var(--mini-text,#26343d); font-size: 17px; font-weight: 800; line-height: 1.45; white-space: nowrap; }
-.mini-lyric span { display: inline-block; min-width: 100%; padding-right: 36px; animation: mini-lyric-drift 8s linear infinite alternate; }
 .mini-track-info { display: grid; min-width: 0; gap: 7px; }
 .mini-track-info strong,.mini-track-info span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-track-info strong { color: var(--mini-text,#202b35); font-size: 17px; font-weight: 850; }
@@ -481,9 +544,13 @@ onBeforeUnmount(() => {
 .mini-controls:has(.mini-extra-control) { right: 38px; left: 14px; }
 .mini-player:hover .mini-controls,.mini-player:focus-within .mini-controls { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .mini-extra-control { display: grid; width: 28px; height: 28px; flex: 0 0 28px; place-items: center; border: 0; border-radius: 50%; padding: 0; background: transparent; color: #697174; cursor: pointer; }.mini-extra-control:hover { background: rgba(230,235,235,.9); color: var(--mini-accent,#20c98b); }.mini-volume-control { position: relative; display: grid; place-items: center; }.mini-volume-popover { position: absolute; right: -16px; bottom: calc(100% + 10px); display: grid; width: 132px; gap: 7px; border: 1px solid rgba(220,226,229,.95); border-radius: 8px; padding: 8px 10px; background: rgba(255,255,255,.96); color: #536174; box-shadow: 0 10px 24px rgba(35,47,55,.16); font-size: 9px; }.mini-volume-popover input { width: 100%; accent-color: var(--mini-accent,#20c98b); }
-.mini-close-button { position: absolute; top: 8px; right: 8px; z-index: 2; display: grid; width: 29px; height: 29px; place-items: center; border: 0; border-radius: 50%; background: rgba(255,255,255,.72); color: #697174; cursor: pointer; font-size: 18px; line-height: 1; opacity: 0; pointer-events: none; transform: translateY(-5px); transition: opacity 280ms ease,color 150ms ease,background-color 150ms ease,transform 280ms ease; }
-.mini-player:hover .mini-close-button,.mini-close-button:focus-visible { opacity: 1; pointer-events: auto; transform: translateY(0); }
-.mini-close-button:hover { background: #f5e9eb; color: #b34450; }
+.mini-window-toolbar { position: absolute; top: 7px; right: 7px; z-index: 2; display: flex; height: 30px; align-items: center; gap: 2px; border-radius: 12px; padding: 2px; background: rgba(114,118,130,.16); opacity: 0; pointer-events: none; transform: translateY(-4px); transition: opacity 280ms ease,transform 280ms ease; -webkit-app-region: no-drag; }
+.mini-player:hover .mini-window-toolbar,.mini-player:focus-within .mini-window-toolbar { opacity: 1; pointer-events: auto; transform: translateY(0); }
+.mini-window-toolbar button { display: grid; width: 27px; height: 26px; place-items: center; flex: 0 0 27px; border: 0; border-radius: 8px; padding: 0; background: transparent; color: var(--mini-muted,#697174); cursor: pointer; }
+.mini-window-toolbar button:hover { background: rgba(255,255,255,.55); color: var(--mini-text,#26343d); }
+.mini-window-toolbar button[aria-pressed="true"] { color: var(--mini-accent,#20c98b); }
+.mini-window-toolbar .mini-return-button { background: rgba(255,255,255,.92); color: #758cbc; }
+.mini-window-toolbar .mini-return-button:hover { background: #fff; color: #426bc4; }
 
 .mini-queue-panel { position: relative; display: grid; min-height: 0; grid-template-rows: minmax(0,1fr); border-top: 1px solid rgba(223,228,229,.9); background: rgba(255,255,255,.96); cursor: default; }
 .mini-queue-list { height: 208px; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-color: transparent transparent; scrollbar-width: thin; }
@@ -530,7 +597,6 @@ onBeforeUnmount(() => {
 .mini-queue-enter-active,.mini-queue-leave-active { transform-origin: top center; will-change: opacity,transform; transition: opacity 220ms ease,transform 220ms cubic-bezier(.22,1,.36,1); }
 .mini-queue-enter-from,.mini-queue-leave-to { opacity: 0; transform: translateY(-10px) scaleY(.96); }
 
-@keyframes mini-lyric-drift { from { transform: translateX(0); } to { transform: translateX(-24%); } }
 @keyframes mini-equalizer { from { transform: scaleY(.45); } to { transform: scaleY(1); } }
 
 .mini-player.layout-compact:not(.is-native-window) .mini-main { grid-template-columns: 68px minmax(0,1fr); gap: 9px; padding-left: 10px; }.mini-player.layout-compact:not(.is-native-window) .mini-cover-button,.mini-player.layout-compact:not(.is-native-window) .mini-cover-ring { width: 60px; height: 60px; }.mini-player.layout-compact:not(.is-native-window) .mini-cover { width: 53px; height: 53px; }.mini-player.layout-compact:not(.is-native-window) .mini-controls { left: 80px; }.mini-player.layout-compact:not(.is-native-window) .mini-controls:has(.mini-extra-control) { left: 8px; right: 34px; gap: 2px; }
@@ -541,7 +607,7 @@ onBeforeUnmount(() => {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .mini-player,.mini-controls,.mini-close-button,.mini-cover-ring,.mini-queue-enter-active,.mini-queue-leave-active { transition-duration: .01ms!important; }
-  .mini-lyric span,.mini-equalizer i { animation: none; }
+  .mini-player,.mini-controls,.mini-window-toolbar,.mini-cover-ring,.mini-queue-enter-active,.mini-queue-leave-active { transition-duration: .01ms!important; }
+  .mini-equalizer i { animation: none; }
 }
 </style>

@@ -1,9 +1,13 @@
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 
 const sourcePath = path.resolve(__dirname, "../src/renderer/src/services/coverPalette.ts");
+const source = fs.readFileSync(sourcePath, "utf8");
 
 async function run() {
+  assert.match(source, /readCoverDataUrl/, "远程封面取色应通过主进程读取，避免跨域时一直使用固定回退色");
+
   const {
     createSoftCoverPalette,
     ensureReadableAccent,
@@ -35,6 +39,19 @@ async function run() {
   ]);
   const [pastelPrimary] = selectRepresentativeColors(mostlyNeutralPastelPixels);
   assert.equal(pastelPrimary, "#dda8d9", "彩色封面不应把数量略多的近灰背景误判为主色");
+
+  const pinkGradientWithBlueShadow = new Uint8ClampedArray([
+    ...repeatPixel([239, 190, 219, 255], 3),
+    ...repeatPixel([225, 170, 211, 255], 3),
+    ...repeatPixel([210, 151, 202, 255], 3),
+    ...repeatPixel([77, 116, 144, 255], 5)
+  ]);
+  const [gradientPrimary] = selectRepresentativeColors(pinkGradientWithBlueShadow);
+  const [gradientRed, gradientGreen, gradientBlue] = hexChannels(gradientPrimary);
+  assert.ok(
+    gradientRed > gradientBlue && gradientBlue > gradientGreen,
+    "占据画面多数的粉色渐变不应被一小块均匀蓝色抢走主色"
+  );
 
   const readablePink = ensureReadableAccent("#e7b7dc");
   const [pinkRed, pinkGreen, pinkBlue] = hexChannels(readablePink);

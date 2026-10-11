@@ -13,19 +13,21 @@ import java.time.OffsetDateTime;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class AccountRepositoryTest {
+    private SingleConnectionDataSource dataSource;
     private JdbcTemplate jdbcTemplate;
     private AccountRepository accountRepository;
 
     @org.junit.jupiter.api.AfterEach
-    void closeDatabase() throws SQLException {
-        ((SingleConnectionDataSource) jdbcTemplate.getDataSource()).destroy();
+    void closeDatabase() {
+        if (dataSource != null) dataSource.destroy();
     }
 
     @BeforeEach
     void createSchema() throws SQLException {
-        jdbcTemplate = new JdbcTemplate(new SingleConnectionDataSource(
+        dataSource = new SingleConnectionDataSource(
             DriverManager.getConnection("jdbc:sqlite::memory:"), true
-        ));
+        );
+        jdbcTemplate = new JdbcTemplate(dataSource);
         accountRepository = new AccountRepository(jdbcTemplate);
         jdbcTemplate.execute("""
             create table provider_accounts (

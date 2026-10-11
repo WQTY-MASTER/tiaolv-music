@@ -270,7 +270,7 @@
     <!-- ============ Tab: v0 (原版 /scrobble) ============ -->
     <div class="tab-content active" id="tab-v0">
       <div class="form-group">
-        <label>歌曲 ID <span class="tag r">必填</span></label>
+        <label for="v0-songId">歌曲 ID <span class="tag r">必填</span></label>
         <input type="text" id="v0-songId" placeholder="例如: 2756058128" value="2756058128" />
         <div class="quick-fill">
           示例:
@@ -280,11 +280,11 @@
         </div>
       </div>
       <div class="form-group">
-        <label>来源 ID (歌单或专辑 ID) <span class="tag r">必填</span></label>
+        <label for="v0-sourceId">来源 ID (歌单或专辑 ID) <span class="tag r">必填</span></label>
         <input type="text" id="v0-sourceId" placeholder="例如: 2756058128" value="2756058128" />
       </div>
       <div class="form-group">
-        <label>播放时间 (秒) <span class="tag o">可选</span></label>
+        <label for="v0-time">播放时间 (秒) <span class="tag o">可选</span></label>
         <input type="number" id="v0-time" placeholder="300" value="300" />
       </div>
       <button class="btn" onclick="submitV0()">立即打卡 (原版)</button>
@@ -293,7 +293,7 @@
     <!-- ============ Tab: v1 (NCBL 加密版 /scrobble/v1) ============ -->
     <div class="tab-content" id="tab-v1">
       <div class="form-group">
-        <label>歌曲 ID <span class="tag r">必填</span></label>
+        <label for="v1-songId">歌曲 ID <span class="tag r">必填</span></label>
         <input type="text" id="v1-songId" placeholder="例如: 518066366" value="518066366" />
         <div class="quick-fill">
           示例:
@@ -303,35 +303,35 @@
         </div>
       </div>
       <div class="form-group">
-        <label>播放时间 (秒) <span class="tag r">必填</span></label>
+        <label for="v1-time">播放时间 (秒) <span class="tag r">必填</span></label>
         <input type="number" id="v1-time" placeholder="例如: 291" value="291" />
       </div>
       <div class="form-group">
-        <label>来源 ID <span class="tag o">可选</span></label>
+        <label for="v1-sourceId">来源 ID <span class="tag o">可选</span></label>
         <input type="text" id="v1-sourceId" placeholder="歌单或专辑 ID" value="36780169" />
       </div>
       <div class="row">
         <div class="form-group">
-          <label>歌曲名 <span class="tag o">可选</span></label>
+          <label for="v1-name">歌曲名 <span class="tag o">可选</span></label>
           <input type="text" id="v1-name" placeholder="歌曲名称" />
         </div>
         <div class="form-group">
-          <label>艺术家 <span class="tag o">可选</span></label>
+          <label for="v1-artist">艺术家 <span class="tag o">可选</span></label>
           <input type="text" id="v1-artist" placeholder="歌手名" />
         </div>
       </div>
       <div class="row">
         <div class="form-group">
-          <label>码率 <span class="tag o">可选</span></label>
+          <label for="v1-bitrate">码率 <span class="tag o">可选</span></label>
           <input type="number" id="v1-bitrate" placeholder="默认 320" value="320" />
         </div>
         <div class="form-group">
-          <label>音质等级 <span class="tag o">可选</span></label>
+          <label for="v1-level">音质等级 <span class="tag o">可选</span></label>
           <input type="text" id="v1-level" placeholder="默认 exhigh" value="exhigh" />
         </div>
       </div>
       <div class="form-group">
-        <label>歌曲总时长 (秒) <span class="tag o">可选</span></label>
+        <label for="v1-total">歌曲总时长 (秒) <span class="tag o">可选</span></label>
         <input type="number" id="v1-total" placeholder="留空则与播放时间相同" />
       </div>
       <button class="btn" onclick="submitV1()">立即打卡 (NCBL 加密版)</button>

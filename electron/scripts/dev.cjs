@@ -42,6 +42,33 @@ function run(command, args) {
   });
 }
 
+async function startRendererServer(createServer, vue) {
+  const server = await createServer({
+    root: path.join(root, "src", "renderer"),
+    cacheDir: path.join(root, ".vite-cache"),
+    plugins: [vue()],
+    server: {
+      host: "127.0.0.1",
+      port: 5173,
+      strictPort: false
+    }
+  });
+
+  try {
+    await server.listen();
+    const address = server.httpServer?.address();
+    if (!address || typeof address === "string") {
+      throw new Error("Renderer development server has no TCP listening address.");
+    }
+    const rendererUrl = `http://127.0.0.1:${address.port}`;
+    server.printUrls();
+    return { server, rendererUrl };
+  } catch (error) {
+    await server.close();
+    throw error;
+  }
+}
+
 async function main() {
   await run(process.execPath, [
     path.join(root, "node_modules", "electron-vite", "bin", "electron-vite.js"),
@@ -50,21 +77,7 @@ async function main() {
 
   const { createServer } = await import("vite");
   const vue = (await import("@vitejs/plugin-vue")).default;
-  const rendererUrl = "http://127.0.0.1:5173";
-
-  const server = await createServer({
-    root: path.join(root, "src", "renderer"),
-    cacheDir: path.join(root, ".vite-cache"),
-    plugins: [vue()],
-    server: {
-      host: "127.0.0.1",
-      port: 5173,
-      strictPort: true
-    }
-  });
-
-  await server.listen();
-  server.printUrls();
+  const { server, rendererUrl } = await startRendererServer(createServer, vue);
 
   const electronPath = resolveElectronPath();
   const electron = spawn(electronPath, ["."], {
@@ -99,7 +112,10 @@ async function main() {
   });
 }
 
-main().catch((error) => {
-  console.error(error);
-  process.exit(1);
-});
+module.exports = { startRendererServer };
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(error);
+    process.exit(1);
+  });
+}

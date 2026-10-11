@@ -1,0 +1,278 @@
+import { lyricParse } from '../../../util/lyricParse';
+import y_common from '../y_common';
+import type { ApiOptions } from '../../../types/api';
+import { getUserUin } from '../../../config/user-info-store';
+import { extractUinFromCookie } from '../../../util/cookieResolver';
+import UCommon from '../UCommon/UCommon';
+import { observeService } from '../../../util/observability';
+import { decryptQrcLyric, extractQrcContent } from '../../../util/qrcDecrypt';
+
+type LyricPayload = Record<string, any>;
+const MUSICU_TIMEOUT_MS = 10000;
+
+const getCookieFromOptions = (option: ApiOptions['option']): string | undefined => {
+  if (!option || typeof option !== 'object') {
+    return undefined;
+  }
+
+  const headers = (option as Record<string, unknown>).headers;
+  if (!headers || typeof headers !== 'object') {
+    return undefined;
+  }
+
+  const cookie = (headers as Record<string, unknown>).Cookie || (headers as Record<string, unknown>).cookie;
+  return typeof cookie === 'string' ? cookie : undefined;
+};
+
+const resolveUin = (cookie?: string): string => {
+  return extractUinFromCookie(cookie) || getUserUin();
+};
+
+const decodeLyricField = (value: unknown): string => {
+  if (typeof value !== 'string' || !value) {
+    return '';
+  }
+
+  try {
+    const decoded = Buffer.from(value, 'base64').toString();
+    return decoded || value;
+  } catch {
+    return value;
+  }
+};
+
+const normalizeLyricResponse = (resData: LyricPayload, isFormat: boolean): LyricPayload => {
+  const lyricString = decodeLyricField(resData?.lyric);
+  const lyric = isFormat && lyricString ? lyricParse(lyricString) : lyricString;
+
+  return {
+    ...resData,
+    lyric
+  };
+};
+
+const normalizeMusicuLyricResponse = (resData: LyricPayload, isFormat: boolean): LyricPayload => {
+  const qrc = extractQrcContent(decryptQrcLyric(resData?.lyric));
+  const encryptedLyric = typeof resData?.lyric === 'string' && /^[0-9a-f]+$/iu.test(resData.lyric);
+  const fallbackLyric = encryptedLyric ? '' : decodeLyricField(resData?.lyric);
+  const lyricString = qrc || fallbackLyric;
+  const trans = extractQrcContent(decryptQrcLyric(resData?.trans)) || decodeLyricField(resData?.trans);
+  const roma = extractQrcContent(decryptQrcLyric(resData?.roma)) || decodeLyricField(resData?.roma);
+  return {
+    ...resData,
+    lyric: isFormat && lyricString && !qrc ? lyricParse(lyricString) : lyricString,
+    qrc,
+    trans,
+    roma,
+    format: qrc ? 'qrc' : 'lrc'
+  };
+};
+
+const hasNegativeBizCode = (data: LyricPayload): boolean => {
+  const codes = [data?.retcode, data?.code, data?.subcode]
+    .map(item => Number(item))
+    .filter(item => !Number.isNaN(item));
+
+  return codes.some(item => item < 0);
+};
+
+const normalizeSongId = (value: unknown): string | undefined => {
+  const id = Number(value);
+  if (Number.isFinite(id) && id > 0) {
+    return String(id);
+  }
+  return undefined;
+};
+
+const resolveSongIdBySongmid = async ({
+  songmid,
+  loginUin
+}: {
+  songmid: string;
+  loginUin: string;
+}): Promise<string | undefined> => {
+  const response = await UCommon({
+    method: 'get',
+    params: {
+      format: 'json',
+      data: {
+        comm: {
+          uin: loginUin,
+          ct: 24,
+          cv: 0
+        },
+        songinfo: {
+          method: 'get_song_detail_yqq',
+          param: {
+            song_type: 0,
+            song_mid: songmid,
+            song_id: 0
+          },
+          module: 'music.pf_song_detail_svr'
+        }
+      }
+    },
+    option: {}
+  });
+
+  const data = (response?.data || {}) as LyricPayload;
+  return normalizeSongId(
+    data?.songinfo?.data?.track_info?.id ||
+    data?.songinfo?.data?.trackInfo?.id ||
+    data?.track_info?.id
+  );
+};
+
+const fetchLyricByMusicu = async ({
+  songmid,
+  songid,
+  loginUin,
+  cookie
+}: {
+  songmid?: string;
+  songid?: string;
+  loginUin: string;
+  cookie?: string;
+}): Promise<LyricPayload> => {
+  const reqPayload = {
+    req_0: {
+      module: 'music.musichallSong.PlayLyricInfo',
+      method: 'GetPlayLyricInfo',
+      param: {
+        songMID: songmid || '',
+        songID: Number(songid || 0),
+        platform: 0,
+        needNew: 1,
+        trans: 1,
+        roma: 1,
+        qrc: 1,
+        crypt: 1,
+        interval: 0
+      }
+    },
+    loginUin,
+    comm: {
+      uin: loginUin,
+      format: 'json',
+      ct: 24,
+      cv: 0
+    }
+  };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), MUSICU_TIMEOUT_MS);
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Referer: 'https://y.qq.com/portal/player.html',
+    Origin: 'https://y.qq.com'
+  };
+
+  if (cookie) {
+    headers.Cookie = cookie;
+  }
+
+  const response = await (async () => {
+    try {
+      return await fetch('https://u.y.qq.com/cgi-bin/musicu.fcg', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(reqPayload),
+        signal: controller.signal
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+  })();
+  const raw = await response.text();
+  const upstream = JSON.parse(raw || '{}') as LyricPayload;
+
+  return (upstream?.req_0?.data || upstream?.PlayLyricInfo?.data || {}) as LyricPayload;
+};
+
+const getLyric = async ({ method = 'get', params = {}, option = {}, isFormat = false }: ApiOptions) => {
+  const cookie = getCookieFromOptions(option);
+  const loginUin = resolveUin(cookie);
+  const songmid = typeof (params as Record<string, unknown>).songmid === 'string'
+    ? (params as Record<string, string>).songmid
+    : undefined;
+  const songid = typeof (params as Record<string, unknown>).songid === 'string'
+    ? (params as Record<string, string>).songid
+    : undefined;
+
+  const data = Object.assign(params, {
+    format: 'json',
+    outCharset: 'utf-8',
+    pcachetime: Date.now(),
+    loginUin
+  });
+
+  const options = Object.assign(option, {
+    headers: Object.assign({}, (option as Record<string, unknown>)?.headers || {}, {
+      referer: 'https://y.qq.com/portal/player.html',
+      host: 'c.y.qq.com'
+    }),
+    params: data
+  });
+
+  try {
+    try {
+      let musicuPayload = await fetchLyricByMusicu({ songmid, songid, loginUin, cookie });
+      if (hasNegativeBizCode(musicuPayload) && !normalizeSongId(songid) && songmid) {
+        const resolvedSongId = await resolveSongIdBySongmid({ songmid, loginUin });
+        if (resolvedSongId) {
+          musicuPayload = await fetchLyricByMusicu({
+            songmid,
+            songid: resolvedSongId,
+            loginUin,
+            cookie
+          });
+        }
+      }
+      const normalized = normalizeMusicuLyricResponse(musicuPayload, Boolean(isFormat));
+      if (!hasNegativeBizCode(musicuPayload) && normalized.lyric) {
+        return { status: 200, body: { response: normalized } };
+      }
+    } catch {
+      // The legacy endpoint below remains the line-timed fallback.
+    }
+
+    const primaryResponse = await y_common({
+      url: '/lyric/fcgi-bin/fcg_query_lyric_new.fcg',
+      method: method as import('axios').Method,
+      options
+    });
+
+    const payload = (primaryResponse?.data || {}) as LyricPayload;
+
+    return {
+      status: 200,
+      body: {
+        response: normalizeLyricResponse(payload, Boolean(isFormat))
+      }
+    };
+  } catch (error) {
+    const normalizedError = error instanceof Error
+      ? {
+        name: error.name,
+        message: error.message
+      }
+      : {
+        name: 'Error',
+        message: 'Internal server error'
+      };
+
+    return {
+      status: 500,
+      body: {
+        error: normalizedError
+      }
+    };
+  }
+};
+
+export default (props: ApiOptions) => observeService(
+  'getLyric',
+  { method: props.method, params: props.params, option: props.option },
+  () => getLyric(props)
+);

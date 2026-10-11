@@ -39,6 +39,7 @@ assert.match(app, /class="streaming-search-icon" :size="18"/, "右上角搜索�
 assert.match(app, /\.streaming-home-search input\s*\{[^}]*font-size:\s*13px/, "右上角搜索文字应适度放大");
 const transitionKeyBlock = app.match(/const pageTransitionKey = computed\(\(\) => \[([\s\S]*?)\]\.join\("::"\)\);/)?.[1] ?? "";
 assert.doesNotMatch(transitionKeyBlock, /submittedKeyword\.value/, "自动搜索不应使输入框失焦");
+assert.doesNotMatch(transitionKeyBlock, /streamingSource\.value/, "切换网易云或 QQ 音源时不应销毁并重建搜索框");
 
 assert.match(api, /export function searchCatalog\(/);
 assert.match(api, /\/catalog\/cloudsearch\?/);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
-  AlertCircle, Check, Copy, Download, ExternalLink, Github,
+  AlertCircle, Check, Code2, Copy, Download, ExternalLink,
   Info, RefreshCw, Scale, ShieldCheck
 } from "lucide-vue-next";
 import {
@@ -191,7 +191,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="about-link-list">
         <button type="button" @click="openExternal(REPOSITORY_URL)">
-          <Github :size="19" aria-hidden="true" /><span><strong>项目仓库</strong><small>github.com/WQTY-MASTER/tiaolv-music</small></span><ExternalLink :size="15" aria-hidden="true" />
+          <Code2 :size="19" aria-hidden="true" /><span><strong>项目仓库</strong><small>github.com/WQTY-MASTER/tiaolv-music</small></span><ExternalLink :size="15" aria-hidden="true" />
         </button>
         <button type="button" @click="openExternal(LICENSE_URL)">
           <Scale :size="19" aria-hidden="true" /><span><strong>MIT License</strong><small>查看完整开源许可</small></span><ExternalLink :size="15" aria-hidden="true" />

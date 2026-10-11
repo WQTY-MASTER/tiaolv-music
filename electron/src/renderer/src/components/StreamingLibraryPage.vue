@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import {
   ArrowRight,
   BarChart3,
@@ -26,8 +26,12 @@ interface LibraryPlaylist {
   title: string;
   subtitle: string;
   count: number;
+  primary: string;
+  secondary: string;
+  mark: string;
   imageUrl?: string;
   createdByAccount?: boolean;
+  deletable?: boolean;
 }
 
 type PlaylistTab = "all" | "created" | "collected";
@@ -56,10 +60,24 @@ const emit = defineEmits<{
   (event: "open-ranking"): void;
   (event: "open-playlist", playlist: LibraryPlaylist): void;
   (event: "create-playlist"): void;
+  (event: "delete-playlist", playlist: LibraryPlaylist): void;
   (event: "login"): void;
 }>();
 
 const sourceMenuOpen = ref(false);
+const playlistMenu = ref<{ playlist: LibraryPlaylist; x: number; y: number } | null>(null);
+const playlistMenuElement = ref<HTMLElement | null>(null);
+async function openPlaylistMenu(event: MouseEvent, playlist: LibraryPlaylist) {
+  playlistMenu.value = { playlist, x: Math.min(event.clientX, window.innerWidth - 230), y: Math.min(event.clientY, window.innerHeight - 70) };
+  await nextTick();
+  playlistMenuElement.value?.focus();
+}
+function deleteMenuPlaylist() {
+  const playlist = playlistMenu.value?.playlist;
+  playlistMenu.value = null;
+  if (playlist?.createdByAccount && playlist.deletable) emit('delete-playlist', playlist);
+}
+watch(() => props.provider, () => { playlistMenu.value = null; });
 const playlistTab = ref<PlaylistTab>("all");
 const playlistOrder = ref<string[]>([]);
 const draggedPlaylistId = ref<string | null>(null);
@@ -161,7 +179,7 @@ function openPlaylist(playlist: LibraryPlaylist) {
 }
 
 function requestCreatePlaylist() {
-  if (props.provider === "netease") emit('create-playlist');
+  emit('create-playlist');
 }
 </script>
 
@@ -305,8 +323,7 @@ function requestCreatePlaylist() {
           <button
             class="create-playlist-button"
             type="button"
-            :disabled="provider !== 'netease'"
-            :title="provider === 'netease' ? '创建歌单' : '当前音源暂不支持创建歌单'"
+            title="创建歌单"
             @click="requestCreatePlaylist"
           >
             <Plus :size="17" :stroke-width="2" aria-hidden="true" />
@@ -336,6 +353,7 @@ function requestCreatePlaylist() {
             type="button"
             draggable="true"
             @click="openPlaylist(playlist)"
+            @contextmenu.prevent="openPlaylistMenu($event, playlist)"
             @keydown="handlePlaylistKeydown($event, playlist)"
             @dragstart="draggedPlaylistId = playlist.id"
             @dragend="draggedPlaylistId = null"
@@ -357,9 +375,23 @@ function requestCreatePlaylist() {
       </section>
     </div>
   </section>
+  <Teleport to="body">
+    <div v-if="playlistMenu" class="playlist-context-backdrop" @click="playlistMenu = null" @contextmenu.prevent="playlistMenu = null" @keydown.esc="playlistMenu = null">
+      <div ref="playlistMenuElement" class="playlist-context-menu" role="menu" tabindex="-1" :style="{ left: `${playlistMenu.x}px`, top: `${playlistMenu.y}px` }" @click.stop>
+        <button type="button" role="menuitem" :disabled="!playlistMenu.playlist.createdByAccount || !playlistMenu.playlist.deletable" @click="deleteMenuPlaylist">
+          {{ playlistMenu.playlist.deletable ? '删除歌单' : playlistMenu.playlist.createdByAccount ? '系统歌单不可删除' : '收藏歌单不可删除' }}
+        </button>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>
+.playlist-context-backdrop { position: fixed; inset: 0; z-index: 1000; }
+.playlist-context-menu { position: fixed; width: 218px; padding: 6px; border: 1px solid #dfe3eb; border-radius: 10px; background: #fff; box-shadow: 0 8px 28px #26344e26; outline: none; }
+.playlist-context-menu button { width: 100%; padding: 11px; border: 0; border-radius: 6px; background: transparent; color: #cc4354; text-align: left; cursor: pointer; }
+.playlist-context-menu button:hover:not(:disabled) { background: #fff0f2; }
+.playlist-context-menu button:disabled { color: #8d96a6; cursor: default; }
 .streaming-library-page {
   width: calc(100% - 112px);
   margin-inline: auto;

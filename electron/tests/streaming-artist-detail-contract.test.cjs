@@ -30,5 +30,7 @@ assert.match(app, /StreamingArtistDetailPage/);
 assert.match(app, /selectStreamingArtist/);
 assert.match(app, /!selectedStreamingArtist/);
 assert.match(app, /Promise\.allSettled/);
+assert.match(app, /streamingArtistError\.value = "歌手歌曲加载失败，请稍后重试。"/, "两种歌曲接口都失败时应直接显示明确错误");
+assert.doesNotMatch(app, /throw new Error\("歌手歌曲加载失败，请稍后重试。"\)/, "预期的双接口失败不应抛出后再由同一函数捕获");
 
 console.log("流媒体歌手详情页契约通过");

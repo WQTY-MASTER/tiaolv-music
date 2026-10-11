@@ -555,7 +555,7 @@ function ApiCache() {
           callCount: this.callCount,
           hitCount: this.hitCount,
           missCount: this.callCount - this.hitCount,
-          hitRate: this.callCount == 0 ? null : this.hitCount / this.callCount,
+          hitRate: this.callCount === 0 ? null : this.hitCount / this.callCount,
           hitRateLast100: this.hitRate(this.hitsLast100),
           hitRateLast1000: this.hitRate(this.hitsLast1000),
           hitRateLast10000: this.hitRate(this.hitsLast10000),
@@ -573,7 +573,7 @@ function ApiCache() {
         var misses = 0
         for (var i = 0; i < array.length; i++) {
           var n8 = array[i]
-          for (j = 0; j < 4; j++) {
+          for (var j = 0; j < 4; j++) {
             switch (n8 & 3) {
               case 1:
                 hits++
@@ -586,7 +586,7 @@ function ApiCache() {
           }
         }
         var total = hits + misses
-        if (total == 0) return null
+        if (total === 0) return null
         return hits / total
       }
 

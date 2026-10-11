@@ -36,16 +36,26 @@ public class LocalLyricsMatchService {
     }
 
     public LocalLyricsMatchResult match(String trackId) {
-        return match(trackId, false);
+        return match(trackId, false, false);
     }
 
     public LocalLyricsMatchResult match(String trackId, boolean saveBesideAudio) {
+        return match(trackId, saveBesideAudio, false);
+    }
+
+    public LocalLyricsMatchResult match(String trackId, boolean saveBesideAudio, boolean force) {
         Track track = trackRepository.findById(trackId)
             .orElseThrow(() -> new NoSuchElementException("歌曲不存在: " + trackId));
         if (!"local".equalsIgnoreCase(track.source())) {
             throw new IllegalArgumentException("联网匹配歌词仅支持本地歌曲");
         }
         boolean localLyricsAvailable = hasLocalLyrics(track);
+        if (!force) {
+            Optional<LocalLyricsCache.Lookup> cached = cache.lookup(trackId);
+            if (cached.isPresent()) {
+                return fromCache(track, localLyricsAvailable, cached.get());
+            }
+        }
         if (localLyricsAvailable && accountRepository.findActive("qq").isEmpty()) {
             return new LocalLyricsMatchResult(true, track, localLyricsMessage(track.lyricsFormat()));
         }
@@ -64,7 +74,9 @@ public class LocalLyricsMatchService {
                 if (candidate.isEmpty()) {
                     continue;
                 }
-                Optional<LyricData> lyrics = catalogService.loadLyrics(candidate.get().id());
+                Optional<LyricData> lyrics = force
+                    ? catalogService.loadLyricsFresh(candidate.get().id())
+                    : catalogService.loadLyrics(candidate.get().id());
                 if (lyrics.isEmpty() || lyrics.get().lyrics() == null || lyrics.get().lyrics().isBlank()) {
                     continue;
                 }
@@ -77,8 +89,10 @@ public class LocalLyricsMatchService {
             }
         }
         if (localLyricsAvailable) {
+            cache.saveNotFound(track.id());
             return new LocalLyricsMatchResult(true, track, localLyricsMessage(track.lyricsFormat()));
         }
+        cache.saveNotFound(track.id());
         return new LocalLyricsMatchResult(false, track, "联网匹配歌词失败，使用本地文件");
     }
 
@@ -101,12 +115,7 @@ public class LocalLyricsMatchService {
                 storageMessage = "；无法写入歌曲目录，已保存到软件缓存";
             }
         }
-        Track updated = new Track(
-            original.id(), original.title(), original.artist(), original.album(), original.duration(),
-            original.source(), original.filePath(), original.url(), original.coverUrl(),
-            lyrics.lyrics(), "online-" + candidate.provider(), lyrics.format(), original.coverMimeType(),
-            original.createdAt(), original.updatedAt(), original.metaSource()
-        );
+        Track updated = withOnlineLyrics(original, candidate.provider(), lyrics);
         if (!hasLocalLyrics(original)) {
             trackRepository.upsert(updated);
         }
@@ -114,6 +123,37 @@ public class LocalLyricsMatchService {
             ? "联网匹配到逐字歌词（来自" + providerLabel(candidate.provider()) + "）"
             : "未找到逐字歌词，加载普通整行歌词";
         return new LocalLyricsMatchResult(true, updated, message + storageMessage, lyrics);
+    }
+
+    private LocalLyricsMatchResult fromCache(
+        Track original,
+        boolean localLyricsAvailable,
+        LocalLyricsCache.Lookup cached
+    ) {
+        LyricData lyrics = cached.lyrics();
+        if (!cached.matched() || lyrics == null || lyrics.lyrics() == null || lyrics.lyrics().isBlank()) {
+            return localLyricsAvailable
+                ? new LocalLyricsMatchResult(true, original, localLyricsMessage(original.lyricsFormat()))
+                : new LocalLyricsMatchResult(false, original, "缓存中未找到匹配歌词");
+        }
+        boolean cachedQqWordLyrics = "qq".equalsIgnoreCase(lyrics.source()) && hasWordTiming(lyrics);
+        if (localLyricsAvailable && !cachedQqWordLyrics) {
+            return new LocalLyricsMatchResult(true, original, localLyricsMessage(original.lyricsFormat()));
+        }
+        Track updated = withOnlineLyrics(original, lyrics.source(), lyrics);
+        String message = isPrecise(lyrics.format())
+            ? "已从缓存加载逐字歌词（来自" + providerLabel(lyrics.source()) + "）"
+            : "已从缓存加载普通整行歌词";
+        return new LocalLyricsMatchResult(true, updated, message, lyrics);
+    }
+
+    private static Track withOnlineLyrics(Track original, String provider, LyricData lyrics) {
+        return new Track(
+            original.id(), original.title(), original.artist(), original.album(), original.duration(),
+            original.source(), original.filePath(), original.url(), original.coverUrl(),
+            lyrics.lyrics(), "online-" + provider, lyrics.format(), original.coverMimeType(),
+            original.createdAt(), original.updatedAt(), original.metaSource()
+        );
     }
 
     private static Optional<Track> bestMatch(List<Track> tracks, String title, String artist) {

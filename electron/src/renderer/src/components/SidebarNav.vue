@@ -18,11 +18,18 @@ type ViewKey =
   | "aggregate"
   | "folders"
   | "streaming-library"
-  | "cloud";
+  | "account-following"
+  | "account-followers"
+  | "account-user-profile"
+  | "streaming-recent"
+  | "listening-ranking"
+  | "cloud"
+  | "settings";
 
 interface SidebarPlaylist {
   id: string;
   title: string;
+  subtitle: string;
   count: number;
   primary: string;
   secondary: string;

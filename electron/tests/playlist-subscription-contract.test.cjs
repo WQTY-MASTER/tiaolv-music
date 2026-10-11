@@ -26,6 +26,8 @@ assert.match(app, /const selectedPlaylistCollected = computed/, "应用应从账
 assert.match(app, /createdByAccount/, "自己创建的歌单不应作为可收藏对象");
 assert.match(app, /async function toggleSelectedPlaylistCollection/, "应用应处理歌单收藏和取消收藏");
 assert.match(app, /setAccountPlaylistSubscription/, "应用应调用统一收藏接口");
+assert.doesNotMatch(app, /let platformSynced = true/, "平台同步状态不应先写入随后必然覆盖的初始值");
+assert.match(app, /\.then\(\(result\) => result\.synced\)/, "平台同步接口已声明布尔结果时应直接使用 synced");
 assert.match(app, /loadAccountPlaylists/, "收藏完成后应刷新当前音源的账号歌单");
 assert.match(app, /reconcilePlaylistSubscriptionRefresh/, "刷新结果应与刚完成的收藏操作合并，避免上游延迟导致状态回退");
 assert.match(app, /:collectable="selectedPlaylistCollectable"/, "歌单详情应接收可收藏状态");

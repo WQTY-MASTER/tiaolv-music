@@ -12,6 +12,7 @@ async function run() {
     getPrefaceCharacterCount,
     getPrefaceHighlightState,
     getPrefaceLineStartTime,
+    createPrefaceLineTimes,
     getPreludeEndTime,
     stabilizeLyricCharacterProgress
   } = await import(pathToFileUrl(sourcePath));
@@ -165,9 +166,23 @@ async function run() {
   );
   assert.equal(
     getPreludeEndTime(1.8, 214, true),
-    0,
-    "第一句歌词在两秒内开始时不应生成一闪而过的前奏条目"
+    1.8,
+    "短前奏也应保留歌曲信息的完整高亮时间轴"
   );
+  const shortPreludeEnd = getPreludeEndTime(0.768, 216, true);
+  assert.equal(shortPreludeEnd, 0.768, "不足一秒的前奏不能过滤歌曲信息");
+  const shortPrefaceTimes = createPrefaceLineTimes(shortPreludeEnd, [0.141, 0.154, 0.167]);
+  assert.deepEqual(
+    getPrefaceHighlightState(0.16, shortPreludeEnd, [16, 8, 12, 14], shortPrefaceTimes),
+    { activeIndex: 2, characterCount: 5 },
+    "极短前奏应按原始时间快速逐行高亮制作信息"
+  );
+  assert.deepEqual(
+    getPrefaceHighlightState(0.768, shortPreludeEnd, [16, 8, 12, 14], shortPrefaceTimes),
+    { activeIndex: -1, characterCount: 0 },
+    "短前奏制作信息不能推迟第一句歌词的开始"
+  );
+  assert.equal(getPreludeEndTime(0, 216, true), 0, "零前奏歌曲不应虚构高亮时间");
   assert.equal(
     getPreludeEndTime(0, 214, false),
     214,
@@ -207,6 +222,7 @@ async function run() {
   const playbackClock = createPlaybackClock();
   const playingAudio = { currentTime: 10, paused: false, ended: false, playbackRate: 1 };
   playbackClock.reset(playingAudio, 1000);
+  playingAudio.currentTime = 10.45;
   assert.ok(
     Math.abs(playbackClock.read(playingAudio, 1500) - 10.5) < 0.000001,
     "播放时钟应在浏览器暂时没有刷新媒体 currentTime 时平滑估算当前时间"
@@ -225,9 +241,17 @@ async function run() {
     "正常播放的 timeupdate 携带较旧媒体时间时，歌词时钟不得向后跳"
   );
   assert.ok(
-    Math.abs(playbackClock.read(staleTimeupdateAudio, 1600) - 10.6) < 0.000001,
+    Math.abs(playbackClock.read({ ...staleTimeupdateAudio, currentTime: 10.55 }, 1600) - 10.6) < 0.000001,
     "忽略较旧媒体时间后，歌词时钟应继续平滑前进"
   );
+
+  const stalledClock = createPlaybackClock();
+  const stalledMedia = { currentTime: 10, paused: false, ended: false, playbackRate: 1 };
+  stalledClock.reset(stalledMedia, 1000);
+  assert.ok(stalledClock.read(stalledMedia, 6000) <= 10.15, "停滞音频不得让歌词时钟无限领先");
+  assert.ok(stalledClock.synchronize(stalledMedia, 6000) <= 10.15, "timeupdate 应校准明显漂移");
+  assert.equal(stalledClock.read({ ...stalledMedia, readyState: 2 }, 6500), 10, "缓冲期间应冻结在媒体时间");
+  assert.ok(stalledClock.read({ ...stalledMedia, currentTime: 12, readyState: 4 }, 6550) >= 12, "恢复播放不得落后于媒体时间");
 
   const seekedAudio = { currentTime: 2, paused: false, ended: false, seeking: true, playbackRate: 1 };
   assert.equal(

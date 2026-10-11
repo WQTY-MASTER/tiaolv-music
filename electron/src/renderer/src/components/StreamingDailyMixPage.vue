@@ -1,17 +1,22 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { canActivateTrackHold, selectedVisibleIds, type TrackBatchAction, type TrackBatchResult } from "../services/streamingTrackManagement";
 import {
   ArrowDownAZ,
   ArrowLeft,
   ArrowLeftRight,
   ArrowUpAZ,
   Bookmark,
+  HeartOff,
   Heart,
+  ListMusic,
+  ListPlus,
   LocateFixed,
   Pause,
   Play,
   RefreshCw,
-  Search
+  Search,
+  Trash2
 } from "lucide-vue-next";
 import {
   filterAndSortDailyTracks,
@@ -49,6 +54,11 @@ const props = defineProps<{
   coverMark?: string;
   refreshing?: boolean;
   reorderable?: boolean;
+  mutationPending?: boolean;
+  reorderPending?: boolean;
+  orderMessage?: string;
+  batchMode?: "favorites" | "playlist" | "recent";
+  runBatch?: (action: TrackBatchAction, ids: string[]) => Promise<TrackBatchResult>;
   sourceOptions?: ReadonlyArray<{ value: string; label: string }>;
   sourceValue?: string;
   collectable?: boolean;
@@ -77,6 +87,18 @@ const sortDirection = ref<DailySortDirection>("asc");
 const listElement = ref<HTMLElement | null>(null);
 const locatedTrackId = ref("");
 const draggedTrackId = ref("");
+const dropTargetId = ref("");
+const batchSelecting = ref(false);
+const batchBusy = ref(false);
+const selectedIds = ref<string[]>([]);
+const batchMessage = ref("");
+const busy = computed(() => batchBusy.value || props.mutationPending);
+const canReorder = computed(() => props.reorderable !== false && !busy.value && !props.reorderPending && !batchSelecting.value && sortField.value === "default" && !playlistKeyword.value.trim());
+const selectedVisible = computed(() => selectedVisibleIds(selectedIds.value, visibleTracks.value));
+const allVisibleSelected = computed(() => visibleTracks.value.length > 0 && selectedVisible.value.length === new Set(visibleTracks.value.map(track => track.id)).size);
+let holdTimer: number | undefined;
+let heldPointer: { id: number; x: number; y: number; at: number; row: HTMLElement } | null = null;
+let suppressClickUntil = 0;
 let locateTimer: number | undefined;
 
 const visibleTracks = computed(() => filterAndSortDailyTracks(
@@ -124,20 +146,84 @@ function emitSourceChange(event: Event) {
   emit("source-change", (event.target as HTMLSelectElement).value);
 }
 
-function startTrackDrag(trackId: string) {
-  if (props.reorderable === false) return;
-  draggedTrackId.value = trackId;
+function toggleSelection(id: string) {
+  if (busy.value) return;
+  selectedIds.value = selectedIds.value.includes(id) ? selectedIds.value.filter(value => value !== id) : [...selectedIds.value, id];
+}
+function toggleAllVisible() {
+  if (busy.value) return;
+  const visible = new Set(visibleTracks.value.map(track => track.id));
+  selectedIds.value = allVisibleSelected.value ? selectedIds.value.filter(id => !visible.has(id)) : [...new Set([...selectedIds.value, ...visible])];
+}
+async function executeBatch(action: TrackBatchAction) {
+  if (busy.value || !props.runBatch || !selectedVisible.value.length) return;
+  const ids = [...selectedVisible.value];
+  batchBusy.value = true;
+  batchMessage.value = `正在处理 ${ids.length} 首歌曲…`;
+  try {
+    const result = await props.runBatch(action, ids);
+    const succeeded = new Set(result.succeeded);
+    selectedIds.value = selectedIds.value.filter(id => !succeeded.has(id));
+    batchMessage.value = result.message || `成功 ${result.succeeded.length} 首${result.failed.length ? `，失败 ${result.failed.length} 首，可重试` : ""}`;
+  } catch {
+    batchMessage.value = "操作失败，已保留选择，请重试。";
+  } finally { batchBusy.value = false; }
+}
+function clickTrack(id: string) {
+  if (Date.now() < suppressClickUntil || busy.value) return;
+  if (batchSelecting.value) toggleSelection(id);
+  else emit("play", id);
+}
+function cancelHold() {
+  if (holdTimer !== undefined) window.clearTimeout(holdTimer);
+  holdTimer = undefined;
+  if (heldPointer?.row.hasPointerCapture(heldPointer.id)) heldPointer.row.releasePointerCapture(heldPointer.id);
+  heldPointer = null;
+  draggedTrackId.value = "";
+  dropTargetId.value = "";
+}
+function startTrackHold(event: PointerEvent, id: string) {
+  if (!canReorder.value || event.button !== 0 || (event.target as HTMLElement).closest("button,input,a,select")) return;
+  cancelHold();
+  const row = event.currentTarget as HTMLElement;
+  heldPointer = { id: event.pointerId, x: event.clientX, y: event.clientY, at: Date.now(), row };
+  holdTimer = window.setTimeout(() => {
+    if (!heldPointer || !canReorder.value || !canActivateTrackHold(Date.now() - heldPointer.at, 0, 0)) return;
+    draggedTrackId.value = id;
+    dropTargetId.value = id;
+    row.setPointerCapture(event.pointerId);
+  }, 460);
+}
+function moveTrackHold(event: PointerEvent) {
+  if (!heldPointer || event.pointerId !== heldPointer.id) return;
+  if (!draggedTrackId.value) {
+    if (Math.hypot(event.clientX - heldPointer.x, event.clientY - heldPointer.y) > 8) cancelHold();
+    return;
+  }
+  event.preventDefault();
+  const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(".daily-detail-row");
+  dropTargetId.value = target && listElement.value?.contains(target) ? target.dataset.trackId || "" : "";
+  const scroll = listElement.value?.closest<HTMLElement>("main");
+  if (scroll) {
+    const bounds = scroll.getBoundingClientRect();
+    if (event.clientY < bounds.top + 70) scroll.scrollBy(0, -20);
+    if (event.clientY > bounds.bottom - 100) scroll.scrollBy(0, 20);
+  }
+}
+function finishTrackHold(event: PointerEvent) {
+  if (!heldPointer || event.pointerId !== heldPointer.id) return;
+  const from = draggedTrackId.value, to = dropTargetId.value;
+  if (from) suppressClickUntil = Date.now() + 400;
+  const allowed = canReorder.value;
+  cancelHold();
+  if (allowed && from && to && from !== to) emit("reorder", from, to);
 }
 
-function dropTrack(targetTrackId: string) {
-  if (props.reorderable === false) return;
-  if (draggedTrackId.value && draggedTrackId.value !== targetTrackId) {
-    emit("reorder", draggedTrackId.value, targetTrackId);
-  }
-  draggedTrackId.value = "";
-}
+watch(() => props.tracks.map(track => track.id), ids => { selectedIds.value = selectedIds.value.filter(id => ids.includes(id)); });
+watch([sortField, playlistKeyword, busy], cancelHold);
 
 onBeforeUnmount(() => {
+  cancelHold();
   if (locateTimer !== undefined) window.clearTimeout(locateTimer);
 });
 </script>
@@ -200,9 +286,12 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
+      <div v-if="$slots['hero-tools']" class="daily-detail-hero-tools">
+        <slot name="hero-tools" />
+      </div>
     </div>
 
-    <div class="daily-detail-toolbar" :class="{ 'has-source-select': sourceOptions?.length }">
+    <div class="daily-detail-toolbar" :class="{ 'has-source-select': sourceOptions?.length, 'has-toolbar-tools': $slots['toolbar-tools'] }">
       <label class="daily-detail-filter-search">
         <Search :size="16" :stroke-width="1.7" aria-hidden="true" />
         <input v-model="playlistKeyword" type="search" placeholder="在歌单中搜索" />
@@ -213,6 +302,9 @@ onBeforeUnmount(() => {
           <option v-for="source in sourceOptions" :key="source.value" :value="source.value">{{ source.label }}</option>
         </select>
       </label>
+      <div v-if="$slots['toolbar-tools']" class="daily-detail-toolbar-tools">
+        <slot name="toolbar-tools" />
+      </div>
       <span class="daily-detail-count">{{ visibleTracks.length }} 首</span>
       <label class="daily-detail-sort-select">
         <span class="sr-only">排序字段</span>
@@ -243,6 +335,28 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
+    <div v-if="batchMode" class="daily-track-management">
+      <button type="button" :disabled="busy" :aria-pressed="batchSelecting" @click="batchSelecting = !batchSelecting; selectedIds = []; batchMessage = ''">{{ batchSelecting ? "退出批量" : "批量操作" }}</button>
+      <template v-if="batchSelecting">
+        <label><input type="checkbox" :checked="allVisibleSelected" :disabled="busy || !visibleTracks.length" @change="toggleAllVisible" />全选当前列表</label>
+        <span>已选 {{ selectedVisible.length }} 首</span>
+        <button v-if="batchMode === 'favorites'" type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('unlike')"><HeartOff :size="15" aria-hidden="true" />取消喜欢</button>
+        <template v-else-if="batchMode === 'playlist'">
+          <button type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('like')"><Heart :size="15" aria-hidden="true" />添加喜欢</button>
+          <button class="danger" type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('remove')"><Trash2 :size="15" aria-hidden="true" />移出歌单</button>
+        </template>
+        <template v-else>
+          <button class="danger" type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('clear-recent')"><Trash2 :size="15" aria-hidden="true" />清除记录</button>
+          <button type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('like')"><Heart :size="15" aria-hidden="true" />添加喜欢</button>
+          <button type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('queue')"><ListPlus :size="15" aria-hidden="true" />加入播放列表</button>
+          <button type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('add-to-playlist')"><ListMusic :size="15" aria-hidden="true" />加入歌单</button>
+        </template>
+      </template>
+      <span v-else-if="reorderable !== false">长按歌曲可上下拖动；使用默认顺序并清空搜索后可调整。</span>
+      <span role="status" aria-live="polite">{{ batchMessage }}</span>
+      <span role="status" aria-live="polite">{{ orderMessage }}</span>
+    </div>
+
     <div class="daily-detail-table">
       <div class="daily-detail-table-head" aria-hidden="true">
         <span>#</span><span>曲目</span><span>专辑</span><span>时长</span>
@@ -252,21 +366,26 @@ onBeforeUnmount(() => {
           v-for="(track, index) in visibleTracks"
           :key="`${track.id}-${index}`"
           class="daily-detail-row"
-          :class="{ active: track.id === currentTrackId, located: track.id === locatedTrackId }"
+          :class="{ active: track.id === currentTrackId, located: track.id === locatedTrackId, selected: batchSelecting && selectedIds.includes(track.id), dragging: draggedTrackId === track.id, 'drop-target': dropTargetId === track.id && draggedTrackId !== track.id }"
           :data-track-id="track.id"
           role="row"
           tabindex="0"
-          :draggable="reorderable !== false"
-          @dragstart="startTrackDrag(track.id)"
-          @dragend="draggedTrackId = ''"
-          @dragover.prevent
-          @drop.prevent="dropTrack(track.id)"
-          @click="emit('play', track.id)"
+          :draggable="false"
+          @dragstart.prevent
+          @pointerdown="startTrackHold($event, track.id)"
+          @pointermove="moveTrackHold"
+          @pointerup="finishTrackHold"
+          @pointercancel="cancelHold"
+          @lostpointercapture="cancelHold"
+          @pointerleave="!draggedTrackId && cancelHold()"
+          @click="clickTrack(track.id)"
           @contextmenu.prevent="emit('context-menu', { track, event: $event })"
-          @keydown.enter.prevent="emit('play', track.id)"
-          @keydown.space.prevent="emit('play', track.id)"
+          @keydown.enter.self.prevent="clickTrack(track.id)"
+          @keydown.space.self.prevent="clickTrack(track.id)"
+          @keydown.esc="cancelHold"
         >
-          <span class="daily-detail-index">
+          <span v-if="batchSelecting" class="daily-detail-index"><input type="checkbox" :aria-label="`选择${track.title}`" :checked="selectedIds.includes(track.id)" :disabled="busy" @click.stop @change="toggleSelection(track.id)" /></span>
+          <span v-else class="daily-detail-index">
             <span
               v-if="track.id === currentTrackId"
               class="daily-detail-playing-indicator"
@@ -285,7 +404,7 @@ onBeforeUnmount(() => {
             <span><strong>{{ track.title }}</strong><small>{{ track.artist }}</small></span>
           </span>
           <span class="daily-detail-album">
-            <button type="button" :class="{ liked: track.liked }" :title="track.liked ? '取消喜欢' : '喜欢歌曲'" :aria-label="track.liked ? `取消喜欢${track.title}` : `喜欢${track.title}`" @click.stop="emit('toggle-favorite', track.id)">
+            <button type="button" :disabled="busy" :class="{ liked: track.liked }" :title="track.liked ? '取消喜欢' : '喜欢歌曲'" :aria-label="track.liked ? `取消喜欢${track.title}` : `喜欢${track.title}`" @click.stop="emit('toggle-favorite', track.id)">
               <Heart :size="16" :stroke-width="1.7" :fill="track.liked ? 'currentColor' : 'none'" aria-hidden="true" />
             </button>
             <span>{{ track.album || "未知专辑" }}</span>
@@ -299,13 +418,24 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.daily-track-management { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 18px 0; color: #69768b; font-size: 12px; }
+.daily-track-management button { display: inline-flex; align-items: center; gap: 6px; border: 1px solid #dce3ef; border-radius: 8px; background: #fff; color: #3568dd; padding: 8px 13px; cursor: pointer; }
+.daily-track-management button.danger { color: #c24f48; }
+.daily-track-management label { display: flex; gap: 6px; align-items: center; }
+.daily-track-management button:disabled { opacity: .45; cursor: default; }
+.daily-detail-row.selected { background: #edf2ff; box-shadow: inset 3px 0 #4c77ef; }
+.daily-detail-row.dragging { opacity: .6; cursor: grabbing; user-select: none; }
+.daily-detail-row.drop-target { box-shadow: inset 0 3px #4c77ef; }
+.daily-detail-row { user-select: none; }
+.daily-detail-index input { width: 17px; height: 17px; accent-color: #4672ed; }
 .daily-detail-page { width: min(1364px, 100%); margin: 0 auto; padding: 64px 10px 0; color: #171b25; }
 .daily-detail-topbar { display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid #dedfe2; padding-bottom: 20px; }
 .daily-detail-back { display: inline-flex; height: 38px; align-items: center; gap: 7px; border: 1px solid #dfe2e6; border-radius: 19px; padding: 0 14px; background: rgba(255,255,255,.9); color: #176ce1; box-shadow: 0 8px 20px rgba(32,44,60,.08); cursor: pointer; font-size: 12px; transition: border-color 160ms ease, background 160ms ease, transform 160ms ease; }
 .daily-detail-back:hover { border-color: #cbd3dc; background: #fff; transform: translateY(-1px); }
 .daily-detail-global-search { display: flex; width: min(360px, 48vw); height: 38px; align-items: center; gap: 9px; border: 1px solid #dfe2e6; border-radius: 19px; padding: 0 14px; background: rgba(255,255,255,.88); color: #9099a5; box-shadow: 0 7px 20px rgba(34,42,55,.035); }
 .daily-detail-global-search input,.daily-detail-filter-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #20293a; font: inherit; font-size: 12px; }
-.daily-detail-hero { display: grid; grid-template-columns: 178px minmax(0, 1fr); align-items: center; gap: 28px; padding: 18px 0 44px; }
+.daily-detail-hero { display: grid; grid-template-columns: 178px minmax(0, 1fr) auto; align-items: center; gap: 28px; padding: 18px 0 44px; }
+.daily-detail-hero-tools { align-self: center; justify-self: end; }
 .daily-detail-cover { display: grid; box-sizing: border-box; width: 178px; grid-template-rows: 10px auto; gap: 4px; overflow: hidden; border: 1px solid rgba(215,217,221,.92); border-radius: 18px; padding: 6px; background: rgba(255,255,255,.94); box-shadow: 0 22px 44px rgba(33,39,48,.14), 0 6px 16px rgba(33,39,48,.07); }
 .daily-detail-cover-chrome { display: flex; height: 10px; box-sizing: border-box; align-items: center; gap: 3px; border-bottom: 1px solid #ececef; padding: 0 3px 4px; }
 .daily-detail-cover-chrome i { display: block; width: 3px; height: 3px; border-radius: 50%; background: #d8dadd; }
@@ -331,6 +461,9 @@ onBeforeUnmount(() => {
 .daily-detail-actions button:disabled { opacity: .45; cursor: default; }
 .daily-detail-toolbar { display: grid; min-height: 60px; grid-template-columns: minmax(220px, 1fr) auto auto 38px 38px 38px; align-items: center; gap: 9px; border: 1px solid #e3e4e6; border-radius: 16px; padding: 9px 15px; background: rgba(255,255,255,.94); box-shadow: 0 12px 30px rgba(31,37,47,.045); }
 .daily-detail-toolbar.has-source-select { grid-template-columns: minmax(220px, 1fr) auto auto auto 38px 38px 38px; }
+.daily-detail-toolbar.has-toolbar-tools { grid-template-columns: minmax(220px, 1fr) auto auto auto 38px 38px 38px; }
+.daily-detail-toolbar.has-source-select.has-toolbar-tools { grid-template-columns: minmax(220px, 1fr) auto auto auto auto 38px 38px 38px; }
+.daily-detail-toolbar-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; }
 .daily-detail-filter-search { display: flex; min-width: 0; align-items: center; gap: 9px; color: #84909f; }
 .daily-detail-count { color: #687588; font-size: 11px; white-space: nowrap; }
 .daily-detail-sort-select select { height: 36px; border: 0; border-radius: 9px; padding: 0 28px 0 11px; outline: 0; background: #f7f6f3; color: #202631; cursor: pointer; font-size: 13px; font-weight: 700; }
@@ -380,24 +513,34 @@ onBeforeUnmount(() => {
 @media (max-width: 820px) {
   .daily-detail-page { padding-inline: 4px; }
   .daily-detail-hero { grid-template-columns: 132px minmax(0, 1fr); gap: 20px; }
+  .daily-detail-hero-tools { grid-column: 2; justify-self: start; }
   .daily-detail-cover { width: 132px; }
   .daily-detail-toolbar { grid-template-columns: minmax(170px, 1fr) auto auto repeat(3, 36px); }
   .daily-detail-toolbar.has-source-select { grid-template-columns: minmax(170px, 1fr) auto auto auto repeat(3, 36px); }
+  .daily-detail-toolbar.has-toolbar-tools { grid-template-columns: minmax(170px, 1fr) auto auto auto repeat(3, 36px); }
+  .daily-detail-toolbar.has-source-select.has-toolbar-tools { grid-template-columns: minmax(170px, 1fr) auto auto auto auto repeat(3, 36px); }
   .daily-detail-table-head,.daily-detail-row { grid-template-columns: 42px minmax(180px, 1.3fr) minmax(130px, .8fr) 58px; gap: 9px; padding-inline: 12px; }
 }
 @media (max-width: 620px) {
   .daily-detail-topbar { align-items: stretch; flex-direction: column; gap: 12px; }
   .daily-detail-global-search { width: 100%; }
   .daily-detail-hero { grid-template-columns: 102px minmax(0, 1fr); padding-bottom: 28px; }
+  .daily-detail-hero-tools { grid-column: 1 / -1; justify-self: stretch; }
   .daily-detail-cover { width: 102px; border-radius: 12px; }
   .daily-detail-copy h1 { font-size: 30px; }
   .daily-detail-stats { display: none; }
   .daily-detail-actions { margin-top: 14px; }
   .daily-detail-toolbar { grid-template-columns: minmax(0, 1fr) auto repeat(3, 34px); }
   .daily-detail-toolbar.has-source-select { grid-template-columns: minmax(0, 1fr) auto repeat(3, 34px); }
+  .daily-detail-toolbar.has-toolbar-tools,
+  .daily-detail-toolbar.has-source-select.has-toolbar-tools { grid-template-columns: minmax(0, 1fr) auto repeat(3, 34px); }
+  .daily-detail-toolbar-tools { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
   .daily-detail-sort-select { grid-column: 1 / 3; grid-row: 2; }
+  .daily-detail-toolbar.has-toolbar-tools .daily-detail-sort-select { grid-row: 3; }
   .daily-detail-toolbar.has-source-select .daily-detail-source-select { grid-column: 1 / 2; grid-row: 2; }
   .daily-detail-toolbar.has-source-select .daily-detail-sort-select { grid-column: 2 / 3; grid-row: 2; }
+  .daily-detail-toolbar.has-source-select.has-toolbar-tools .daily-detail-source-select { grid-row: 3; }
+  .daily-detail-toolbar.has-source-select.has-toolbar-tools .daily-detail-sort-select { grid-row: 3; }
   .daily-detail-source-select select { width: 100%; }
   .daily-detail-sort-select select { width: 100%; }
   .daily-detail-count { justify-self: end; }

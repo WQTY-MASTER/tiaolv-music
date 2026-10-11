@@ -237,7 +237,7 @@ class LibraryServiceTest {
         Track removed = localTrack("local-removed", root.resolve("removed.flac"));
         Track kept = localTrack("local-kept", nestedRoot.resolve("kept.flac"));
         when(localLibrary.findRoots()).thenReturn(List.of(nestedRoot.toString()));
-        when(tracks.findLocalTracks()).thenReturn(List.of(removed, kept), List.of(kept));
+        when(tracks.findLocalTracks()).thenReturn(List.of(removed, kept)).thenReturn(List.of(kept));
         LibraryService service = new LibraryService(
             tracks, mock(PlaylistRepository.class), mock(MusicScanService.class),
             mock(UserDataRepository.class), mock(LocalLyricsCache.class), localLibrary

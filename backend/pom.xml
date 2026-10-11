@@ -45,7 +45,6 @@
   </dependencies>
 
   <build>
-    <directory>${user.home}/.codex/visualizations/2026/09/08/01a0814c-0e90-79a0-b3a2-21611577085e/backend-target</directory>
     <resources>
       <resource>
         <directory>src/main/resources</directory>

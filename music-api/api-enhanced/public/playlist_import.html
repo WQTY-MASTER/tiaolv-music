@@ -216,9 +216,9 @@
                     </thead>
                     <tbody id="metadataTableBody">
                         <tr>
-                            <td><input type="text" name="name[]" placeholder="歌曲名称"></td>
-                            <td><input type="text" name="artist[]" placeholder="艺术家"></td>
-                            <td><input type="text" name="album[]" placeholder="专辑"></td>
+                            <td><input type="text" name="name[]" placeholder="歌曲名称" aria-label="歌曲名称"></td>
+                            <td><input type="text" name="artist[]" placeholder="艺术家" aria-label="艺术家"></td>
+                            <td><input type="text" name="album[]" placeholder="专辑" aria-label="专辑"></td>
                         </tr>
                     </tbody>
                 </table>
@@ -238,10 +238,10 @@
             <!-- 链接导入 -->
             <div class="tab-content" id="link" role="tabpanel" aria-labelledby="link-tab">
                 <div class="form-group">
-                    <label>链接列表</label>
+                    <label for="linkInput0">链接列表</label>
                     <div id="linkInputsContainer">
                         <div class="input-group">
-                            <input type="text" id="linkInput0" name="linkInput0" placeholder="请输入链接">
+                            <input type="text" id="linkInput0" name="linkInput0" placeholder="请输入链接" aria-label="歌曲链接">
                             <button type="button" class="btn btn-secondary removeLinkButton" data-index="0">×</button>
                         </div>
                     </div>
@@ -291,6 +291,7 @@
             newInput.id = `linkInput${newIndex}`;
             newInput.name = `linkInput${newIndex}`;
             newInput.placeholder = '请输入链接';
+            newInput.setAttribute('aria-label', '歌曲链接');
             newInput.style.cssText = 'flex: 1; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;';
 
             var removeButton = document.createElement('button');
@@ -317,9 +318,9 @@
             var newRow = document.createElement('tr');
 
             newRow.innerHTML = `
-                <td><input type="text" name="name[]" placeholder="歌曲名称" style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;"></td>
-                <td><input type="text" name="artist[]" placeholder="艺术家" style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;"></td>
-                <td><input type="text" name="album[]" placeholder="专辑" style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;"></td>
+                <td><input type="text" name="name[]" placeholder="歌曲名称" aria-label="歌曲名称" style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;"></td>
+                <td><input type="text" name="artist[]" placeholder="艺术家" aria-label="艺术家" style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;"></td>
+                <td><input type="text" name="album[]" placeholder="专辑" aria-label="专辑" style="width: 100%; padding: 10px 14px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; outline: none;"></td>
             `;
 
             container.appendChild(newRow);

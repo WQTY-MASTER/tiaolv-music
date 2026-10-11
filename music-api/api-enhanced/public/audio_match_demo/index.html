@@ -1,4 +1,5 @@
 <!DOCTYPE html>
+<html lang="zh-CN">
 
 <head>
   <meta charset="UTF-8">
@@ -201,7 +202,7 @@
 
     <div class="control-group">
       <button id="invoke">识别</button>
-      <input type="file" name="picker" accept="*" id="file">
+      <input type="file" name="picker" accept="*" id="file" aria-label="选择音频文件">
     </div>
 
     <div class="control-group">
@@ -216,7 +217,6 @@
     <h3 style="font-size: 16px; font-weight: 600; color: #333; margin-bottom: 12px;">日志</h3>
     <pre id="logs"></pre>
   </div>
-</body>
 
 <script src="./afp.wasm.js"></script>
 <script src="./afp.js"></script>
@@ -369,4 +369,5 @@
     }
   }, 100)
 </script>
+</body>
 </html>

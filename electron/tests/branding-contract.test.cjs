@@ -34,4 +34,24 @@ for (const icon of ["app-icon.png", "app-icon.ico"]) {
   assert.ok(fs.existsSync(path.join(electronRoot, "resources", icon)), `缺少 ${icon}`);
 }
 
+const ico = fs.readFileSync(path.join(electronRoot, 'resources/app-icon.ico'));
+assert.equal(ico.readUInt16LE(0), 0);
+assert.equal(ico.readUInt16LE(2), 1);
+const sizes = new Set();
+for (let i = 0; i < ico.readUInt16LE(4); i++) {
+  const entry = 6 + i * 16;
+  const size = ico[entry] || 256;
+  assert.equal(ico[entry + 1] || 256, size);
+  assert.equal(ico.readUInt16LE(entry + 6), 32);
+  const length = ico.readUInt32LE(entry + 8), offset = ico.readUInt32LE(entry + 12);
+  assert.ok(offset >= 6 + ico.readUInt16LE(4) * 16 && offset + length <= ico.length);
+  assert.equal(ico.subarray(offset, offset + 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(ico.readUInt32BE(offset + 16), size);
+  assert.equal(ico.readUInt32BE(offset + 20), size);
+  sizes.add(size);
+}
+for (const size of [16, 20, 24, 32, 40, 48, 64, 128, 256]) {
+  assert.ok(sizes.has(size), `Windows icon is missing its ${size}px frame`);
+}
+
 console.log("调律音乐品牌契约通过");

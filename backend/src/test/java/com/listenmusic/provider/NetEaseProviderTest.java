@@ -66,6 +66,92 @@ class NetEaseProviderTest {
     }
 
     @Test
+    void deletesNeteaseCloudRecentTracksAndUsesTheVerifiedSnapshot() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/record/recent/song/delete?ids=123&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"code":200,"deletedTrackIds":["123"],"data":{"list":[
+                  {"data":{"id":456,"name":"保留歌曲","ar":[{"name":"歌手"}],"al":{"name":"专辑"},"dt":180000}}
+                ]}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        RecentTracksDeleteResult result = provider.deleteAccountRecentTracks(
+            "100", List.of("netease:123"), cookie
+        );
+
+        assertEquals(List.of("netease:123"), result.deletedTrackIds());
+        assertEquals(List.of("netease:456"), result.tracks().stream().map(Track::id).toList());
+        server.verify();
+    }
+
+    @Test
+    void loadsNeteaseAllTimeRankingFromTheCloud() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/user/record?uid=100&type=0&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("""
+                {"code":200,"allData":[{"song":{"id":789,"name":"常听歌曲","ar":[{"name":"歌手"}],"al":{"name":"专辑"},"dt":200000}}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        List<Track> tracks = provider.loadAccountListeningRank("100", cookie, "all");
+
+        assertEquals(List.of("netease:789"), tracks.stream().map(Track::id).toList());
+        server.verify();
+    }
+
+    @Test
+    void batchAddsTracksToAnOwnedNeteasePlaylistAndVerifiesTheResult() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":[{"id":900,"name":"自建歌单","creator":{"userId":100},"specialType":0,"trackCount":0}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/track/add?pid=900&ids=123,456&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":{"trackCount":2,"tracks":[
+                  {"id":123,"name":"歌曲一","ar":[{"name":"歌手"}],"al":{"name":"专辑"},"dt":180000},
+                  {"id":456,"name":"歌曲二","ar":[{"name":"歌手"}],"al":{"name":"专辑"},"dt":190000}
+                ]}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.addAccountPlaylistTracks(
+            "100", "netease:900", List.of("netease:123", "netease:456"), cookie
+        );
+
+        server.verify();
+    }
+
+    @Test
+    void reordersNeteaseFavoritesThroughTheCloudAndVerifiesTheResult() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":[{"id":900,"name":"我喜欢的音乐","creator":{"userId":100},"specialType":5,"trackCount":2}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":{"trackCount":2,"tracks":[{"id":123},{"id":456}]}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/song/order/update?pid=900&ids=%5B456,123%5D&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":{"trackCount":2,"tracks":[{"id":456},{"id":123}]}}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.reorderAccountPlaylistTracks(
+            "100", "netease:900", List.of("netease:456", "netease:123"),
+            List.of("netease:123", "netease:456"), cookie
+        );
+
+        server.verify();
+    }
+
+    @Test
     void clearsTheActiveAccountWhenThePlaybackCookieHasExpired() {
         String cookie = "MUSIC_U=expired";
         ProviderAccount account = new ProviderAccount(
@@ -360,6 +446,48 @@ class NetEaseProviderTest {
         assertTrue(!playlists.get(1).createdByAccount());
         assertEquals("netease:3", created.id());
         assertTrue(created.createdByAccount());
+        assertTrue(created.deletable());
+        assertTrue(!created.favorite());
+        server.verify();
+    }
+
+    @Test
+    void deletesAnOwnedNeteasePlaylistAndVerifiesItWasRemoved() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":[
+                  {"id":900,"name":"自建歌单","creator":{"userId":100},"specialType":0,"trackCount":2}
+                ]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/delete?id=900&cookie=MUSIC_U%3Dsecret&timestamp=")))
+            .andExpect(method(HttpMethod.GET))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":[]}", org.springframework.http.MediaType.APPLICATION_JSON));
+
+        provider.deleteAccountPlaylist("100", "netease:900", cookie);
+
+        server.verify();
+    }
+
+    @Test
+    void refusesToDeleteTheNeteaseFavoritesPlaylist() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":[
+                  {"id":1,"name":"我喜欢的音乐","creator":{"userId":100},"specialType":5,"trackCount":2}
+                ]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+
+        IllegalArgumentException error = assertThrows(
+            IllegalArgumentException.class,
+            () -> provider.deleteAccountPlaylist("100", "netease:1", cookie)
+        );
+
+        assertEquals("只能编辑当前账号创建的普通歌单", error.getMessage());
         server.verify();
     }
 
