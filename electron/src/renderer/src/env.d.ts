@@ -42,6 +42,8 @@ interface ListenMusicBridge {
   ping(): Promise<BackendHealth>;
   getAboutSnapshot(): Promise<AboutSnapshot>;
   checkForUpdates(): Promise<UpdateCheckResult>;
+  downloadUpdate(): Promise<UpdateCheckResult>;
+  installUpdate(): Promise<boolean>;
   setAutoUpdateCheck(enabled: boolean): Promise<AboutSnapshot>;
   openExternalLink(url: string): Promise<boolean>;
   onUpdateCheckResult(listener: (result: UpdateCheckResult) => void): () => void;

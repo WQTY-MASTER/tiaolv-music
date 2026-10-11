@@ -19,7 +19,14 @@ export interface BackendHealth {
   };
 }
 
-export type UpdateCheckStatus = "idle" | "checking" | "latest" | "available" | "error";
+export type UpdateCheckStatus = "idle" | "checking" | "latest" | "available" | "downloading" | "downloaded" | "installing" | "error";
+
+export interface UpdateDownloadProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  bytesPerSecond: number;
+}
 
 export interface UpdateCheckResult {
   status: UpdateCheckStatus;
@@ -30,6 +37,7 @@ export interface UpdateCheckResult {
   publishedAt?: string;
   releaseUrl?: string;
   downloadUrl?: string;
+  progress?: UpdateDownloadProgress;
   message?: string;
 }
 

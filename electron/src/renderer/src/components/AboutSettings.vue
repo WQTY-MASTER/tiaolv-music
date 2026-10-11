@@ -21,13 +21,25 @@ const checking = ref(false);
 const changingAutoCheck = ref(false);
 const copied = ref(false);
 const pageError = ref("");
+const updateEvent = ref<UpdateCheckResult | null>(null);
+const requestingDownload = ref(false);
+const requestingInstall = ref(false);
 let disposeUpdateListener: (() => void) | undefined;
 let copiedTimer: number | undefined;
 
 const system = computed(() => snapshot.value?.system);
-const update = computed<UpdateCheckResult>(() => snapshot.value?.update ?? {
+const update = computed<UpdateCheckResult>(() => updateEvent.value ?? snapshot.value?.update ?? {
   status: "idle",
-  currentVersion: "0.1.0"
+  currentVersion: "0.1.1"
+});
+const updateBusy = computed(() => checking.value || ["downloading", "downloaded", "installing"].includes(update.value.status));
+const releaseVisible = computed(() => Boolean(update.value.latestVersion) && !["idle", "checking", "latest"].includes(update.value.status));
+const downloadPercent = computed(() => Math.round(update.value.progress?.percent ?? 0));
+const progressDetail = computed(() => {
+  const progress = update.value.progress;
+  if (!progress) return "";
+  const mb = (bytes: number) => (bytes / 1024 / 1024).toFixed(1);
+  return `${mb(progress.transferred)} / ${mb(progress.total)} MB`;
 });
 const diagnosticRows = computed(() => [
   ["操作系统", system.value ? `${system.value.osName} ${system.value.osVersion} (${system.value.osArch})` : "读取中…"],
@@ -48,23 +60,49 @@ const releaseDate = computed(() => {
 });
 
 function acceptUpdate(next: UpdateCheckResult) {
-  if (!snapshot.value) return;
-  snapshot.value = { ...snapshot.value, update: next };
+  updateEvent.value = next;
   checking.value = next.status === "checking";
 }
 
 async function checkUpdate() {
-  if (checking.value) return;
+  if (updateBusy.value) return;
   checking.value = true;
   pageError.value = "";
-  acceptUpdate({ status: "checking", currentVersion: update.value.currentVersion });
+  acceptUpdate({ ...update.value, status: "checking", progress: undefined });
   try {
     const result = await window.listenMusic?.checkForUpdates();
     if (result) acceptUpdate(result);
   } catch {
-    acceptUpdate({ status: "error", currentVersion: update.value.currentVersion, message: "检查更新失败，请稍后重试。" });
+    acceptUpdate({ ...update.value, status: "error", message: "检查更新失败，请稍后重试或使用浏览器手动下载。" });
   } finally {
     checking.value = false;
+  }
+}
+
+async function downloadUpdate() {
+  if (requestingDownload.value || !["available", "error"].includes(update.value.status)) return;
+  requestingDownload.value = true;
+  pageError.value = "";
+  try {
+    const result = await window.listenMusic?.downloadUpdate();
+    if (result) acceptUpdate(result);
+  } catch {
+    acceptUpdate({ ...update.value, status: "error", progress: undefined, message: "更新下载失败，可前往 Release 页面手动下载。" });
+  } finally {
+    requestingDownload.value = false;
+  }
+}
+
+async function installUpdate() {
+  if (requestingInstall.value || update.value.status !== "downloaded") return;
+  requestingInstall.value = true;
+  pageError.value = "";
+  try {
+    if (!await window.listenMusic?.installUpdate()) pageError.value = "更新尚未准备好，或本地服务无法退出。请查看更新状态。";
+  } catch {
+    pageError.value = "无法启动更新安装，请前往 Release 页面手动下载。";
+  } finally {
+    requestingInstall.value = false;
   }
 }
 
@@ -150,7 +188,7 @@ onBeforeUnmount(() => {
           <p class="about-section-label">VERSION UPDATE</p>
           <h3 id="update-title">版本更新</h3>
         </div>
-        <button class="about-action primary" type="button" :disabled="loading || checking" @click="checkUpdate">
+        <button class="about-action primary" type="button" :disabled="loading || updateBusy" @click="checkUpdate">
           <RefreshCw :size="16" :class="{ spinning: checking }" aria-hidden="true" />
           {{ checking ? "正在检查" : "检查更新" }}
         </button>
@@ -174,15 +212,25 @@ onBeforeUnmount(() => {
           <span v-if="update.latestVersion">最新版本 v{{ update.latestVersion }}<template v-if="releaseDate"> · {{ releaseDate }}</template></span>
         </div>
       </div>
-      <div v-if="update.status === 'available'" class="release-details">
+      <div v-if="releaseVisible" class="release-details">
         <div class="release-title">
           <strong>{{ update.releaseName || `调律音乐 v${update.latestVersion}` }}</strong>
-          <button class="about-action" type="button" @click="openExternal(update.downloadUrl || update.releaseUrl || REPOSITORY_URL)">
+          <button v-if="update.status === 'available' || update.status === 'error'" class="about-action" type="button" :disabled="requestingDownload" @click="downloadUpdate">
             <Download :size="16" aria-hidden="true" />下载更新
           </button>
+          <button v-else-if="update.status === 'downloaded' || update.status === 'installing'" class="about-action primary" type="button" :disabled="requestingInstall || update.status === 'installing'" @click="installUpdate">
+            <RefreshCw :size="16" aria-hidden="true" />{{ update.status === 'installing' ? "准备安装" : "重启安装" }}
+          </button>
+        </div>
+        <div v-if="update.status === 'downloading'" class="update-progress">
+          <div><span>下载进度 {{ downloadPercent }}%</span><span>{{ progressDetail }}</span></div>
+          <progress :value="update.progress?.percent ?? 0" max="100" aria-label="更新下载进度"></progress>
         </div>
         <pre v-if="update.releaseNotes">{{ update.releaseNotes }}</pre>
       </div>
+      <button v-if="update.status !== 'idle'" class="about-action manual-update" type="button" @click="openExternal(update.releaseUrl || `${REPOSITORY_URL}/releases/latest`)">
+        <ExternalLink :size="16" aria-hidden="true" />浏览器手动下载
+      </button>
     </section>
 
     <section class="about-section" aria-labelledby="open-source-title">
@@ -267,6 +315,12 @@ onBeforeUnmount(() => {
 .release-details { margin-top: 14px; padding: 16px 18px; border-left: 3px solid var(--about-blue); background: #f6f8fc; }
 .release-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .release-title strong { color: var(--about-ink); font-size: 13px; }
+.release-title strong { min-width: 0; overflow-wrap: anywhere; }
+.release-title .about-action { flex: 0 0 auto; }
+.manual-update { margin-top: 12px; }
+.update-progress { margin-top: 14px; color: var(--about-muted); font-size: 12px; }
+.update-progress > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.update-progress progress { display: block; width: 100%; height: 8px; accent-color: var(--about-blue); }
 .release-details pre { max-height: 180px; margin: 14px 0 0; overflow: auto; color: #5b687c; font: 12px/1.65 "Microsoft YaHei UI", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
 .about-link-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--about-line); border-bottom: 1px solid var(--about-line); }
 .about-link-list button { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px 16px; border: 0; background: transparent; color: #42516b; cursor: pointer; text-align: left; }

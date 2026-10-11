@@ -20,6 +20,8 @@ import os from "node:os";
 import { mkdirSync, openAsBlob, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
+import electronUpdater from "electron-updater";
+import { createAppUpdateService } from "./appUpdates";
 import { BackgroundImageCache } from "./backgroundImageCache";
 import { MiniPlayerWindows } from "./miniPlayerWindows";
 import type { MiniPlayerSnapshot } from "../shared/miniPlayer";
@@ -45,7 +47,6 @@ import {
   type ShortcutAction, type ShortcutPatch
 } from "../shared/shortcuts";
 import {
-  compareReleaseVersions,
   type AboutSnapshot,
   type AboutSystemInfo,
   type UpdateCheckResult
@@ -96,7 +97,6 @@ const DESKTOP_LYRICS_DEFAULT_HEIGHT = 220;
 const DESKTOP_LYRICS_UNLOCK_HOTSPOT_HEIGHT = 36;
 const DESKTOP_LYRICS_UNLOCK_POLL_INTERVAL = 80;
 const GITHUB_REPOSITORY_URL = "https://github.com/WQTY-MASTER/tiaolv-music";
-const GITHUB_LATEST_RELEASE_URL = "https://api.github.com/repos/WQTY-MASTER/tiaolv-music/releases/latest";
 const TASKBAR_ICON_DATA = {
   previous: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAClSURBVDhP7ZOxDcJADEUzAiUjMEJKxmAExqCjpWMcSkahZIP3kaW76M5xIqeigNecZH89yV+6YfjzVSTt/axD0lHSxV6/a5F0AB6W9buOIjPCoKQdcC2ZxdzEmhA4Aa9GFuY6ImFzXkReGJwXkRMCt+C8iJzQXmAEnk7gyQvrDDgDbyeqbBeWufV5d7JZbsaSsBLUEOYmsj+lqWFduIVSw+jnP8gHHomavl1TT/UAAAAASUVORK5CYII=",
   play: "iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAACqSURBVDhP7ZMhDsJAEEUrkUgkEolEIjkGx0DiOAJHqURyBI6AROLeI5t0EzLQdtsqEp7a7Px5yWZmq+pPQl3Gu0moR+CqrmJtFEmoCjyb8yxmBpGFGeAGbGKumCjMAGd1HvO9tAkTwB3YxZ5OuoQZoFYXsfcrJcIE8FDXsf+DEuGgp/cJgdOg4bQJR69PFDYLfoi5Yt6FwGXyF2z+cprgPtZGoW6Ld+zneAEWLHgrYCmGvwAAAABJRU5ErkJggg==",
@@ -129,10 +129,11 @@ let mainWindow: BrowserWindow | null = null;
 let shortcutManager: ShortcutManager | null = null;
 let shortcutRecordingTimer: ReturnType<typeof setTimeout> | null = null;
 let autoCheckUpdates = false;
-let updateCheckTask: Promise<UpdateCheckResult> | null = null;
+let appUpdates: ReturnType<typeof createAppUpdateService> | null = null;
 let updateCheckResult: UpdateCheckResult = {
   status: "idle",
-  currentVersion: app.getVersion()
+  currentVersion: app.getVersion(),
+  releaseUrl: `${GITHUB_REPOSITORY_URL}/releases/latest`
 };
 let desktopLyricsWindow: BrowserWindow | null = null;
 let taskbarThumbnailButtonsEnabled = false;
@@ -254,76 +255,9 @@ function broadcastUpdateResult() {
   }
 }
 
-interface GitHubRelease {
-  tag_name?: unknown;
-  name?: unknown;
-  body?: unknown;
-  published_at?: unknown;
-  html_url?: unknown;
-  assets?: Array<{ name?: unknown; browser_download_url?: unknown }>;
-}
-
-async function performUpdateCheck(): Promise<UpdateCheckResult> {
-  updateCheckResult = { status: "checking", currentVersion: app.getVersion() };
-  broadcastUpdateResult();
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 12_000);
-  try {
-    const response = await fetch(GITHUB_LATEST_RELEASE_URL, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Tiaolv-Music-Updater"
-      },
-      signal: controller.signal
-    });
-    if (!response.ok) {
-      throw new Error(response.status === 404
-        ? "项目暂未发布可检查的正式版本。"
-        : `更新服务返回 ${response.status}，请稍后重试。`);
-    }
-    const release = await response.json() as GitHubRelease;
-    const tag = typeof release.tag_name === "string" ? release.tag_name : "";
-    const comparison = compareReleaseVersions(tag, app.getVersion());
-    if (comparison === null) throw new Error("最新版本号格式无法识别。");
-    const releaseUrl = typeof release.html_url === "string" ? release.html_url : GITHUB_REPOSITORY_URL;
-    const asset = release.assets?.find((item) => (
-      typeof item.name === "string"
-      && /\.(?:exe|msi)$/i.test(item.name)
-      && typeof item.browser_download_url === "string"
-    ));
-    updateCheckResult = {
-      status: comparison > 0 ? "available" : "latest",
-      currentVersion: app.getVersion(),
-      latestVersion: tag.replace(/^v/i, ""),
-      releaseName: typeof release.name === "string" ? release.name : undefined,
-      releaseNotes: typeof release.body === "string" ? release.body.slice(0, 6000) : undefined,
-      publishedAt: typeof release.published_at === "string" ? release.published_at : undefined,
-      releaseUrl,
-      downloadUrl: typeof asset?.browser_download_url === "string" ? asset.browser_download_url : releaseUrl,
-      message: comparison > 0 ? "发现新版本。" : "当前已是最新版本。"
-    };
-  } catch (error) {
-    updateCheckResult = {
-      status: "error",
-      currentVersion: app.getVersion(),
-      message: error instanceof Error && error.name === "AbortError"
-        ? "检查更新超时，请确认网络连接后重试。"
-        : (error instanceof Error ? error.message : "检查更新失败，请稍后重试。")
-    };
-  } finally {
-    clearTimeout(timeout);
-    broadcastUpdateResult();
-  }
-  return updateCheckResult;
-}
-
 function checkForUpdates() {
-  if (!updateCheckTask) {
-    updateCheckTask = performUpdateCheck().finally(() => {
-      updateCheckTask = null;
-    });
-  }
-  return updateCheckTask;
+  if (!appUpdates) throw new Error("更新服务尚未就绪");
+  return appUpdates.check();
 }
 
 function isAllowedExternalUrl(value: string) {
@@ -1213,9 +1147,29 @@ ipcMain.handle("get-about-snapshot", (event) => {
   return aboutSnapshot();
 });
 
+function requireUpdateSender(event: Electron.IpcMainInvokeEvent) {
+  if (!mainWindow || mainWindow.isDestroyed()
+    || BrowserWindow.fromWebContents(event.sender) !== mainWindow
+    || event.senderFrame !== mainWindow.webContents.mainFrame
+    || !isTrustedRendererUrl(event.senderFrame.url, rendererFileUrl, rendererUrl)) {
+    throw new Error("不允许操作应用更新");
+  }
+}
+
 ipcMain.handle("check-for-updates", (event) => {
-  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow) throw new Error("不允许检查更新");
+  requireUpdateSender(event);
   return checkForUpdates();
+});
+
+ipcMain.handle("download-update", (event) => {
+  requireUpdateSender(event);
+  if (!appUpdates) throw new Error("更新服务尚未就绪");
+  return appUpdates.download();
+});
+
+ipcMain.handle("install-update", (event) => {
+  requireUpdateSender(event);
+  return appUpdates?.install() ?? false;
 });
 
 ipcMain.handle("set-auto-update-check", (event, enabled: boolean) => {
@@ -1284,6 +1238,15 @@ if (!hasSingleInstanceLock) {
     }
     readDesktopLyricsConfig();
     readAboutConfig();
+    appUpdates = createAppUpdateService({
+      updater: electronUpdater.autoUpdater,
+      currentVersion: app.getVersion(), isPackaged: app.isPackaged, platform: process.platform,
+      onChange: result => { updateCheckResult = result; broadcastUpdateResult(); },
+      prepareInstall: async () => {
+        await serviceRuntime?.stop();
+        serviceShutdownComplete = true;
+      }
+    });
     initializeShortcuts();
     createWindow();
     if (autoCheckUpdates) void checkForUpdates();

@@ -85,6 +85,8 @@ const mainBridge = {
   ping: (): Promise<BackendHealth> => request("/health"),
   getAboutSnapshot: (): Promise<AboutSnapshot> => ipcRenderer.invoke("get-about-snapshot"),
   checkForUpdates: (): Promise<UpdateCheckResult> => ipcRenderer.invoke("check-for-updates"),
+  downloadUpdate: (): Promise<UpdateCheckResult> => ipcRenderer.invoke("download-update"),
+  installUpdate: (): Promise<boolean> => ipcRenderer.invoke("install-update"),
   setAutoUpdateCheck: (enabled: boolean): Promise<AboutSnapshot> => ipcRenderer.invoke("set-auto-update-check", enabled),
   openExternalLink: (url: string): Promise<boolean> => ipcRenderer.invoke("open-external-link", url),
   onUpdateCheckResult: (listener: (result: UpdateCheckResult) => void) => {
