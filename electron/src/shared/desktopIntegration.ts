@@ -1,4 +1,5 @@
 export type CloseBehavior = "exit" | "tray" | "mini";
+export type MainWindowCommand = "minimize" | "toggle-maximize" | "close";
 
 export interface DesktopIntegrationPreferences {
   closeBehavior: CloseBehavior;

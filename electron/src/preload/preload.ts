@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { standaloneBackendRequestUrl } from "../shared/backendRoutes";
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../shared/about";
-import type { CloseBehavior } from "../shared/desktopIntegration";
+import type { CloseBehavior, MainWindowCommand } from "../shared/desktopIntegration";
 import type { MiniPlayerPreferences } from "../renderer/src/services/appearanceSettings";
 import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../shared/miniPlayer";
 import type {
@@ -62,7 +62,13 @@ const miniBridge = {
 
 const mainBridge = {
   isWindows: process.platform === "win32",
-  setWindowTitlebarTheme: (dark: boolean): Promise<boolean> => ipcRenderer.invoke("set-window-titlebar-theme", dark),
+  mainWindowCommand: (command: MainWindowCommand): Promise<boolean> => ipcRenderer.invoke("main-window-command", command),
+  getMainWindowMaximized: (): Promise<boolean | null> => ipcRenderer.invoke("main-window-get-maximized"),
+  onMainWindowMaximized: (listener: (maximized: boolean) => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, maximized: boolean) => listener(maximized);
+    ipcRenderer.on("main-window-maximized", handler);
+    return () => ipcRenderer.removeListener("main-window-maximized", handler);
+  },
   getShortcuts: (): Promise<ShortcutSnapshot> => ipcRenderer.invoke("get-shortcuts"),
   updateShortcuts: (patch: ShortcutPatch, reset = false): Promise<ShortcutSnapshot> => ipcRenderer.invoke("update-shortcuts", patch, reset),
   setShortcutRecording: (recording: boolean): Promise<ShortcutSnapshot> => ipcRenderer.invoke("set-shortcut-recording", recording),

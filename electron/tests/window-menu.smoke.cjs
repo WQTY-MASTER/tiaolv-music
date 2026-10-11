@@ -38,36 +38,80 @@ async function main() {
     const artifacts = path.resolve(__dirname, '../.playwright-cli');
     fs.mkdirSync(artifacts, { recursive: true });
     await page.locator('.desktop-titlebar-drag-region').waitFor();
-    await page.waitForFunction(() => navigator.windowControlsOverlay?.visible);
-    const overlay = await page.evaluate(() => {
-      const rect = navigator.windowControlsOverlay.getTitlebarAreaRect();
+    const captions = page.getByRole('group', { name: '窗口控制', exact: true });
+    await captions.waitFor();
+    assert.equal(await captions.getByRole('button').count(), 3);
+    assert.equal(await page.evaluate(() => navigator.windowControlsOverlay?.visible ?? false), false);
+    const captionBounds = await page.evaluate(() => {
+      const controls = document.querySelector('.desktop-window-controls');
+      const rect = controls.getBoundingClientRect();
       const drag = document.querySelector('.desktop-titlebar-drag-region');
       const bounds = drag.getBoundingClientRect();
       return { x: rect.x, y: rect.y, width: rect.width, height: rect.height,
         dragLeft: bounds.left, dragRight: bounds.right,
-        dragStyle: getComputedStyle(drag).getPropertyValue('-webkit-app-region') };
+        dragStyle: getComputedStyle(drag).getPropertyValue('-webkit-app-region'),
+        controlStyle: getComputedStyle(controls).getPropertyValue('-webkit-app-region') };
     });
-    assert.equal(overlay.y, 0);
-    assert.ok(overlay.height > 0 && overlay.height <= 32);
-    assert.equal(overlay.dragLeft, 144);
-    assert.ok(overlay.dragRight <= overlay.x + overlay.width, 'Drag region must not cover native buttons');
-    assert.equal(overlay.dragStyle, 'drag');
-    await instance.evaluate(({ BrowserWindow }) => {
-      const win = BrowserWindow.getAllWindows()[0];
-      globalThis.titlebarSmokeUpdates = [];
-      const apply = win.setTitleBarOverlay.bind(win);
-      win.setTitleBarOverlay = options => { globalThis.titlebarSmokeUpdates.push(options); apply(options); };
-    });
-    const captionColor = () => instance.evaluate(() => globalThis.titlebarSmokeUpdates.at(-1)?.symbolColor);
+    assert.equal(captionBounds.y, 0);
+    assert.equal(captionBounds.height, 32);
+    assert.equal(captionBounds.width, 138);
+    assert.equal(captionBounds.dragLeft, 144);
+    assert.ok(captionBounds.dragRight <= captionBounds.x, 'Drag region must not cover caption buttons');
+    assert.equal(captionBounds.dragStyle, 'drag');
+    assert.equal(captionBounds.controlStyle, 'no-drag');
+    const captionColor = () => captions.evaluate(element => getComputedStyle(element).color);
+    const checkHighlight = async (theme) => {
+      await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus());
+      const hover = theme === 'dark' ? 'rgba(226, 234, 248, 0.14)' : 'rgb(229, 234, 244)';
+      const pressed = theme === 'dark' ? 'rgba(226, 234, 248, 0.22)' : 'rgb(216, 223, 237)';
+      for (const name of ['最小化', '最大化', '关闭']) {
+        const button = captions.getByRole('button', { name, exact: true });
+        const bounds = await button.boundingBox();
+        assert.equal(bounds.width, 46);
+        assert.equal(bounds.height, 32);
+        assert.equal(await button.evaluate(element => getComputedStyle(element).getPropertyValue('-webkit-app-region')), 'no-drag');
+        await button.hover();
+        await page.waitForFunction(({ name, hover }) => {
+          const button = document.querySelector(`.desktop-window-button[aria-label="${name}"]`);
+          return button?.matches(':hover') && getComputedStyle(button).backgroundColor === hover;
+        }, { name, hover });
+        assert.equal(await button.evaluate(element => getComputedStyle(element).backgroundColor), hover);
+      }
+      await captions.screenshot({ path: path.join(artifacts, `titlebar-${theme}-close-hover.png`) });
+      const close = captions.getByRole('button', { name: '关闭', exact: true });
+      await close.hover();
+      await page.mouse.down();
+      await page.waitForTimeout(160);
+      assert.equal(await close.evaluate(element => getComputedStyle(element).backgroundColor), pressed,
+        JSON.stringify(await close.evaluate(element => ({ active: element.matches(':active'), hover: element.matches(':hover'), focused: document.activeElement === element }))));
+      await captions.screenshot({ path: path.join(artifacts, `titlebar-${theme}-close-pressed.png`) });
+      // Release away from the caption so the pressed-state check never closes it.
+      await page.mouse.move(300, 200);
+      await page.mouse.up();
+    };
     await page.getByRole('radio', { name: '深色', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.first-run-onboarding.dark'));
-    assert.equal(await captionColor(), '#edf1f7');
+    assert.equal(await captionColor(), 'rgb(237, 241, 247)');
+    await checkHighlight('dark');
     await page.screenshot({ path: path.join(artifacts, 'titlebar-onboarding-dark.png') });
     await page.getByRole('radio', { name: '浅色', exact: true }).click();
     await page.waitForFunction(() => !document.querySelector('.first-run-onboarding.dark'));
-    assert.equal(await captionColor(), '#27313c');
+    assert.equal(await captionColor(), 'rgb(75, 85, 104)');
+    await checkHighlight('light');
     await page.screenshot({ path: path.join(artifacts, 'titlebar-onboarding-light.png') });
     await dismissFirstRunOnboarding(page);
+    await page.evaluate(() => {
+      const backdrop = document.createElement('div');
+      backdrop.className = 'duplicate-finder-backdrop';
+      backdrop.dataset.titlebarSmoke = 'true';
+      document.body.append(backdrop);
+    });
+    const captionsReachable = await captions.evaluate(element => {
+      const bounds = element.getBoundingClientRect();
+      return element.contains(document.elementFromPoint(bounds.right - 23, bounds.top + 16));
+    });
+    await page.evaluate(() => document.querySelector('[data-titlebar-smoke]')?.remove());
+    assert.equal(captionsReachable, true, 'Window captions must remain usable above application modals');
     const menuVisible = () => instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMenuBarVisible());
     const state = await instance.evaluate(({ Menu, BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0];
@@ -87,14 +131,14 @@ async function main() {
     await page.getByRole('button', { name: '外观', exact: true }).click();
     await page.getByRole('button', { name: '深色', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.app-shell.theme-dark'));
-    assert.equal(await captionColor(), '#edf1f7');
+    assert.equal(await captionColor(), 'rgb(237, 241, 247)');
     await page.getByRole('button', { name: '系统', exact: true }).click();
     await page.emulateMedia({ colorScheme: 'light' });
     await page.waitForFunction(() => document.querySelector('.app-shell.theme-light'));
-    assert.equal(await captionColor(), '#27313c');
+    assert.equal(await captionColor(), 'rgb(75, 85, 104)');
     await page.emulateMedia({ colorScheme: 'dark' });
     await page.waitForFunction(() => document.querySelector('.app-shell.theme-dark'));
-    assert.equal(await captionColor(), '#edf1f7');
+    assert.equal(await captionColor(), 'rgb(237, 241, 247)');
     await page.getByRole('button', { name: '浅色', exact: true }).click();
     await page.getByRole('button', { name: '返回', exact: true }).click();
     await page.getByRole('heading', { name: '外观', exact: true, level: 1 }).waitFor({ state: 'detached' });
@@ -105,13 +149,23 @@ async function main() {
       await instance.evaluate(({ BrowserWindow }, width) => BrowserWindow.getAllWindows()[0].setSize(width, 860), width);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       const controls = await page.locator('.shell-controls').boundingBox();
-      assert.ok(controls.x + controls.width <= overlay.dragLeft, 'Application tools stay outside drag area');
+      assert.ok(controls.x + controls.width <= captionBounds.dragLeft, 'Application tools stay outside drag area');
+      const right = await captions.boundingBox();
+      assert.equal(right.width, 138);
+      assert.equal(right.x + right.width, await page.evaluate(() => innerWidth));
       await page.screenshot({ path: path.join(artifacts, `titlebar-local-${width}.png`) });
     }
-    await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].maximize());
+    await captions.getByRole('button', { name: '最大化', exact: true }).click();
+    await captions.getByRole('button', { name: '还原', exact: true }).waitFor();
     assert.equal(await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized()), true);
+    await captions.getByRole('button', { name: '还原', exact: true }).click();
+    await captions.getByRole('button', { name: '最大化', exact: true }).waitFor();
+    assert.equal(await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMaximized()), false);
+    await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].maximize());
+    await captions.getByRole('button', { name: '还原', exact: true }).waitFor();
     await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].unmaximize());
-    await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].minimize());
+    await captions.getByRole('button', { name: '最大化', exact: true }).waitFor();
+    await captions.getByRole('button', { name: '最小化', exact: true }).click();
     assert.equal(await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isMinimized()), true);
     await instance.evaluate(({ BrowserWindow }) => { const win = BrowserWindow.getAllWindows()[0]; win.restore(); win.focus(); });
     // An empty library has no player bar, so exercise the existing tray action.
@@ -131,12 +185,12 @@ async function main() {
     fs.mkdirSync(path.dirname(screenshot), { recursive: true });
     await page.screenshot({ path: screenshot });
     assert.equal(await page.evaluate(() => window.listenMusic.setCloseBehavior('tray')), 'tray');
-    await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].close());
+    await captions.getByRole('button', { name: '关闭', exact: true }).click();
     assert.equal(await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible()), false);
     await instance.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].show());
     assert.equal(await page.evaluate(() => window.listenMusic.setCloseBehavior('exit')), 'exit');
     assert.deepEqual(errors, []);
-    console.log('Windows titlebar smoke passed: native overlay, onboarding/theme contrast, caption bounds, maximize/minimize, mini mode and tray close');
+    console.log('Windows titlebar smoke passed: custom captions, neutral hover/pressed colors, onboarding/theme contrast, caption bounds, maximize/restore/minimize, mini mode and tray close');
   } finally {
     try {
       if (instance) await instance.close();

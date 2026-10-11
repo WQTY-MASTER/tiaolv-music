@@ -862,8 +862,7 @@ function createWindow() {
     icon: applicationIconPath(),
     backgroundColor: "#111111",
     ...(process.platform === "win32" ? {
-      titleBarStyle: "hidden" as const,
-      titleBarOverlay: { color: "#00000000", symbolColor: "#27313c", height: 32 }
+      titleBarStyle: "hidden" as const
     } : {}),
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
@@ -875,6 +874,9 @@ function createWindow() {
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   restrictWindowNavigation(win);
   attachWindowShortcuts(win);
+  const publishMaximized = () => win.webContents.send("main-window-maximized", win.isMaximized());
+  win.on("maximize", publishMaximized);
+  win.on("unmaximize", publishMaximized);
   win.on("close", (event) => {
     if (appQuitting || closeBehavior === "exit") return;
     event.preventDefault();
@@ -903,12 +905,27 @@ function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
 }
 
-ipcMain.handle("set-window-titlebar-theme", (event, dark: unknown) => {
-  if (process.platform !== "win32" || typeof dark !== "boolean"
-    || !mainWindow || BrowserWindow.fromWebContents(event.sender) !== mainWindow) return false;
-  mainWindow.setTitleBarOverlay({
-    color: "#00000000", symbolColor: dark ? "#edf1f7" : "#27313c", height: 32
-  });
+function mainCaptionWindow(event: Electron.IpcMainInvokeEvent): BrowserWindow | null {
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()
+    || BrowserWindow.fromWebContents(event.sender) !== mainWindow
+    || event.senderFrame !== mainWindow.webContents.mainFrame) return null;
+  return mainWindow;
+}
+
+ipcMain.handle("main-window-get-maximized", (event) => {
+  const win = mainCaptionWindow(event);
+  return win ? win.isMaximized() : null;
+});
+
+ipcMain.handle("main-window-command", (event, command: unknown) => {
+  const win = mainCaptionWindow(event);
+  if (!win) return false;
+  if (command === "minimize") win.minimize();
+  else if (command === "toggle-maximize") {
+    if (win.isMaximized()) win.unmaximize();
+    else win.maximize();
+  } else if (command === "close") win.close();
+  else return false;
   return true;
 });
 

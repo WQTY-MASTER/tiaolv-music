@@ -1,6 +1,6 @@
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../../shared/about";
-import type { CloseBehavior } from "../../shared/desktopIntegration";
+import type { CloseBehavior, MainWindowCommand } from "../../shared/desktopIntegration";
 import type { MiniPlayerPreferences } from "./services/appearanceSettings";
 import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../../shared/miniPlayer";
 import type {
@@ -31,7 +31,9 @@ interface SystemTrayState {
 
 interface ListenMusicBridge {
   isWindows: boolean;
-  setWindowTitlebarTheme(dark: boolean): Promise<boolean>;
+  mainWindowCommand(command: MainWindowCommand): Promise<boolean>;
+  getMainWindowMaximized(): Promise<boolean | null>;
+  onMainWindowMaximized(listener: (maximized: boolean) => void): () => void;
   getShortcuts(): Promise<ShortcutSnapshot>;
   updateShortcuts(patch: ShortcutPatch, reset?: boolean): Promise<ShortcutSnapshot>;
   setShortcutRecording(recording: boolean): Promise<ShortcutSnapshot>;
