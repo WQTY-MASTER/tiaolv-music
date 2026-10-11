@@ -4,7 +4,7 @@
   "description": "支持本地音乐与多平台流媒体的 Windows 桌面播放器",
   "author": "WQTY-MASTER",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "license": "MIT",
   "repository": "https://github.com/WQTY-MASTER/tiaolv-music",
   "main": "out/main/main.js",

@@ -30,7 +30,7 @@ let copiedTimer: number | undefined;
 const system = computed(() => snapshot.value?.system);
 const update = computed<UpdateCheckResult>(() => updateEvent.value ?? snapshot.value?.update ?? {
   status: "idle",
-  currentVersion: "0.1.1"
+  currentVersion: "0.1.2"
 });
 const updateBusy = computed(() => checking.value || ["downloading", "downloaded", "installing"].includes(update.value.status));
 const releaseVisible = computed(() => Boolean(update.value.latestVersion) && !["idle", "checking", "latest"].includes(update.value.status));

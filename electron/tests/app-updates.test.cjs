@@ -24,7 +24,7 @@ class Engine extends EventEmitter {
   downloads = 0;
   installs = 0;
   info = info;
-  setFeedURL(value) { this.feed = value; }
+  setFeedURL(value) { this.feed = value; (this.feeds ??= []).push(value); }
   async checkForUpdates() {
     this.checks++;
     this.emit("checking-for-update");
@@ -81,6 +81,53 @@ test("GitHub updates require explicit download and explicit installation", async
   assert.equal(result.releaseNotes, "Update notes");
   assert.equal(updater.downloads, 0);
   assert.equal(updater.installs, 0);
+});
+
+test("HTTPS distribution server is checked before GitHub without downloading", async () => {
+  const { service, updater } = await fixture();
+  assert.equal((await service.check()).status, "available");
+  assert.deepEqual(updater.feed, { provider: "generic", url: "https://wqty.online/updates/windows/" });
+  assert.equal(updater.checks, 1);
+  assert.equal(updater.downloads, 0);
+});
+
+test("unavailable distribution server falls back to GitHub once", async () => {
+  const { service, updater, changes } = await fixture();
+  const check = updater.checkForUpdates.bind(updater);
+  updater.checkForUpdates = async () => {
+    if (updater.feed.provider === "generic") {
+      updater.checks++;
+      const error = new Error("server unavailable");
+      updater.emit("error", error);
+      throw error;
+    }
+    return check();
+  };
+  assert.equal((await service.check()).status, "available");
+  assert.equal(updater.checks, 2);
+  assert.equal(updater.feed.provider, "github");
+  assert.ok(!changes.some(change => change.status === "error"));
+  assert.equal(updater.downloads, 0);
+});
+
+test("invalid server metadata falls back and two failed checks cannot permit download", async () => {
+  const { service, updater } = await fixture();
+  const check = updater.checkForUpdates.bind(updater);
+  updater.checkForUpdates = () => {
+    updater.info = updater.feed.provider === "generic" ? { ...info, files: [] } : info;
+    return check();
+  };
+  assert.equal((await service.check()).status, "available");
+  assert.equal(updater.feed.provider, "github");
+  const failed = await fixture();
+  failed.updater.checkForUpdates = async () => {
+    if (failed.updater.feed.provider === "github") throw new Error("GitHub unavailable");
+    failed.updater.emit("update-available", { ...info, releaseNotes: {} });
+    return { updateInfo: info };
+  };
+  assert.equal((await failed.service.check()).status, "error");
+  await failed.service.download();
+  assert.equal(failed.updater.downloads, 0);
 });
 
 test("checks/downloads are deduplicated and cannot discard a ready installer", async () => {

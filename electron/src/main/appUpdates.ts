@@ -2,6 +2,7 @@ import type { AppUpdater, UpdateInfo } from "electron-updater";
 import { compareReleaseVersions, normalizeReleaseVersion, type UpdateCheckResult } from "../shared/about";
 
 const RELEASES_URL = "https://github.com/WQTY-MASTER/tiaolv-music/releases/latest";
+const SERVER_UPDATE_URL = "https://wqty.online/updates/windows/";
 type UpdateEngine = Pick<AppUpdater, "autoDownload" | "autoInstallOnAppQuit" | "allowPrerelease" | "allowDowngrade" | "setFeedURL" | "on" | "checkForUpdates" | "downloadUpdate" | "quitAndInstall">;
 
 interface UpdateServiceOptions {
@@ -43,7 +44,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     publish({ status: "error", progress: undefined, message: message ?? (
       /checksum|sha512|sha256|signature/i.test(detail)
         ? "更新包校验失败，未安装。请重新下载或前往 Release 页面。"
-        : "GitHub 更新请求失败，请检查网络后重试，或打开 Release 页面手动下载。"
+        : "更新请求失败，请检查网络后重试，或打开 GitHub Release 页面手动下载。"
     ) });
   }
 
@@ -103,7 +104,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     if (phase === "install") {
       phase = null;
       fail(error, "更新安装失败，请退出软件后前往 Release 页面手动安装。" );
-    } else if (phase) fail(error);
+    } else if (phase === "download") fail(error);
   });
 
   function check(): Promise<UpdateCheckResult> {
@@ -111,14 +112,25 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     if (phase || readyToInstall || !supported()) return Promise.resolve(getSnapshot());
     phase = "check";
     hasUpdate = false;
-    publish({ status: "checking", message: "正在检查 GitHub 更新。", progress: undefined }, true);
-    checkTask = updater.checkForUpdates().then(result => {
+    updater.setFeedURL({ provider: "generic", url: SERVER_UPDATE_URL });
+    publish({ status: "checking", message: "正在检查更新。", progress: undefined }, true);
+    const checkSource = async () => {
+      const result = await updater.checkForUpdates();
       if (state.status === "checking") {
         if (result) acceptRelease(result.updateInfo, true);
         else fail("missing-release");
       }
       return getSnapshot();
-    }).catch(error => { fail(error); return getSnapshot(); }).finally(() => { phase = null; checkTask = undefined; });
+    };
+    checkTask = checkSource().then(result => {
+      if (result.status === "error") throw new Error("invalid-primary-release");
+      return result;
+    }).catch(() => {
+      hasUpdate = false;
+      updater.setFeedURL({ provider: "github", owner: "WQTY-MASTER", repo: "tiaolv-music", private: false });
+      publish({ status: "checking", message: "服务器更新暂不可用，正在检查 GitHub 备用源。" }, true);
+      return checkSource();
+    }).catch(error => { hasUpdate = false; fail(error); return getSnapshot(); }).finally(() => { phase = null; checkTask = undefined; });
     return checkTask;
   }
 

@@ -1,12 +1,18 @@
 # GitHub Updates
 
+The first updater-enabled build is 0.1.1. Version 0.1.2 adds the existing
+`https://wqty.online/updates/windows/` static distribution directory as the
+primary check source, with one GitHub fallback on a failed server check.
+See `server-distribution.md` for the user-selected manual Baota upload procedure.
+
 The first updater-enabled Windows client is 0.1.1. Existing 0.1.0 installations
 need one manual overwrite installation because they do not contain the updater
 implementation. This is not solely a Windows registry limitation.
 
 ## Client Behavior
 
-- The existing About settings entry checks public GitHub Releases.
+- The existing About settings entry checks the HTTPS distribution server, then
+  public GitHub Releases once if the server check or metadata validation fails.
 - The startup preference checks only; it does not download or install.
 - The user selects download, sees progress, then selects restart/install.
 - Download/network/checksum errors keep a browser link to the project Release.
@@ -26,6 +32,11 @@ implementation. This is not solely a Windows registry limitation.
    These are the update assets; do not upload the staged runtime directory,
    private tokens, user databases or account cookies. Keep previous release
    assets available for differential downloads.
+5. Use the exact same files for the static server. The uploaded installer asset
+   name must match `latest.yml` (for example
+   `tiaolv-music-electron-setup-0.1.2.exe`), even if the local builder artifact has
+   a Chinese display name. Do not build a separate server installer. Upload
+   binaries first and the server manifest last; see `server-distribution.md`.
 
 A code push alone does not publish a client update. Locally building with
 `--publish never` creates the assets without releasing them. A client already
