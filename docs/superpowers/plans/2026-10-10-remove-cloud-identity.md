@@ -34,9 +34,9 @@ sources, generated build output and dedicated identity documentation.
 - [x] Update `README.md` to describe no app registration, optional provider login,
   local credentials and the unchanged three-service runtime; remove dead module links.
 - [x] Remove only `cloud-server/target/` from `.gitignore`, retaining credential protections.
-- [x] Update `docs/release-checklist.md` and the phase-one boundary spec so app identity
+- [x] Update `docs/发布检查与恢复说明.md` and the phase-one boundary spec so app identity
   is not a future requirement. Mark the original migration inventory historical.
-- [x] Keep `docs/local-first-product-scope.md` as the current product decision.
+- [x] Keep `docs/本地优先产品说明.md` as the current product decision.
 
 ## Task 4: Verify Without Live Account Changes
 

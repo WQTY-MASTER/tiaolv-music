@@ -9,7 +9,7 @@ automated regression checks. Real-network acceptance remains unverified.
 Updated product decision on 2026-10-10: the desktop and its loopback services own
 local music, playback, preferences and provider credentials. No independent app
 registration, invitation or activation is required. QQ/NetEase login is optional
-and local. See `docs/local-first-product-scope.md` for the current scope.
+and local. See `docs/本地优先产品说明.md` for the current scope.
 
 This phase implements only the client request boundary. It does not implement
 registration, authentication, public serving or migration of existing data.
@@ -125,7 +125,7 @@ behavior and passing regression checks, not a publicly deployable service.
 Implementation acceptance passed on 2026-10-10: focused tests, the full
 frontend/script suite, all three TypeScript projects, production build and
 three mocked browser smoke suites. Independent review found no actionable
-defects. See `docs/release-checklist.md` for results and verification limits.
+defects. See `docs/发布检查与恢复说明.md` for results and verification limits.
 
 ## Implementation Safety
 

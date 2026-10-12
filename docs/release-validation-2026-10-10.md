@@ -299,5 +299,5 @@ performed, and no user database reset, repair or rollback was executed.
 The installer is the current local-first desktop build, not a public-server
 client. It has no independent project account or invitation requirement; QQ and
 NetEase login remain optional platform features. The current scope is recorded
-in `docs/local-first-product-scope.md` and `docs/release-checklist.md`. Public
+in `docs/本地优先产品说明.md` and `docs/发布检查与恢复说明.md`. Public
 online services, if added later, require a separate design and acceptance.

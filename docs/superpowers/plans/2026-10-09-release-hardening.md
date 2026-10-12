@@ -46,7 +46,7 @@ JUnit / MockMvc, Playwright, Maven and electron-builder.
 
 Automated results are recorded in `docs/release-validation-2026-10-10.md`.
 The manual release gates remain unverified. The current local-first product
-decision is recorded in `docs/local-first-product-scope.md`; independent project
+decision is recorded in `docs/本地优先产品说明.md`; independent project
 accounts and invitations have been removed. This work does not implement public
 online services or multi-user isolation.
 

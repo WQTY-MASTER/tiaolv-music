@@ -1,9 +1,9 @@
-# GitHub Updates
+# GitHub 在线更新说明
 
 The first updater-enabled build is 0.1.1. Version 0.1.2 adds the existing
 `https://wqty.online/updates/windows/` static distribution directory as the
 primary check source, with one GitHub fallback on a failed server check.
-See `server-distribution.md` for the user-selected manual Baota upload procedure.
+See `服务器部署说明.md` for the user-selected manual Baota upload procedure.
 
 The first updater-enabled Windows client is 0.1.1. Existing 0.1.0 installations
 need one manual overwrite installation because they do not contain the updater
@@ -36,7 +36,7 @@ implementation. This is not solely a Windows registry limitation.
    name must match `latest.yml` (for example
    `tiaolv-music-electron-setup-0.1.2.exe`), even if the local builder artifact has
    a Chinese display name. Do not build a separate server installer. Upload
-   binaries first and the server manifest last; see `server-distribution.md`.
+   binaries first and the server manifest last; see `服务器部署说明.md`.
 
 A code push alone does not publish a client update. Locally building with
 `--publish never` creates the assets without releasing them. A client already

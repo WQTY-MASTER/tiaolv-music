@@ -2,12 +2,12 @@
 
 调律音乐是一款面向 Windows 桌面的本地与流媒体音乐播放器，使用 Electron、Vue 3 与 Java 21 构建。
 
-[官网与下载](https://wqty.online/#download) · [GitHub Releases](https://github.com/WQTY-MASTER/tiaolv-music/releases/latest) · [更新日志](CHANGELOG.md)
+[官网与下载](https://wqty.online/#download) · [GitHub Releases](https://github.com/WQTY-MASTER/tiaolv-music/releases/latest) · [更新日志](更新日志.md)
 
 打开即可使用，无需注册调律账号、邀请码或激活。首次启动直接进入八页引导，
 可以跳过；QQ 音乐和网易云音乐仅在使用对应平台功能时按需登录。
 本地音乐、歌单、历史、设置和平台登录凭据由客户端及其本机服务管理，
-不上传到调律的分发服务器。当前产品定位见 [本地优先说明](docs/local-first-product-scope.md)。
+不上传到调律的分发服务器。当前产品定位见 [本地优先说明](docs/本地优先产品说明.md)。
 
 ## 下载与安装
 
@@ -22,7 +22,7 @@
 开发环境要求仅适用于下方的源码开发流程。
 
 已有旧版请先完全退出软件，包括托盘，再覆盖安装。默认保留应用数据，
-无需卸载或删除音乐库；重要数据可先按 [备份与恢复说明](docs/release-checklist.md#offline-backup) 备份。
+无需卸载或删除音乐库；重要数据可先按 [备份与恢复说明](docs/发布检查与恢复说明.md#offline-backup) 备份。
 
 ## 当前能力
 
@@ -51,7 +51,7 @@
 
 未接入更新功能的旧版（如 0.1.0）需要先手动覆盖安装一次。
 哈希校验不能替代发布者代码签名，也不能防御安装包与清单同时被篡改。
-发布者说明见 [GitHub 更新流程](docs/github-updates.md) 和 [服务器分发说明](docs/server-distribution.md)。
+发布者说明见 [GitHub 更新流程](docs/GitHub更新说明.md) 和 [服务器分发说明](docs/服务器部署说明.md)。
 
 ## 数据与服务器
 
@@ -105,7 +105,7 @@ npm run build
 ```
 
 浏览器验收需要先启动网页预览和安装 Playwright；具体环境、覆盖范围与
-人工验收项目见 [发布检查与恢复说明](docs/release-checklist.md)。
+人工验收项目见 [发布检查与恢复说明](docs/发布检查与恢复说明.md)。
 
 ## Windows 安装包
 

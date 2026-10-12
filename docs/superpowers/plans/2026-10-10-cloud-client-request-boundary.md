@@ -94,7 +94,7 @@ existing trusted-window/frame checks, redirect policies and header stripping.
 
 ## 4. Acceptance and Documentation
 
-Files: `electron/package.json`, `docs/release-checklist.md`, this plan and spec.
+Files: `electron/package.json`, `docs/发布检查与恢复说明.md`, this plan and spec.
 
 - [x] Add `test:backend-routes` using the existing standalone test-script pattern:
 
@@ -112,4 +112,4 @@ Files: `electron/package.json`, `docs/release-checklist.md`, this plan and spec.
 
 Review completed without actionable findings. An independent focused rerun
 passed 22 tests. Full acceptance results and unverified real-network behavior
-are recorded in `docs/release-checklist.md`.
+are recorded in `docs/发布检查与恢复说明.md`.
