@@ -11,10 +11,10 @@
 
 ## 下载与安装
 
-当前发布版本为 **0.1.2**，支持 **Windows x64**。
+当前发布版本为 **0.1.3**，支持 **Windows x64**。
 
 1. 从 [官网下载页](https://wqty.online/#download) 或 [GitHub Releases](https://github.com/WQTY-MASTER/tiaolv-music/releases/latest) 下载安装包。
-2. 双击 `tiaolv-music-electron-setup-0.1.2.exe`，按安装向导选择目录并完成安装。
+2. 双击 `Tiaolv-Setup-0.1.3.exe`，按安装向导选择目录并完成安装。
 3. 打开调律音乐，导入本地音乐；使用在线曲库时，再登录自己的 QQ 音乐或网易云音乐账号。
 
 这是安装版，不是免安装版。安装包已包含所需 Java 运行时、本机后端和
@@ -52,6 +52,7 @@
 未接入更新功能的旧版（如 0.1.0）需要先手动覆盖安装一次。
 哈希校验不能替代发布者代码签名，也不能防御安装包与清单同时被篡改。
 发布者说明见 [GitHub 更新流程](docs/GitHub更新说明.md) 和 [服务器分发说明](docs/服务器部署说明.md)。
+官网的静态源码与公开截图保存在 [deploy/site](deploy/site/README.md)，与当前发布版本同步。
 
 ## 数据与服务器
 
@@ -115,6 +116,8 @@ npm run release:win
 
 产物位于 `electron/release/`。安装包包含 Java、后端和两个 API 的生产依赖，
 用户机器不需要安装 Node、Java 或 Maven。当前只支持 Windows x64。
+从 0.1.3 起，安装包统一命名为 `Tiaolv-Setup-<版本号>.exe`。
+软件名称、应用身份和数据目录不变；旧版本下载链接继续保留。
 此命令不代替干净 Windows 安装、真实账号播放、代码签名及许可证审核。
 
 启动时自动管理 `17890`、`3000`、`3300` 三个服务，退出仅清理自身启动的进程。

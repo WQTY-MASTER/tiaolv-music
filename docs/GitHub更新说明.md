@@ -34,13 +34,19 @@ implementation. This is not solely a Windows registry limitation.
    assets available for differential downloads.
 5. Use the exact same files for the static server. The uploaded installer asset
    name must match `latest.yml` (for example
-   `tiaolv-music-electron-setup-0.1.2.exe`), even if the local builder artifact has
-   a Chinese display name. Do not build a separate server installer. Upload
+   `Tiaolv-Setup-0.1.3.exe`). From 0.1.3, the NSIS artifact name is explicitly
+   `Tiaolv-Setup-${version}.${ext}`; the product name remains 调律音乐. Do not
+   rename only the EXE or rebuild a separate server installer. Upload
    binaries first and the server manifest last; see `服务器部署说明.md`.
 
 A code push alone does not publish a client update. Locally building with
 `--publish never` creates the assets without releasing them. A client already
 running 0.1.1 needs a higher published version to exercise a real upgrade.
+
+Keep existing 0.1.2 files and URLs unchanged. The package name, app ID and data
+directory do not change when the installer artifact name changes. Publish the
+same new EXE, blockmap and manifest to both channels; update website download
+links only after the corresponding server binaries are available.
 
 ## Integrity and Release Trust
 

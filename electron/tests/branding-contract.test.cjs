@@ -16,6 +16,7 @@ assert.equal(electronPackage.name, "tiaolv-music-electron", "Electron 包名应�
 assert.equal(electronPackage.productName, "调律音乐", "安装包产品名应为调律音乐");
 assert.equal(electronPackage.build.appId, "com.tiaolvmusic.desktop", "Windows App ID 应使用新品牌");
 assert.equal(electronPackage.build.win.icon, "resources/app-icon.ico", "Windows 安装包应使用正式图标");
+assert.equal(electronPackage.build.nsis.artifactName, 'Tiaolv-Setup-${version}.${ext}', "安装包应使用简短且包含版本号的固定命名");
 assert.equal(electronPackage.scripts["test:branding"], "node tests/branding-contract.test.cjs");
 
 assert.match(html, /<title>调律音乐<\/title>/, "窗口标题应为调律音乐");
