@@ -5,6 +5,8 @@ import net from "node:net";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
+import type { Readable } from "node:stream";
 
 type ServiceId = "backend" | "netease" | "qq";
 interface RuntimeService {
@@ -41,6 +43,7 @@ export interface ServiceRuntimeOptions {
   stopTimeoutMs?: number;
   environment?: NodeJS.ProcessEnv;
   onFatalError?: (error: Error) => void;
+  onDiagnostic?: (id: ServiceId, event: string, detail?: unknown) => void | Promise<void>;
   dependencies?: Partial<RuntimeDependencies>;
 }
 
@@ -133,6 +136,39 @@ interface OwnedService {
   exited: boolean;
   failure?: Error;
   exit: Promise<void>;
+  status: "starting" | "ready" | "exited";
+  exitCode?: number | null;
+  signal?: string | null;
+}
+
+function captureErrors(stream: Readable | null, receive: (line: string) => void) {
+  if (!stream) return;
+  const decoder = new StringDecoder("utf8");
+  let buffered = "";
+  let oversized = false;
+  const finish = () => {
+    const line = buffered.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r$/, "");
+    buffered = "";
+    if (!oversized && /\b(error|exception|fatal|warn(?:ing)?)\b|^\s*(at\s|Caused by:|Suppressed:|\.\.\.\s*\d+\s*more)/i.test(line)) {
+      // Provider request/response dumps are not diagnostic evidence we can safely export.
+      if (/^\s*[\[{]|\b(?:headers|requestBody|responseBody|body|payload)\s*[:=]/i.test(line)) receive("[service payload omitted]");
+      else receive(line);
+    }
+    oversized = false;
+  };
+  const consume = (text: string) => {
+    const parts = text.split("\n");
+    parts.forEach((part, index) => {
+      if (!oversized) {
+        if (buffered.length + part.length > 8192) { buffered = ""; oversized = true; }
+        else buffered += part;
+      }
+      if (index < parts.length - 1) finish();
+    });
+  };
+  stream.on("data", chunk => consume(typeof chunk === "string" ? chunk : decoder.write(chunk)));
+  stream.once("end", () => { consume(decoder.end()); finish(); });
+  stream.on("error", () => receive("Error: service output pipe failed"));
 }
 
 export function createServiceRuntime(options: ServiceRuntimeOptions) {
@@ -155,8 +191,13 @@ export function createServiceRuntime(options: ServiceRuntimeOptions) {
   let fatalReported = false;
   const logTasks = new Set<Promise<unknown>>();
 
-  function log(id: ServiceId, event: string) {
-    const task = dependencies.appendLog(path.join(options.logDirectory, `${id}.log`), `${new Date().toISOString()} ${id} ${event}\n`);
+  function log(id: ServiceId, event: string, detail?: unknown) {
+    let task: Promise<unknown>;
+    try {
+      task = options.onDiagnostic ? Promise.resolve(options.onDiagnostic(id, event, detail))
+        : dependencies.appendLog(path.join(options.logDirectory, `${id}.log`), `${new Date().toISOString()} ${id} ${event}\n`);
+    } catch { task = Promise.resolve(); }
+    task = task.catch(() => undefined);
     logTasks.add(task);
     void task.catch(() => undefined).finally(() => logTasks.delete(task));
     return task;
@@ -238,24 +279,33 @@ export function createServiceRuntime(options: ServiceRuntimeOptions) {
     ensureStarting();
     let child: ChildProcess;
     try {
-      child = dependencies.spawn(executable, args, { cwd, env, windowsHide: true, shell: false, stdio: ["ignore", "ignore", "ignore"] });
-    } catch {
+      child = dependencies.spawn(executable, args, { cwd, env, windowsHide: true, shell: false,
+        stdio: options.onDiagnostic ? ["ignore", "pipe", "pipe"] : ["ignore", "ignore", "ignore"] });
+    } catch (error) {
+      await log(service.id, "spawn-failed", { error });
       throw new Error(`${service.id} service failed to start.`);
     }
     let resolveExit!: () => void;
-    const record: OwnedService = { id: service.id, child, exited: false, exit: new Promise(resolve => { resolveExit = resolve; }) };
+    const record: OwnedService = { id: service.id, child, status: "starting", exited: false, exit: new Promise(resolve => { resolveExit = resolve; }) };
     owned.push(record);
-    child.on("error", () => {
+    if (options.onDiagnostic) {
+      captureErrors(child.stdout, line => { void log(service.id, "output-error", { stream: "stdout", line }); });
+      captureErrors(child.stderr, line => { void log(service.id, "output-error", { stream: "stderr", line }); });
+    }
+    child.on("error", error => {
       record.failure = new Error(`${service.id} service failed to start.`);
       if (!child.pid) { record.exited = true; resolveExit(); }
-      void log(service.id, "failed").catch(() => undefined);
+      void log(service.id, "failed", { error });
       unexpectedFailure(record);
     });
-    child.once("exit", () => {
+    child.once("exit", (exitCode, signal) => {
       record.exited = true;
+      record.status = "exited";
+      record.exitCode = exitCode;
+      record.signal = signal;
       resolveExit();
       if (state === "starting" || state === "running") record.failure = new Error(`${service.id} service exited unexpectedly.`);
-      void log(service.id, "exited").catch(() => undefined);
+      void log(service.id, "exited", { exitCode, signal, unexpected: state === "starting" || state === "running" });
       unexpectedFailure(record);
     });
     const deadline = dependencies.now() + startupTimeout;
@@ -263,7 +313,7 @@ export function createServiceRuntime(options: ServiceRuntimeOptions) {
       ensureStarting();
       const ready = await dependencies.isHealthy(`http://127.0.0.1:${service.port}${service.healthPath}`);
       ensureStarting();
-      if (ready) { await log(service.id, "ready"); ensureStarting(); return; }
+      if (ready) { record.status = "ready"; await log(service.id, "ready"); ensureStarting(); return; }
       if (dependencies.now() >= deadline) throw new Error(`${service.id} service readiness timed out.`);
       await dependencies.sleep(pollInterval);
     }
@@ -297,5 +347,8 @@ export function createServiceRuntime(options: ServiceRuntimeOptions) {
     return startTask;
   }
 
-  return { start, stop };
+  return { start, stop, snapshot: () => Object.entries(expectedServices).map(([id, service]) => {
+    const child = owned.find(item => item.id === id);
+    return { id, port: service.port, status: child?.status ?? "not-started", exitCode: child?.exitCode, signal: child?.signal };
+  }) };
 }

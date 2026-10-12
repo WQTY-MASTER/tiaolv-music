@@ -19,6 +19,20 @@ assert.equal(electronPackage.build.win.icon, "resources/app-icon.ico", "Windows 
 assert.equal(electronPackage.build.nsis.artifactName, 'Tiaolv-Setup-${version}.${ext}', "安装包应使用简短且包含版本号的固定命名");
 assert.equal(electronPackage.scripts["test:branding"], "node tests/branding-contract.test.cjs");
 
+const updateConfig = fs.readFileSync(path.join(workspaceRoot, "deploy/wqty-static-updates.nginx.conf"), "utf8");
+const artifactRule = updateConfig.match(/if\s*\(\$uri\s+!~\s+"([^"]+)"\)/);
+assert.ok(artifactRule, "Update downloads need a versioned artifact allowlist");
+const artifactPattern = new RegExp(artifactRule[1]);
+const installer = electronPackage.build.nsis.artifactName
+  .replace("${version}", electronPackage.version).replace("${ext}", "exe");
+for (const name of [installer, `${installer}.blockmap`, "Tiaolv-Setup-0.1.2.exe.blockmap",
+  "tiaolv-music-electron-setup-0.1.2.exe", "tiaolv-music-electron-setup-0.1.2.exe.blockmap"]) {
+  assert.ok(artifactPattern.test(`/updates/windows/${name}`), `Download rule blocks ${name}`);
+}
+for (const name of ["README.md", ".env", "runtime/backend.jar", `${installer}.bak`, "Tiaolv-Setup-invalid.exe"]) {
+  assert.ok(!artifactPattern.test(`/updates/windows/${name}`), `Download rule exposes ${name}`);
+}
+
 assert.match(html, /<title>调律音乐<\/title>/, "窗口标题应为调律音乐");
 assert.match(main, /title:\s*"调律音乐"/, "托盘默认标题应为调律音乐");
 assert.match(main, /setAppUserModelId\("com\.tiaolvmusic\.desktop"\)/, "运行时 App ID 应与安装包一致");

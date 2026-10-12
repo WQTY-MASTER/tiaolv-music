@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { standaloneBackendRequestUrl } from "../shared/backendRoutes";
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../shared/about";
+import { sanitizeDiagnosticPath, type RendererDiagnostic, type DiagnosticAppearance, type DiagnosticExportResult } from "../shared/diagnostics";
 import type { CloseBehavior, MainWindowCommand } from "../shared/desktopIntegration";
 import type { MiniPlayerPreferences } from "../renderer/src/services/appearanceSettings";
 import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../shared/miniPlayer";
@@ -32,14 +33,24 @@ interface SystemTrayState {
 }
 
 async function request(path: string, init?: RequestInit) {
-  const response = await fetch(standaloneBackendRequestUrl(path), init);
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
+  const started = performance.now();
+  let status = 0;
+  try {
+    const response = await fetch(standaloneBackendRequestUrl(path), init);
+    status = response.status;
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
+    return await response.json();
+  } catch (error) {
+    reportDiagnostic({ kind: "request", path: sanitizeDiagnosticPath(path), method: (init?.method || "GET").toUpperCase(),
+      status, elapsedMs: performance.now() - started, message: error instanceof Error ? error.message : "Request failed" });
+    throw error;
   }
-  return response.json();
 }
 
+function reportDiagnostic(value: RendererDiagnostic) { ipcRenderer.send("report-diagnostic", value); }
+
 const miniBridge = {
+  reportDiagnostic,
   getMiniPlayerSnapshot: (): Promise<MiniWindowSnapshot | null> => ipcRenderer.invoke("mini-player-get-snapshot"),
   onMiniPlayerSnapshot: (listener: (snapshot: MiniWindowSnapshot) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, snapshot: MiniWindowSnapshot) => listener(snapshot);
@@ -61,6 +72,8 @@ const miniBridge = {
 };
 
 const mainBridge = {
+  reportDiagnostic,
+  exportDiagnostics: (context: { backend?: BackendHealth | null; appearance?: DiagnosticAppearance }): Promise<DiagnosticExportResult> => ipcRenderer.invoke("export-diagnostics", context),
   isWindows: process.platform === "win32",
   mainWindowCommand: (command: MainWindowCommand): Promise<boolean> => ipcRenderer.invoke("main-window-command", command),
   getMainWindowMaximized: (): Promise<boolean | null> => ipcRenderer.invoke("main-window-get-maximized"),
@@ -249,6 +262,7 @@ const mainBridge = {
 const windowMode = new URLSearchParams(window.location.search).get("window");
 contextBridge.exposeInMainWorld("listenMusic", windowMode === "mini-player" ? miniBridge
   : windowMode === "mini-editor" ? {
+    reportDiagnostic,
     getMiniPlayerSnapshot: miniBridge.getMiniPlayerSnapshot,
     onMiniPlayerSnapshot: miniBridge.onMiniPlayerSnapshot,
     miniWindowCommand: miniBridge.miniWindowCommand,

@@ -1,4 +1,5 @@
 import { createPageDataCache } from "./pageDataCache";
+import { reportRequestFailure } from "./diagnostics";
 import type { QqRecentPlayReportPayload } from "./qqListeningSession";
 import {
   LOCAL_BACKEND_ORIGIN,
@@ -412,6 +413,7 @@ export function resolveBackendUrl(path: string | null | undefined) {
 }
 
 async function performRequest<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  const started = performance.now();
   const controller = new AbortController();
   let timedOut = false;
   const abortFromCaller = () => controller.abort();
@@ -428,6 +430,8 @@ async function performRequest<T>(path: string, init?: RequestInit, timeoutMs = R
   try {
     response = await fetch(backendRequestUrl(path), { ...init, signal: controller.signal });
   } catch (error) {
+    if (timedOut || !init?.signal?.aborted) reportRequestFailure(path, (init?.method || "GET").toUpperCase(), 0,
+      performance.now() - started, timedOut ? "Request timed out" : error instanceof Error ? error.message : "Network request failed");
     if (timedOut) {
       throw new Error("请求超时，请稍后重试。");
     }
@@ -446,7 +450,9 @@ async function performRequest<T>(path: string, init?: RequestInit, timeoutMs = R
     } catch {
       // Keep the HTTP status when the server did not return JSON.
     }
-    throw new ApiRequestError(message || `Request failed: ${response.status}`, response.status);
+    const error = new ApiRequestError(message || `Request failed: ${response.status}`, response.status);
+    reportRequestFailure(path, (init?.method || "GET").toUpperCase(), response.status, performance.now() - started, error.message);
+    throw error;
   }
   return response.json() as Promise<T>;
 }

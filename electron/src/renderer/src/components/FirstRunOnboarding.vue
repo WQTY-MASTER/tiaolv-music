@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from "vue";
 import { AppWindow, ArrowLeft, ArrowRight, AudioLines, Check, Cloud, Compass, Database, Folder, FolderPlus, Headphones, Image as ImageIcon, Keyboard, Library, Link2, Mic2, Monitor, Moon, Music2, PanelBottom, Power, QrCode, Rows2, SlidersHorizontal, Speaker, Sun, X } from "lucide-vue-next";
 import { selectPlaylistCoverImage } from "../services/api";
+import { readableAccentText } from "../services/colorContrast";
 import {
   normalizeAppearancePreferences,
   type AppearancePreferences,
@@ -139,6 +140,7 @@ const onboardingStyle = computed(() => {
   const safeImage = rawImage.replace(/["\r\n]/g, (character) => encodeURIComponent(character));
   return {
     "--onboarding-accent": activeAccent.value,
+    "--onboarding-accent-text": readableAccentText(activeAccent.value),
     "--onboarding-background": backgroundColor,
     backgroundImage: safeImage
       ? `linear-gradient(${darkMode.value ? "rgba(8,12,16,.54)" : "rgba(244,250,249,.7)"}, ${darkMode.value ? "rgba(8,12,16,.54)" : "rgba(244,250,249,.7)"}), url("${safeImage}")`
@@ -395,7 +397,7 @@ onMounted(() => {
           </div>
 
           <div class="onboarding-accents onboarding-enter" style="--enter-order: 4" role="radiogroup" aria-label="主题色">
-            <button v-for="color in accentColors" :key="color" data-onboarding-choice type="button" :style="{ '--swatch': color }" :class="{ active: isAccentSelected(color) }" :aria-label="`主题色 ${color}`" :aria-checked="isAccentSelected(color)" role="radio" @click="setAccent(color)"><Check v-if="isAccentSelected(color)" :size="22" /></button>
+            <button v-for="color in accentColors" :key="color" data-onboarding-choice type="button" :style="{ '--swatch': color, '--swatch-text': readableAccentText(color) }" :class="{ active: isAccentSelected(color) }" :aria-label="`主题色 ${color}`" :aria-checked="isAccentSelected(color)" role="radio" @click="setAccent(color)"><Check v-if="isAccentSelected(color)" :size="22" /></button>
           </div>
 
           <div class="onboarding-density onboarding-enter" style="--enter-order: 5" role="radiogroup" aria-label="界面排版密度">
@@ -809,14 +811,15 @@ onMounted(() => {
 .dark .onboarding-theme-options button.active { color: #f7ffff; }
 .onboarding-theme-options span { font-size: 14px; font-weight: 750; }
 .onboarding-accents { display: flex; gap: 12px; margin-top: var(--density-section-gap); transition: margin 280ms ease; }
-.onboarding-accents button { display: grid; width: 36px; height: 36px; place-items: center; border: 0; border-radius: 50%; background: var(--swatch); color: #fff; cursor: pointer; box-shadow: 0 7px 15px rgba(37,48,64,.13); outline: 0 solid transparent; transition: transform 280ms ease, outline 280ms ease; }
+.onboarding-accents button { display: grid; width: 36px; height: 36px; place-items: center; border: 0; border-radius: 50%; background: var(--swatch); color: var(--swatch-text); cursor: pointer; box-shadow: 0 7px 15px rgba(37,48,64,.13); outline: 0 solid transparent; transition: transform 280ms ease, outline 280ms ease; }
 .onboarding-accents button:hover { transform: translateY(-2px) scale(1.04); }
 .onboarding-accents button.active { outline: 3px solid color-mix(in srgb, var(--swatch) 75%, #fff); outline-offset: 3px; }
 .onboarding-density { display: grid; width: 216px; grid-template-columns: repeat(3, 1fr); margin-top: var(--density-section-gap); border-radius: 999px; padding: 5px; background: rgba(255,255,255,.84); box-shadow: 0 9px 24px rgba(41,58,72,.09); transition: margin 280ms ease; }
 .dark .onboarding-density { background: rgba(28,33,40,.82); }
 .onboarding-density button { height: var(--density-density-height); border: 0; border-radius: 999px; background: transparent; color: #4f5c6f; cursor: pointer; font-size: 13px; font-weight: 700; transition: height 280ms ease, background 280ms ease, color 280ms ease, box-shadow 280ms ease; }
 .dark .onboarding-density button { color: #b8c1ce; }
-.onboarding-density button.active { background: var(--onboarding-accent); color: #fff; box-shadow: 0 7px 16px color-mix(in srgb, var(--onboarding-accent) 28%, transparent); }
+.onboarding-density button.active { background: var(--onboarding-accent); color: var(--onboarding-accent-text); box-shadow: 0 7px 16px color-mix(in srgb, var(--onboarding-accent) 28%, transparent); }
+.dark .onboarding-density button.active { color: var(--onboarding-accent-text); }
 .onboarding-backgrounds { display: flex; gap: 13px; margin-top: var(--density-section-gap); transition: margin 280ms ease; }
 .onboarding-backgrounds button { display: grid; width: 44px; height: 30px; place-items: center; border: 1px solid rgba(148,158,170,.24); border-radius: 9px; background: var(--swatch); color: var(--onboarding-accent); cursor: pointer; box-shadow: 0 5px 13px rgba(45,58,72,.1); transition: border-color 280ms ease, transform 280ms ease, box-shadow 280ms ease; }
 .onboarding-backgrounds button:hover { transform: translateY(-2px); }
@@ -833,7 +836,7 @@ onMounted(() => {
 .onboarding-source-card.active { border: 2px solid var(--onboarding-accent); background: color-mix(in srgb, var(--onboarding-accent) 12%, rgba(255,255,255,.88)); color: var(--onboarding-accent); box-shadow: 0 15px 34px color-mix(in srgb, var(--onboarding-accent) 24%, transparent), inset 0 0 0 3px color-mix(in srgb, var(--onboarding-accent) 7%, transparent); }
 .onboarding-source-card strong { color: #172033; font-size: 17px; font-weight: 850; }
 .onboarding-source-card > span:last-child { max-width: 185px; color: #5f6b7c; font-size: 13px; font-weight: 500; line-height: 1.65; }
-.onboarding-source-check { position: absolute; top: 11px; right: 11px; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--onboarding-accent); color: #fff; box-shadow: 0 7px 16px color-mix(in srgb, var(--onboarding-accent) 28%, transparent); }
+.onboarding-source-check { position: absolute; top: 11px; right: 11px; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: var(--onboarding-accent); color: var(--onboarding-accent-text); box-shadow: 0 7px 16px color-mix(in srgb, var(--onboarding-accent) 28%, transparent); }
 .dark .onboarding-source-card { border-color: rgba(255,255,255,.1); background: rgba(28,33,40,.82); color: #b7c0cd; }
 .dark .onboarding-source-card.active { background: color-mix(in srgb, var(--onboarding-accent) 17%, rgba(28,33,40,.88)); }
 .dark .onboarding-source-card strong { color: #eef4f7; }
@@ -882,7 +885,7 @@ onMounted(() => {
 .onboarding-quality-options { display: grid; width: min(370px, 100%); grid-template-columns: repeat(5, minmax(0, 1fr)); margin-top: 14px; border: 1px solid rgba(148,158,170,.18); border-radius: 999px; padding: 5px; background: rgba(255,255,255,.84); box-shadow: 0 9px 24px rgba(41,58,72,.09); }
 .onboarding-quality-options button,.onboarding-cache-options button { min-width: 0; border: 0; border-radius: 999px; background: transparent; color: #4f5c6f; cursor: pointer; font-size: 13px; font-weight: 700; transition: background 280ms ease, color 280ms ease, box-shadow 280ms ease; }
 .onboarding-quality-options button { height: 36px; }
-.onboarding-quality-options button.active,.onboarding-cache-options button.active { background: var(--onboarding-accent); color: #fff; box-shadow: 0 7px 16px color-mix(in srgb, var(--onboarding-accent) 28%, transparent); }
+.onboarding-quality-options button.active,.onboarding-cache-options button.active { background: var(--onboarding-accent); color: var(--onboarding-accent-text); box-shadow: 0 7px 16px color-mix(in srgb, var(--onboarding-accent) 28%, transparent); }
 .onboarding-cache-options { display: grid; width: min(205px, 100%); grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 12px; border-radius: 999px; padding: 5px; background: rgba(255,255,255,.84); box-shadow: 0 9px 24px rgba(41,58,72,.09); }
 .onboarding-cache-options button { height: 34px; padding-inline: 11px; white-space: nowrap; }
 .dark .onboarding-login-card { border-color: rgba(255,255,255,.1); background: rgba(28,33,40,.82); }
@@ -891,6 +894,7 @@ onMounted(() => {
 .dark .onboarding-login-card > span:last-child { color: #aeb8c6; }
 .dark .onboarding-quality-options,.dark .onboarding-cache-options { background: rgba(28,33,40,.82); }
 .dark .onboarding-quality-options button,.dark .onboarding-cache-options button { color: #b8c1ce; }
+.dark .onboarding-quality-options button.active,.dark .onboarding-cache-options button.active { color: var(--onboarding-accent-text); }
 .onboarding-player-page { align-content: center; }
 .onboarding-player-page .onboarding-eyebrow { margin-bottom: 13px; }
 .onboarding-player-page h1 { font-size: 42px; }
@@ -916,7 +920,7 @@ onMounted(() => {
 .onboarding-visibility > span { color: #5f6b7c; font-size: 12px; font-weight: 500; }
 .onboarding-visibility > div { display: grid; width: min(300px,100%); grid-template-columns: .72fr 1.5fr 1fr; margin-top: 4px; border: 1px solid rgba(148,158,170,.17); border-radius: 999px; padding: 4px; background: rgba(248,250,252,.9); }
 .onboarding-visibility button { height: 32px; border: 0; border-radius: 999px; background: transparent; color: #4f5c6f; cursor: pointer; font-size: 12px; font-weight: 700; transition: background 280ms ease,color 280ms ease,box-shadow 280ms ease; }
-.onboarding-visibility button.active { background: var(--onboarding-accent); color: #fff; box-shadow: 0 6px 14px color-mix(in srgb,var(--onboarding-accent) 27%,transparent); }
+.onboarding-visibility button.active { background: var(--onboarding-accent); color: var(--onboarding-accent-text); box-shadow: 0 6px 14px color-mix(in srgb,var(--onboarding-accent) 27%,transparent); }
 .onboarding-player-hint { margin-top: 10px; font-size: 12px; }
 .dark .onboarding-player-card,.dark .onboarding-mini-options,.dark .onboarding-visibility { border-color: rgba(255,255,255,.1); background: rgba(28,33,40,.84); }
 .dark .onboarding-player-card.active { background: color-mix(in srgb,var(--onboarding-accent) 17%,rgba(28,33,40,.9)); }
@@ -937,7 +941,7 @@ onMounted(() => {
 .onboarding-device-list strong { overflow: hidden; color: #172033; font-size: 14px; font-weight: 850; text-overflow: ellipsis; white-space: nowrap; }
 .onboarding-device-list small { overflow: hidden; color: #5f6b7c; font-size: 12px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .onboarding-device-list em { border-radius: 999px; padding: 4px 9px; background: color-mix(in srgb,var(--onboarding-accent) 10%,transparent); color: var(--onboarding-accent); font-size: 12px; font-style: normal; font-weight: 850; }
-.onboarding-device-check { display: grid !important; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--onboarding-accent); color: #fff; }
+.onboarding-device-check { display: grid !important; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: var(--onboarding-accent); color: var(--onboarding-accent-text); }
 .onboarding-audio-mode { display: grid; width: min(510px,100%); min-height: 70px; grid-template-columns: 38px minmax(0,1fr) 24px; align-items: center; gap: 12px; margin-top: 14px; border: 1px solid color-mix(in srgb,var(--onboarding-accent) 38%,rgba(148,158,170,.18)); border-radius: 16px; padding: 10px 16px; background: color-mix(in srgb,var(--onboarding-accent) 9%,rgba(255,255,255,.86)); color: var(--onboarding-accent); box-shadow: 0 11px 26px rgba(41,58,72,.08); text-align: left; }
 .onboarding-audio-mode > span { display: grid; gap: 4px; }
 .onboarding-audio-mode strong { color: #172033; font-size: 14px; font-weight: 850; }
@@ -1023,7 +1027,7 @@ onMounted(() => {
 .onboarding-back { min-width: 64px; padding: 0 16px; background: rgba(255,255,255,.86); color: color-mix(in srgb, var(--onboarding-accent) 72%, #334155); box-shadow: 0 9px 22px rgba(41,58,72,.09); }
 .dark .onboarding-back { background: rgba(28,33,40,.82); color: #dfe9ea; }
 .onboarding-back:hover { transform: translateY(-2px); background: color-mix(in srgb, var(--onboarding-accent) 10%, #fff); }
-.onboarding-continue { min-width: 112px; background: var(--onboarding-accent); color: #fff; box-shadow: 0 14px 28px color-mix(in srgb, var(--onboarding-accent) 30%, transparent); }
+.onboarding-continue { min-width: 112px; background: var(--onboarding-accent); color: var(--onboarding-accent-text); box-shadow: 0 14px 28px color-mix(in srgb, var(--onboarding-accent) 30%, transparent); }
 .onboarding-continue:hover { transform: translateY(-2px); box-shadow: 0 18px 34px color-mix(in srgb, var(--onboarding-accent) 38%, transparent); }
 .first-run-onboarding button:focus-visible { outline: 3px solid color-mix(in srgb, var(--onboarding-accent) 55%, #fff); outline-offset: 3px; }
 .onboarding-enter { opacity: 0; animation: onboarding-element-enter var(--element-enter-duration) cubic-bezier(.22,.72,.28,1) forwards; animation-delay: var(--enter-delay, 0ms); }

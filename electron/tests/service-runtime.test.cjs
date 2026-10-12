@@ -3,6 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const { pathToFileURL } = require('node:url');
 
 const moduleUrl = pathToFileURL(path.resolve(__dirname, '../src/main/serviceRuntime.ts'));
@@ -37,6 +38,8 @@ async function fixture(t, overrides = {}) {
       child.pid = 100 + spawned.length;
       child.exitCode = null;
       child.signalCode = null;
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
       child.kills = [];
       child.kill = signal => {
         child.kills.push(signal);
@@ -246,4 +249,27 @@ test('resource directory junctions cannot escape bundled runtime', async t => {
   await fs.symlink(foreign, path.join(f.resourcesDirectory, 'backend'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(f.runtime.start(), /resource.*escapes/);
   assert.equal(f.spawned.length, 0);
+});
+
+test('diagnostic capture joins split UTF-8 errors, ignores normal output and records exit codes', async t => {
+  const f = await fixture(t);
+  const events = [];
+  const { createServiceRuntime } = await import(moduleUrl);
+  const runtime = createServiceRuntime({ ...f.options, onDiagnostic: (id, event, detail) => events.push({ id, event, detail }) });
+  await runtime.start();
+  const child = f.spawned[0].child;
+  assert.deepEqual(f.spawned[0].options.stdio, ['ignore', 'pipe', 'pipe']);
+  child.stdout.write('INFO cookie=do-not-record\n');
+  const error = Buffer.from('Error: 中文故障\n    at launch.cjs:12:3\n');
+  child.stderr.write(error.subarray(0, 10));
+  child.stderr.write(error.subarray(10));
+  child.stderr.write('Error: ' + 'x'.repeat(20_000));
+  child.stderr.write('\nError: recovered\n');
+  child.emit('exit', 9, null);
+  await runtime.stop();
+  assert.ok(events.some(item => item.event === 'output-error' && item.detail.line.includes('中文故障')));
+  assert.ok(events.some(item => item.event === 'output-error' && item.detail.line.includes('launch.cjs:12:3')));
+  assert.ok(events.some(item => item.event === 'exited' && item.detail.exitCode === 9));
+  assert.doesNotMatch(JSON.stringify(events), /do-not-record|x{100}/);
+  assert.equal(runtime.snapshot().find(item => item.id === 'netease').exitCode, 9);
 });

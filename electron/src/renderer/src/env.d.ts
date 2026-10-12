@@ -1,5 +1,6 @@
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../../shared/about";
+import type { DiagnosticAppearance, DiagnosticExportResult, RendererDiagnostic } from "../../shared/diagnostics";
 import type { CloseBehavior, MainWindowCommand } from "../../shared/desktopIntegration";
 import type { MiniPlayerPreferences } from "./services/appearanceSettings";
 import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../../shared/miniPlayer";
@@ -30,6 +31,8 @@ interface SystemTrayState {
 }
 
 interface ListenMusicBridge {
+  reportDiagnostic(value: RendererDiagnostic): void;
+  exportDiagnostics(context: { backend?: BackendHealth | null; appearance?: DiagnosticAppearance }): Promise<DiagnosticExportResult>;
   isWindows: boolean;
   mainWindowCommand(command: MainWindowCommand): Promise<boolean>;
   getMainWindowMaximized(): Promise<boolean | null>;

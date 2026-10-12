@@ -301,3 +301,14 @@ test("only the trusted main frame can invoke update commands", () => {
   const foreignWindow = { ...mainWindow, webContents: { mainFrame: foreignFrame } };
   assert.throws(() => authorize(foreignWindow)({ sender: { window: foreignWindow }, senderFrame: foreignFrame }));
 });
+
+test("diagnostics retain the failed update source, phase and actual error without changing the UI flow", async () => {
+  const events = [];
+  const { service, updater } = await fixture({ onDiagnostic: (event, detail) => events.push({ event, detail }) });
+  await service.check();
+  updater.downloadError = Object.assign(new Error('HTTP 404: installer missing'), { code: 'ERR_HTTP_404' });
+  assert.equal((await service.download()).status, 'error');
+  assert.ok(events.some(item => item.event === 'request-failed' && item.detail.source === 'server'
+    && item.detail.phase === 'download' && item.detail.error.code === 'ERR_HTTP_404'));
+  assert.equal(updater.installs, 0);
+});

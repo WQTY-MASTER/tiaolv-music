@@ -22,6 +22,8 @@ import { writeFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import electronUpdater from "electron-updater";
 import { createAppUpdateService } from "./appUpdates";
+import { createDiagnostics } from "./diagnostics";
+import { normalizeDiagnosticAppearance, normalizeRendererDiagnostic, type DiagnosticExportResult } from "../shared/diagnostics";
 import { BackgroundImageCache } from "./backgroundImageCache";
 import { MiniPlayerWindows } from "./miniPlayerWindows";
 import type { MiniPlayerSnapshot } from "../shared/miniPlayer";
@@ -188,6 +190,22 @@ app.commandLine.appendSwitch("disk-cache-dir", chromiumCachePath);
 // Keep Chromium's default compositor: forced software rendering leaves stale
 // accent-colored pixels around transparent windows on Windows 11.
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+const diagnostics = createDiagnostics({
+  directory: path.join(app.getPath("userData"), "logs", "diagnostics"),
+  privatePaths: [app.getPath("userData"), os.homedir(), app.getAppPath()]
+});
+process.on("uncaughtExceptionMonitor", error => diagnostics.writeCrash(error));
+app.on("web-contents-created", (_event, contents) => {
+  contents.on("render-process-gone", (_event, detail) => {
+    void diagnostics.write("main", "renderer-process-gone", { windowId: contents.id, reason: detail.reason, exitCode: detail.exitCode });
+  });
+  contents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3) void diagnostics.write("main", "renderer-load-failed", { windowId: contents.id, code, description });
+  });
+});
+app.on("child-process-gone", (_event, detail) => {
+  void diagnostics.write("main", "child-process-gone", { type: detail.type, reason: detail.reason, exitCode: detail.exitCode });
+});
 
 function taskbarIcon(name: keyof typeof TASKBAR_ICON_DATA) {
   return nativeImage.createFromDataURL(`data:image/png;base64,${TASKBAR_ICON_DATA[name]}`);
@@ -1156,6 +1174,57 @@ function requireUpdateSender(event: Electron.IpcMainInvokeEvent) {
   }
 }
 
+const diagnosticRates = new Map<number, { start: number; count: number }>();
+ipcMain.on("report-diagnostic", (event, value: unknown) => {
+  const owner = BrowserWindow.fromWebContents(event.sender);
+  if (!owner || owner.isDestroyed() || ![mainWindow, desktopLyricsWindow, miniPlayerWindows.window, miniPlayerWindows.editor].includes(owner)
+    || event.senderFrame !== owner.webContents.mainFrame
+    || !isTrustedRendererUrl(event.senderFrame.url, rendererFileUrl, rendererUrl)) return;
+  const now = Date.now();
+  let rate = diagnosticRates.get(event.sender.id);
+  if (!rate || now - rate.start >= 60_000) {
+    rate = { start: now, count: 0 };
+    if (!diagnosticRates.has(event.sender.id)) event.sender.once("destroyed", () => diagnosticRates.delete(event.sender.id));
+    diagnosticRates.set(event.sender.id, rate);
+  }
+  if (++rate.count > 100) return;
+  const report = normalizeRendererDiagnostic(value);
+  if (report) void diagnostics.write("renderer", report.kind === "request" ? "request-failed" : "renderer-error", {
+    window: owner === mainWindow ? "main" : owner === desktopLyricsWindow ? "desktop-lyrics" : owner === miniPlayerWindows.window ? "mini-player" : "mini-editor",
+    ...report
+  });
+});
+
+let exportingDiagnostics = false;
+ipcMain.handle("export-diagnostics", async (event, context: unknown): Promise<DiagnosticExportResult> => {
+  requireUpdateSender(event);
+  if (exportingDiagnostics) return { status: "error", message: "诊断包正在导出，请稍候。" };
+  exportingDiagnostics = true;
+  try {
+    const win = mainWindow!;
+    const result = await dialog.showSaveDialog(win, {
+      title: "导出诊断包", defaultPath: path.join(app.getPath("downloads"), `Tiaolv-Diagnostics-${app.getVersion()}-${new Date().toISOString().replace(/[:.]/g, "-")}.zip`),
+      filters: [{ name: "诊断包 ZIP", extensions: ["zip"] }]
+    });
+    if (result.canceled || !result.filePath) return { status: "cancelled" };
+    const input = context && typeof context === "object" ? context as Record<string, unknown> : {};
+    const bounds = win.getContentBounds();
+    const display = screen.getDisplayMatching(win.getBounds());
+    await diagnostics.write("main", "diagnostics-export");
+    await diagnostics.exportBundle(result.filePath, {
+      system: aboutSystemInfo(), backend: input.backend, packaged: app.isPackaged,
+      appearance: normalizeDiagnosticAppearance(input.appearance), update: updateCheckResult,
+      display: { width: bounds.width, height: bounds.height, scaleFactor: display.scaleFactor,
+        displayCount: screen.getAllDisplays().length, zoomFactor: win.webContents.getZoomFactor() },
+      runtime: serviceRuntime?.snapshot() ?? [], timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+    });
+    return { status: "saved" };
+  } catch (error) {
+    void diagnostics.write("main", "diagnostics-export-failed", { error });
+    return { status: "error", message: "诊断包导出失败，请检查保存目录空间和写入权限后重试。" };
+  } finally { exportingDiagnostics = false; }
+});
+
 ipcMain.handle("check-for-updates", (event) => {
   requireUpdateSender(event);
   return checkForUpdates();
@@ -1210,6 +1279,7 @@ if (!hasSingleInstanceLock) {
   });
 
   app.whenReady().then(async () => {
+    await diagnostics.write("main", "startup", { system: aboutSystemInfo(), packaged: app.isPackaged });
     if (app.isPackaged) {
       serviceRuntime = createServiceRuntime({
         resourcesDirectory: path.join(process.resourcesPath, "runtime"),
@@ -1217,7 +1287,9 @@ if (!hasSingleInstanceLock) {
         dataDirectory: path.join(app.getPath("userData"), "runtime"),
         logDirectory: path.join(app.getPath("userData"), "logs", "runtime"),
         tokenFile: localAccessTokenFile,
-        onFatalError: () => {
+        onDiagnostic: (id, event, detail) => diagnostics.write(id, event, detail),
+        onFatalError: error => {
+          void diagnostics.write("main", "service-fatal", { error });
           dialog.showErrorBox("本地服务已停止", "后端或音乐 API 意外退出，请重新启动调律音乐。");
           app.quit();
         }
@@ -1225,6 +1297,7 @@ if (!hasSingleInstanceLock) {
       await serviceRuntime.start();
     }
     installBackendAccess();
+    diagnostics.addSecret(localAccessToken);
     backgroundImageCache = new BackgroundImageCache(path.join(app.getPath("userData"), "cache", "backgrounds"));
     protocol.handle("tiaolv-background", async (request) => {
       try {
@@ -1242,8 +1315,10 @@ if (!hasSingleInstanceLock) {
       updater: electronUpdater.autoUpdater,
       currentVersion: app.getVersion(), isPackaged: app.isPackaged, platform: process.platform,
       onChange: result => { updateCheckResult = result; broadcastUpdateResult(); },
+      onDiagnostic: (event, detail) => { void diagnostics.write("updater", event, detail); },
       prepareInstall: async () => {
         await serviceRuntime?.stop();
+        await diagnostics.flush();
         serviceShutdownComplete = true;
       }
     });
@@ -1260,6 +1335,7 @@ if (!hasSingleInstanceLock) {
       }
     });
   }).catch(async error => {
+    await diagnostics.write("main", "startup-failed", { error });
     await serviceRuntime?.stop().catch(() => undefined);
     const detail = error instanceof Error ? error.message : "无法连接受保护的本地服务";
     dialog.showErrorBox("调律音乐启动失败", `${detail}\n请关闭占用端口的服务后重试。开发模式请先启动后端。`);
@@ -1278,7 +1354,8 @@ app.on("before-quit", event => {
   miniPlayerWindows.dispose();
   if (serviceRuntime && !serviceShutdownComplete) {
     event.preventDefault();
-    void serviceRuntime.stop().then(() => {
+    void serviceRuntime.stop().then(async () => {
+      await diagnostics.flush();
       serviceShutdownComplete = true;
       app.quit();
     }).catch(() => {

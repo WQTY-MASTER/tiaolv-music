@@ -1,6 +1,6 @@
 # 调律音乐官网
 
-纯静态介绍与下载页，无需构建或安装依赖。保留现有品牌、备案号和两个下载入口；内容依据播放器 README 与用户指定的 `更新日志.md`，当前版本 0.1.3，仅支持 Windows x64。
+纯静态介绍与下载页，无需构建或安装依赖。保留现有品牌、备案号和两个下载入口；内容依据播放器 README 与用户指定的 `更新日志.md`，当前版本 0.1.4，仅支持 Windows x64。
 
 ## 本地预览
 
@@ -10,7 +10,7 @@
 
 ## 上传宝塔
 
-首次上线 0.1.3 请使用播放器目录中的 `electron/release/server-distribution/网站及更新上传包-0.1.3.zip`，内含网页、安装包、blockmap 和清单。不要只上传新网页而遗漏对应安装包。先上传 `updates/windows/` 中的 EXE 和 blockmap，核对后再更新首页和 `latest.yml`。
+上线 0.1.4 请使用播放器目录中的 `electron/release/server-distribution/网站及更新上传包-0.1.4.zip`，内含网页、安装包、blockmap 和清单。不要只上传新网页而遗漏对应安装包。先上传 `updates/windows/` 中的 EXE 和 blockmap，核对后再更新首页和 `latest.yml`。
 
 版本文件已经上线后，单独更新网页可以将 `网站上传包.zip` 上传到 `wqty.online` 对应的网站根目录并解压，合并覆盖以下网页文件：
 
@@ -40,11 +40,11 @@
 
 原截图中的默认“律”封面、演示歌词和空闲播放器来自旧测试画面，不是网页图片路径损坏；现已替换。图片链接加入 `v=20261012-real` 缓存标记。旧网页、素材和上传包备份于 `.backups/20261012-real-screenshots/`。兼容保留的旧 `netease.png` 不再被网页引用，也不包含在新上传包中。
 
-按用户确认的 0.1.3 整体发布方案更新入口：
+按 0.1.4 发布方案更新入口，既有真实截图和备案信息保留：
 
-- 官网安装包：`./updates/windows/Tiaolv-Setup-0.1.3.exe`
-- GitHub：`https://github.com/WQTY-MASTER/tiaolv-music/releases/tag/v0.1.3`
+- 官网安装包：`./updates/windows/Tiaolv-Setup-0.1.4.exe`
+- GitHub：`https://github.com/WQTY-MASTER/tiaolv-music/releases/tag/v0.1.4`
 
-官网安装包地址上线后解析为 `https://wqty.online/updates/windows/Tiaolv-Setup-0.1.3.exe`，复制按钮提供此地址。没有自动改为 `releases/latest`。旧的 0.1.2 安装包下载链接不修改。
+官网安装包地址上线后解析为 `https://wqty.online/updates/windows/Tiaolv-Setup-0.1.4.exe`，复制按钮提供此地址。没有自动改为 `releases/latest`。旧版本安装包下载链接不修改。
 
 备案号保留为 **琼ICP备2026005196号-1**，链接到工信部备案查询。网页未接入在线播放、调律账号注册或云端数据同步。

@@ -34,7 +34,7 @@ implementation. This is not solely a Windows registry limitation.
    assets available for differential downloads.
 5. Use the exact same files for the static server. The uploaded installer asset
    name must match `latest.yml` (for example
-   `Tiaolv-Setup-0.1.3.exe`). From 0.1.3, the NSIS artifact name is explicitly
+   `Tiaolv-Setup-0.1.4.exe`). From 0.1.3, the NSIS artifact name is explicitly
    `Tiaolv-Setup-${version}.${ext}`; the product name remains 调律音乐. Do not
    rename only the EXE or rebuild a separate server installer. Upload
    binaries first and the server manifest last; see `服务器部署说明.md`.

@@ -12,6 +12,7 @@ interface UpdateServiceOptions {
   platform: string;
   onChange: (result: UpdateCheckResult) => void;
   prepareInstall: () => Promise<void>;
+  onDiagnostic?: (event: string, detail: unknown) => void;
 }
 
 export function createAppUpdateService(options: UpdateServiceOptions) {
@@ -28,6 +29,11 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
   let downloadTask: Promise<UpdateCheckResult> | undefined;
   let hasUpdate = false;
   let readyToInstall = false;
+  let source: "server" | "github" = "github";
+
+  function log(event: string, detail: unknown = {}) {
+    try { options.onDiagnostic?.(event, { source, phase, ...detail as object }); } catch { /* Logging must not interrupt updating. */ }
+  }
 
   function getSnapshot(): UpdateCheckResult {
     return { ...state, progress: state.progress ? { ...state.progress } : undefined };
@@ -39,6 +45,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
   }
 
   function fail(error: unknown, message?: string) {
+    log("request-failed", { error });
     readyToInstall = false;
     const detail = error instanceof Error ? error.message : String(error);
     publish({ status: "error", progress: undefined, message: message ?? (
@@ -76,6 +83,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     }
     const notes = typeof info.releaseNotes === "string" ? info.releaseNotes
       : info.releaseNotes?.map(note => note.note ?? "").join("\n") ?? "";
+    log("check-complete", { version, available: hasUpdate });
     publish({
       status: hasUpdate ? "available" : "latest", latestVersion: version,
       releaseName: info.releaseName ?? `调律音乐 v${version}`, releaseNotes: notes.slice(0, 6000),
@@ -98,6 +106,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     // This event is emitted only after electron-updater verifies the downloaded file.
     if (phase !== "download" || normalizeReleaseVersion(info.version) !== state.latestVersion || state.status !== "downloading") return;
     readyToInstall = true;
+    log("download-verified", { version: info.version });
     publish({ status: "downloaded", progress: undefined, message: "更新已下载并通过校验。" });
   });
   updater.on("error", error => {
@@ -112,6 +121,8 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     if (phase || readyToInstall || !supported()) return Promise.resolve(getSnapshot());
     phase = "check";
     hasUpdate = false;
+    source = "server";
+    log("check-start");
     updater.setFeedURL({ provider: "generic", url: SERVER_UPDATE_URL });
     publish({ status: "checking", message: "正在检查更新。", progress: undefined }, true);
     const checkSource = async () => {
@@ -125,8 +136,11 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     checkTask = checkSource().then(result => {
       if (result.status === "error") throw new Error("invalid-primary-release");
       return result;
-    }).catch(() => {
+    }).catch(error => {
+      log("check-source-failed", { error });
       hasUpdate = false;
+      source = "github";
+      log("check-start");
       updater.setFeedURL({ provider: "github", owner: "WQTY-MASTER", repo: "tiaolv-music", private: false });
       publish({ status: "checking", message: "服务器更新暂不可用，正在检查 GitHub 备用源。" }, true);
       return checkSource();
@@ -138,6 +152,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
     if (downloadTask) return downloadTask;
     if (phase || readyToInstall || !supported() || !hasUpdate) return Promise.resolve(getSnapshot());
     phase = "download";
+    log("download-start", { version: state.latestVersion });
     readyToInstall = false;
     publish({ status: "downloading", message: "正在下载更新。", progress: { percent: 0, transferred: 0, total: 0, bytesPerSecond: 0 } });
     downloadTask = updater.downloadUpdate().then(() => {
@@ -150,6 +165,7 @@ export function createAppUpdateService(options: UpdateServiceOptions) {
   async function install(): Promise<boolean> {
     if (phase || !supported() || !readyToInstall || state.status !== "downloaded") return false;
     phase = "install";
+    log("install-start", { version: state.latestVersion });
     publish({ status: "installing", message: "正在关闭本地服务并准备安装更新。" });
     try {
       await options.prepareInstall();

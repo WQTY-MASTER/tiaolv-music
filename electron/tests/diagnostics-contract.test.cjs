@@ -1,0 +1,21 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '../src');
+const main = fs.readFileSync(path.join(root, 'main/main.ts'), 'utf8');
+const preload = fs.readFileSync(path.join(root, 'preload/preload.ts'), 'utf8');
+const component = fs.readFileSync(path.join(root, 'renderer/src/components/AboutSettings.vue'), 'utf8');
+
+assert.match(main, /ipcMain\.handle\("export-diagnostics",[\s\S]*?requireUpdateSender\(event\)/);
+assert.match(main, /ipcMain\.on\("report-diagnostic",[\s\S]*?isTrustedRendererUrl/);
+assert.match(main, /uncaughtExceptionMonitor/);
+assert.match(main, /render-process-gone/);
+assert.match(main, /showSaveDialog[\s\S]*?\.canceled/);
+assert.match(preload, /reportDiagnostic/);
+assert.match(preload, /exportDiagnostics/);
+assert.match(component, /导出诊断包/);
+assert.match(component, /exportingDiagnostics/);
+assert.match(component, /getDiagnosticContext/);
+assert.match(fs.readFileSync(path.join(root, 'renderer/src/main.ts'), 'utf8'), /installRendererDiagnostics/);
+assert.match(fs.readFileSync(path.join(root, 'renderer/src/services/api.ts'), 'utf8'), /reportRequestFailure/);
+console.log('Diagnostic bridges and settings contract passed');

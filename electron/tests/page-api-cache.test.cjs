@@ -10,6 +10,7 @@ registerHooks({
       return nextResolve(`${specifier}.ts`, context);
     }
     if (specifier.endsWith("/backendRoutes")) return nextResolve(`${specifier}.ts`, context);
+    if (specifier.endsWith("/diagnostics")) return nextResolve(`${specifier}.ts`, context);
     return nextResolve(specifier, context);
   }
 });

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import { setDiagnosticContext } from "./services/diagnostics";
 import { runTrackBatch, type TrackBatchAction, type TrackBatchResult } from "./services/streamingTrackManagement";
 import { matchLocalAudioSource, type LocalAudioSelection, type LocalAudioSourceGroup } from "./services/localAudioSources";
 import {
@@ -1256,6 +1257,16 @@ const appearanceDarkMode = computed(() => resolveDarkTheme(
   appearancePreferences.value.themeMode,
   systemPrefersDark.value
 ));
+watch(() => ({
+  themeMode: appearancePreferences.value.themeMode,
+  effectiveTheme: appearanceDarkMode.value ? "dark" : "light",
+  lightAccent: appearancePreferences.value.lightAccent,
+  darkAccent: appearancePreferences.value.darkAccent,
+  density: appearancePreferences.value.density,
+  fontFamily: appearancePreferences.value.fontFamily,
+  backgroundMode: appearancePreferences.value.background.unified.mode,
+  activeView: activeView.value
+}), value => setDiagnosticContext(value), { immediate: true });
 const appearanceReducedMotion = computed(() => resolveReducedMotion(
   appearancePreferences.value.animationMode,
   systemPrefersReducedMotion.value

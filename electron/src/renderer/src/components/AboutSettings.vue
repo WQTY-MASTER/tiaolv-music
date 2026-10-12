@@ -2,8 +2,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import {
   AlertCircle, Check, Code2, Copy, Download, ExternalLink,
-  Info, RefreshCw, Scale, ShieldCheck
+  FileArchive, Info, RefreshCw, Scale, ShieldCheck
 } from "lucide-vue-next";
+import { getDiagnosticContext } from "../services/diagnostics";
 import {
   formatDiagnosticReport,
   type AboutSnapshot,
@@ -20,6 +21,8 @@ const loading = ref(true);
 const checking = ref(false);
 const changingAutoCheck = ref(false);
 const copied = ref(false);
+const exportingDiagnostics = ref(false);
+const diagnosticNotice = ref("");
 const pageError = ref("");
 const updateEvent = ref<UpdateCheckResult | null>(null);
 const requestingDownload = ref(false);
@@ -143,6 +146,23 @@ async function copyDiagnostics() {
   }
 }
 
+async function exportDiagnostics() {
+  if (exportingDiagnostics.value || !system.value) return;
+  exportingDiagnostics.value = true;
+  diagnosticNotice.value = "";
+  pageError.value = "";
+  try {
+    const result = await window.listenMusic?.exportDiagnostics({ backend: backend.value, appearance: getDiagnosticContext() });
+    if (result?.status === "saved") diagnosticNotice.value = "诊断包已导出。";
+    else if (result?.status === "cancelled") diagnosticNotice.value = "已取消导出。";
+    else pageError.value = result?.message || "诊断包导出失败，请稍后重试。";
+  } catch {
+    pageError.value = "诊断包导出失败，请稍后重试。";
+  } finally {
+    exportingDiagnostics.value = false;
+  }
+}
+
 onMounted(async () => {
   const bridge = window.listenMusic;
   if (!bridge) {
@@ -259,15 +279,22 @@ onBeforeUnmount(() => {
     <section class="about-section diagnostics-section" aria-labelledby="diagnostics-title">
       <div class="about-section-heading">
         <div><p class="about-section-label">DIAGNOSTICS</p><h3 id="diagnostics-title">系统信息</h3></div>
-        <button class="about-action" type="button" :disabled="!system" @click="copyDiagnostics">
-          <component :is="copied ? Check : Copy" :size="16" aria-hidden="true" />
-          {{ copied ? "已复制" : "复制诊断信息" }}
-        </button>
+        <div class="diagnostic-actions">
+          <button class="about-action" type="button" :disabled="!system" @click="copyDiagnostics">
+            <component :is="copied ? Check : Copy" :size="16" aria-hidden="true" />
+            {{ copied ? "已复制" : "复制诊断信息" }}
+          </button>
+          <button class="about-action" type="button" :disabled="!system || exportingDiagnostics" @click="exportDiagnostics">
+            <component :is="exportingDiagnostics ? RefreshCw : FileArchive" :size="16" :class="{ spinning: exportingDiagnostics }" aria-hidden="true" />
+            {{ exportingDiagnostics ? "正在导出" : "导出诊断包" }}
+          </button>
+        </div>
       </div>
       <dl class="diagnostic-grid">
         <div v-for="row in diagnosticRows" :key="row[0]"><dt>{{ row[0] }}</dt><dd>{{ row[1] }}</dd></div>
       </dl>
       <p v-if="!backend?.ok" class="diagnostic-hint"><Info :size="15" aria-hidden="true" />后端未连接时，API 与数据库版本会在服务恢复后显示。</p>
+      <p v-if="diagnosticNotice" class="diagnostic-notice" role="status">{{ diagnosticNotice }}</p>
     </section>
 
     <p v-if="pageError" class="about-error" role="alert">{{ pageError }}</p>
@@ -275,15 +302,16 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.about-settings-card { --about-ink: #11192b; --about-muted: #6f7c91; --about-line: #e6ebf2; --about-blue: #246bff; overflow: hidden; }
+.about-settings-card { --about-ink: #11192b; --about-muted: #6f7c91; --about-line: #e6ebf2; --about-blue: #246bff; --about-secondary: #53627b; --about-soft: #f6f8fc; --about-success: #347052; --about-warning: #8a6d3b; overflow: hidden; }
+:global(.theme-dark .about-settings-card) { --about-ink: #edf1f7; --about-muted: #aeb8c8; --about-line: #3c4350; --about-secondary: #bbc6d8; --about-soft: #252b35; --about-success: #7bd8ac; --about-warning: #e2bd7c; }
 .about-brand { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto; align-items: center; gap: 22px; padding-bottom: 30px; }
 .about-brand img { width: 82px; height: 82px; border-radius: 8px; object-fit: cover; box-shadow: 0 12px 24px rgb(17 25 43 / 14%); }
 .about-brand-copy { min-width: 0; }
 .about-kicker,.about-section-label { margin: 0 0 7px; color: #8491a5; font-size: 9px; font-weight: 800; letter-spacing: 2px; }
 .about-brand h2 { margin: 0; color: var(--about-ink); font-size: 25px; line-height: 1.2; letter-spacing: 0; }
-.about-brand h2 span { margin-left: 6px; color: #53627b; font-size: 16px; font-weight: 600; }
+.about-brand h2 span { margin-left: 6px; color: var(--about-secondary); font-size: 16px; font-weight: 600; }
 .about-brand-copy > p:not(.about-kicker) { margin: 8px 0 0; color: var(--about-muted); font-size: 13px; }
-.about-tech { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; color: #53627b; font-size: 11px; }
+.about-tech { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; color: var(--about-secondary); font-size: 11px; }
 .about-tech i { width: 3px; height: 3px; border-radius: 50%; background: #b5bfcc; }
 .about-version { align-self: start; padding: 7px 10px; border: 1px solid #dbe4f2; border-radius: 6px; background: #f7f9fc; color: #435473; font-size: 12px; font-weight: 700; }
 .about-section { padding: 26px 0; border-top: 1px solid var(--about-line); }
@@ -295,7 +323,7 @@ onBeforeUnmount(() => {
 .about-action.primary { border-color: var(--about-blue); background: var(--about-blue); color: #fff; }
 .about-action.primary:hover { background: #155ce8; color: #fff; }
 .about-action:disabled { cursor: default; opacity: .55; }
-.update-current { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(300px, 1.3fr); align-items: center; gap: 24px; margin-top: 20px; padding: 16px 18px; border-left: 3px solid #91b0f7; background: #f6f8fc; }
+.update-current { display: grid; grid-template-columns: minmax(160px, .7fr) minmax(300px, 1.3fr); align-items: center; gap: 24px; margin-top: 20px; padding: 16px 18px; border-left: 3px solid #91b0f7; background: var(--about-soft); }
 .update-current > div { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .update-current span { color: var(--about-muted); font-size: 12px; }
 .update-current strong { color: var(--about-ink); font-size: 13px; }
@@ -312,7 +340,7 @@ onBeforeUnmount(() => {
 .update-result div { display: grid; gap: 3px; }
 .update-result strong { font-size: 12px; }
 .update-result span { font-size: 11px; opacity: .78; }
-.release-details { margin-top: 14px; padding: 16px 18px; border-left: 3px solid var(--about-blue); background: #f6f8fc; }
+.release-details { margin-top: 14px; padding: 16px 18px; border-left: 3px solid var(--about-blue); background: var(--about-soft); }
 .release-title { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .release-title strong { color: var(--about-ink); font-size: 13px; }
 .release-title strong { min-width: 0; overflow-wrap: anywhere; }
@@ -321,31 +349,35 @@ onBeforeUnmount(() => {
 .update-progress { margin-top: 14px; color: var(--about-muted); font-size: 12px; }
 .update-progress > div { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .update-progress progress { display: block; width: 100%; height: 8px; accent-color: var(--about-blue); }
-.release-details pre { max-height: 180px; margin: 14px 0 0; overflow: auto; color: #5b687c; font: 12px/1.65 "Microsoft YaHei UI", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
+.release-details pre { max-height: 180px; margin: 14px 0 0; overflow: auto; color: var(--about-secondary); font: 12px/1.65 "Microsoft YaHei UI", sans-serif; white-space: pre-wrap; overflow-wrap: anywhere; }
 .about-link-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-top: 1px solid var(--about-line); border-bottom: 1px solid var(--about-line); }
-.about-link-list button { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px 16px; border: 0; background: transparent; color: #42516b; cursor: pointer; text-align: left; }
+.about-link-list button { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 15px 16px; border: 0; background: transparent; color: var(--about-secondary); cursor: pointer; text-align: left; }
 .about-link-list button + button { border-left: 1px solid var(--about-line); }
-.about-link-list button:hover { background: #f7f9fc; color: var(--about-blue); }
+.about-link-list button:hover { background: var(--about-soft); color: var(--about-blue); }
 .about-link-list span { display: grid; min-width: 0; gap: 4px; }
 .about-link-list strong { color: var(--about-ink); font-size: 13px; }
 .about-link-list small { overflow: hidden; color: #8490a2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .about-learning-note { margin: 13px 0 0; color: #7b8799; font-size: 11px; }
-.legal-section { display: flex; align-items: flex-start; gap: 14px; color: #57677f; }
+.legal-section { display: flex; align-items: flex-start; gap: 14px; color: var(--about-muted); }
 .legal-section > svg { flex: 0 0 auto; color: #6485c4; }
 .legal-section h3 { margin-bottom: 7px; }
 .legal-section p { max-width: 760px; margin: 0; font-size: 12px; line-height: 1.75; }
 .diagnostic-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 18px 0 0; border-top: 1px solid var(--about-line); }
+.diagnostic-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.diagnostic-notice { margin: 12px 0 0; color: var(--about-success); font-size: 12px; }
 .diagnostic-grid > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 14px; padding: 12px 8px; border-bottom: 1px solid var(--about-line); }
 .diagnostic-grid > div:nth-child(odd) { padding-right: 24px; }
 .diagnostic-grid > div:nth-child(even) { padding-left: 24px; border-left: 1px solid var(--about-line); }
 .diagnostic-grid dt { color: #8894a5; font-size: 11px; }
-.diagnostic-grid dd { min-width: 0; margin: 0; color: #31415c; font-size: 12px; overflow-wrap: anywhere; }
-.diagnostic-hint { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: #8a6d3b; font-size: 11px; }
+.diagnostic-grid dd { min-width: 0; margin: 0; color: var(--about-secondary); font-size: 12px; overflow-wrap: anywhere; }
+.diagnostic-hint { display: flex; align-items: center; gap: 7px; margin: 12px 0 0; color: var(--about-warning); font-size: 11px; }
 .about-error { margin: 0; padding: 11px 13px; border: 1px solid #efd9dc; border-radius: 6px; background: #fff7f7; color: #a3424b; font-size: 12px; }
 .spinning { animation: about-spin 850ms linear infinite; }
 button:focus-visible,input:focus-visible { outline: 2px solid var(--about-blue); outline-offset: 3px; }
 @keyframes about-spin { to { transform: rotate(360deg); } }
 @media (max-width: 760px) {
+  .diagnostics-section .about-section-heading { flex-wrap: wrap; }
+  .diagnostic-actions { justify-content: flex-start; }
   .about-brand { grid-template-columns: 64px minmax(0, 1fr); }
   .about-brand img { width: 64px; height: 64px; }
   .about-version { grid-column: 2; justify-self: start; }
