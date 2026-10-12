@@ -1,0 +1,34 @@
+# 更新日志
+
+版本号以 `electron/package.json` 为准。GitHub Release 的 tag、安装包和
+更新清单使用相同版本，服务器与 GitHub 分发同一份构建产物。
+源码提交不等于客户端更新发布。
+
+## 0.1.2 - 2026-10-11
+
+- 接入 `wqty.online` 的 HTTPS 静态分发目录，作为首选更新检查源。
+- 服务器检查或清单校验失败时，回退一次到 GitHub Releases。
+- 保留显式下载、进度显示、SHA512 校验和手动重启安装流程，不自动打断播放。
+- 提供安装包、`latest.yml` 和 blockmap 的服务器分发文件，支持增量下载及完整包回退。
+- 安装包内置运行环境和本机服务，普通用户无需安装开发依赖。
+
+[GitHub Release](https://github.com/WQTY-MASTER/tiaolv-music/releases/tag/v0.1.2) · [官网](https://wqty.online/#download)
+
+## 0.1.1 - 2026-10-11
+
+- 首次接入 GitHub Releases 在线更新，沿用设置中的检查更新入口。
+- 检查后由用户选择下载，下载完成后由用户选择重启安装。
+- 在主进程校验安装包 SHA512；失败时不允许安装，保留浏览器手动下载入口。
+- 安装前等待应用自身启动的本机服务退出，不清理用户独立启动的开发服务。
+
+[GitHub Release](https://github.com/WQTY-MASTER/tiaolv-music/releases/tag/v0.1.1)
+
+## 升级与验证说明
+
+- 未接入在线更新的旧版（如 0.1.0）需完全退出后手动覆盖安装一次。
+- 覆盖安装默认保留用户数据；重要数据请先备份，不需要删除现有音乐库。
+- 分发服务器已核对更新清单、安装包大小和 Range 请求；服务可用不等于完整升级流程已经实测。
+- 全新 Windows 环境安装及真实跨版本「下载更新 → 重启安装」仍需单独验收。
+- 平台接口及登录状态可能变化；更新不保证平台服务永远可用，也不绕过平台权限。
+
+开发者发布步骤见 [GitHub 更新](docs/github-updates.md)、[服务器分发](docs/server-distribution.md) 和 [发布检查](docs/release-checklist.md)。
