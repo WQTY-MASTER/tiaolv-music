@@ -13,7 +13,7 @@ export function mediaPathToUrl(path: string | undefined) {
   if (!path) {
     return undefined;
   }
-  if (/^(?:data:|blob:|file:|https?:)/i.test(path)) {
+  if (/^(?:data:|blob:|file:|https?:|tiaolv-cover:)/i.test(path)) {
     return path;
   }
   return `file:///${path.replace(/\\/g, "/")}`;

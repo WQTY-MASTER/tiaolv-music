@@ -46,5 +46,5 @@ export function resolveStandaloneBackendResourceUrl(path: string, previewOrigin?
       ? standaloneBackendRequestUrl(`${url.pathname}${url.search}${url.hash}`, previewOrigin)
       : path;
   }
-  return /^(?:file:|data:|blob:)/i.test(path) ? path : standaloneBackendRequestUrl(path, previewOrigin);
+  return /^(?:file:|data:|blob:|tiaolv-cover:)/i.test(path) ? path : standaloneBackendRequestUrl(path, previewOrigin);
 }

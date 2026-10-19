@@ -30,6 +30,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @Import(com.listenmusic.config.WebConfig.class)
 class AccountControllerTest {
     @Test
+    void exposesVerifiedRemovalPartitionsWithTheCapturedAccount() throws Exception {
+        given(accountCatalogService.removePlaylistTracks("qq", "qq:900", List.of("qq:mid1", "qq:mid2"), "200"))
+            .willReturn(new com.listenmusic.provider.PlaylistTrackBatchResult(List.of("qq:mid1"), List.of("qq:mid2"), java.util.Map.of("qq:mid2", "平台尚未确认操作结果，请刷新歌单后再检查。")));
+        mockMvc.perform(post("/account/qq/playlists/qq:900/tracks/remove-batch").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"qq:mid1\",\"qq:mid2\"],\"expectedAccountId\":\"200\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.succeeded[0]").value("qq:mid1"))
+            .andExpect(jsonPath("$.failed[0]").value("qq:mid2"))
+            .andExpect(jsonPath("$.errors['qq:mid2']").value("平台尚未确认操作结果，请刷新歌单后再检查。"));
+    }
+
+    @Test
+    void batchEndpointSafelyReportsUnexpectedExceptionsPerId() throws Exception {
+        given(accountCatalogService.removePlaylistTracks("netease", "netease:900", List.of("netease:123"), "100"))
+            .willThrow(new IllegalStateException("MUSIC_U=secret; G:/Private/file", new java.net.SocketTimeoutException("Cookie=secret")));
+        mockMvc.perform(post("/account/netease/playlists/netease:900/tracks/remove-batch").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"netease:123\"],\"expectedAccountId\":\"100\"}"))
+            .andExpect(status().isOk()).andExpect(jsonPath("$.succeeded").isEmpty())
+            .andExpect(jsonPath("$.errors['netease:123']").value("连接超时，请检查网络后重试。"));
+    }
+
+    @Test
     void exposesQqRecentReportAndReturnsItsFailureReason() throws Exception {
         String session = "cf3dac35-7a99-4706-9c69-11a4742486a1";
         given(accountCatalogService.reportRecentPlay("200", "qq:mid1", session, 30, 180)).willReturn(List.of());
@@ -89,10 +110,54 @@ class AccountControllerTest {
     }
 
     @Test
+    void returnsASafePlaylistWriteFailureReasonInsteadOfAnOpaque500() throws Exception {
+        org.mockito.Mockito.doThrow(new IllegalStateException("QQ 音乐接口返回错误: 80105; MUSIC_U=secret"))
+            .when(accountCatalogService).addPlaylistTracks("qq", "qq:900", List.of("qq:mid1"));
+        mockMvc.perform(post("/account/qq/playlists/qq:900/tracks").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"qq:mid1\"]}"))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("PLAYLIST_TRACK_WRITE_FAILED"))
+            .andExpect(jsonPath("$.message").value("QQ 音乐加入歌单失败：平台返回错误码 80105，请稍后重试。"));
+    }
+
+    @Test
+    void preservesExpiredLoginAndHttpFailureReasonsForPlaylistWrites() throws Exception {
+        org.mockito.Mockito.doThrow(new AccountLoginRequiredException("登录已过期，请重新登录"))
+            .when(accountCatalogService).addPlaylistTracks("netease", "netease:900", List.of("netease:123"));
+        mockMvc.perform(post("/account/netease/playlists/netease:900/tracks").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"netease:123\"]}"))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.message").value("登录已过期，请重新登录"));
+        org.mockito.Mockito.doThrow(new IllegalStateException("Transport failure",
+            org.springframework.web.client.HttpServerErrorException.create(
+                org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE, "Unavailable",
+                org.springframework.http.HttpHeaders.EMPTY, new byte[0], java.nio.charset.StandardCharsets.UTF_8)))
+            .when(accountCatalogService).addPlaylistTracks("netease", "netease:900", List.of("netease:123"));
+        mockMvc.perform(post("/account/netease/playlists/netease:900/tracks").contentType(MediaType.APPLICATION_JSON)
+                .content("{\"trackIds\":[\"netease:123\"]}"))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.message").value("网易云音乐加入歌单失败：接口返回 HTTP 503，请稍后重试。"));
+    }
+
+    @Test
     void removesOnlyTheRequestedPlaylistTrack() throws Exception {
         mockMvc.perform(delete("/account/qq/playlists/qq:900/tracks/qq:mid1"))
             .andExpect(status().isOk()).andExpect(jsonPath("$.ok").value(true));
         verify(accountCatalogService).removePlaylistTrack("qq", "qq:900", "qq:mid1");
+    }
+
+    @Test
+    void returnsSafeRemovalFailureAndPreservesLoginStatus() throws Exception {
+        org.mockito.Mockito.doThrow(new IllegalStateException("网易云账号接口调用失败: 502; MUSIC_U=secret"))
+            .when(accountCatalogService).removePlaylistTrack("netease", "netease:900", "netease:123");
+        mockMvc.perform(delete("/account/netease/playlists/netease:900/tracks/netease:123"))
+            .andExpect(status().isBadGateway())
+            .andExpect(jsonPath("$.code").value("PLAYLIST_TRACK_REMOVE_FAILED"))
+            .andExpect(jsonPath("$.message").value("网易云音乐移出歌单失败：平台返回错误码 502，请稍后重试。"));
+        org.mockito.Mockito.doThrow(new AccountLoginRequiredException("登录已过期，请重新登录"))
+            .when(accountCatalogService).removePlaylistTrack("netease", "netease:900", "netease:123");
+        mockMvc.perform(delete("/account/netease/playlists/netease:900/tracks/netease:123"))
+            .andExpect(status().isUnauthorized()).andExpect(jsonPath("$.message").value("登录已过期，请重新登录"));
     }
 
     @Test

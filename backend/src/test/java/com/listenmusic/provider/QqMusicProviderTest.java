@@ -33,6 +33,56 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
 
 class QqMusicProviderTest {
     @Test
+    void batchRemovalChecksOwnershipOnceAndUsesSequentialKnownVerifiedWrites() {
+        server.expect(requestTo("http://qq-api.test/user/getUserPlaylists?uin=200&offset=0&limit=100"))
+            .andRespond(withSuccess("{\"code\":0,\"data\":{\"playlists\":[{\"dissid\":900,\"dissname\":\"Owned\",\"dirid\":2}]}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/user/getUserCollectedSongLists?uin=200&page=1&limit=100"))
+            .andRespond(withSuccess("{\"code\":0,\"data\":{\"list\":[]}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/user/removePlaylistTrack"))
+            .andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"id\":\"900\",\"songId\":\"mid1\"}"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":0,\"data\":{\"retCode\":0}}}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/user/removePlaylistTrack"))
+            .andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"id\":\"900\",\"songId\":\"mid2\"}"))
+            .andRespond(withStatus(HttpStatus.BAD_GATEWAY).body("qqmusic_key=secret; G:/Private/test"));
+        server.expect(requestTo("http://qq-api.test/user/removePlaylistTrack"))
+            .andExpect(header(HttpHeaders.COOKIE, "uin=200"))
+            .andExpect(content().json("{\"id\":\"900\",\"songId\":\"mid3\"}"))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"req_1\":{\"code\":0,\"data\":{\"retCode\":0}}}}", MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("200", "qq:900", List.of("qq:mid1", "qq:mid2", "qq:mid3"), "uin=200");
+        assertEquals(List.of("qq:mid1", "qq:mid3"), result.succeeded());
+        assertEquals(List.of("qq:mid2"), result.failed());
+        assertEquals("接口返回 HTTP 502，请稍后重试。", result.errors().get("qq:mid2"));
+        server.verify();
+    }
+
+    @Test
+    void batchRemovalRefusesCollectedPlaylistsBeforeAnyWrite() {
+        server.expect(requestTo("http://qq-api.test/user/getUserPlaylists?uin=200&offset=0&limit=100"))
+            .andRespond(withSuccess("{\"code\":0,\"data\":{\"playlists\":[]}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/user/getUserCollectedSongLists?uin=200&page=1&limit=100"))
+            .andRespond(withSuccess("{\"code\":0,\"data\":{\"list\":[{\"dissid\":900,\"dissname\":\"Collected\",\"dirid\":2}]}}", MediaType.APPLICATION_JSON));
+        assertThrows(IllegalArgumentException.class, () -> provider.removeAccountPlaylistTracks("200", "qq:900", List.of("qq:mid1"), "uin=200"));
+        server.verify();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = { "{}", "{\"response\":{\"code\":0}}", "{\"response\":{\"code\":0,\"req_1\":{\"code\":0}}}" })
+    void batchRemovalRequiresTheKnownVerifiedGatewayResponse(String response) {
+        server.expect(requestTo("http://qq-api.test/user/getUserPlaylists?uin=200&offset=0&limit=100"))
+            .andRespond(withSuccess("{\"data\":{\"playlists\":[{\"dissid\":900,\"dissname\":\"Owned\",\"dirid\":2}]}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/user/getUserCollectedSongLists?uin=200&page=1&limit=100"))
+            .andRespond(withSuccess("{\"data\":{\"list\":[]}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo("http://qq-api.test/user/removePlaylistTrack"))
+            .andRespond(withSuccess(response, MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("200", "qq:900", List.of("qq:mid1"), "uin=200");
+        assertEquals(List.of(), result.succeeded());
+        assertEquals(List.of("qq:mid1"), result.failed());
+        server.verify();
+    }
+
+    @Test
     void refusesRecentReportWhenCredentialBelongsToAnotherAccount() {
         assertThrows(IllegalArgumentException.class, () -> provider.reportAccountRecentTrack(
             "200", "qq:mid1", "cf3dac35-7a99-4706-9c69-11a4742486a1", 30, 180, "uin=300"));
@@ -435,6 +485,29 @@ class QqMusicProviderTest {
         assertEquals(true, playlists.getFirst().createdByAccount());
         assertEquals("qq:88", playlists.get(1).id());
         assertEquals(false, playlists.get(1).createdByAccount());
+        server.verify();
+    }
+
+    @Test
+    void loadsCreatedAndCollectedPlaylistsBeyondTheFirstHundred() {
+        String created = java.util.stream.IntStream.rangeClosed(1, 100)
+            .mapToObj(id -> "{\"tid\":\"" + id + "\",\"diss_name\":\"List " + id + "\",\"dirid\":2}")
+            .collect(java.util.stream.Collectors.joining(","));
+        String collected = java.util.stream.IntStream.rangeClosed(201, 300)
+            .mapToObj(id -> "{\"dissid\":\"" + id + "\",\"dissname\":\"Collected " + id + "\"}")
+            .collect(java.util.stream.Collectors.joining(","));
+        server.expect(requestTo(containsString("/user/getUserPlaylists?uin=200&offset=0&limit=100")))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"data\":{\"playlists\":[" + created + "]}}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/user/getUserPlaylists?uin=200&offset=100&limit=100")))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"data\":{\"playlists\":[{\"tid\":\"100\",\"diss_name\":\"Boundary\",\"dirid\":2},{\"tid\":\"101\",\"diss_name\":\"Last created\",\"dirid\":2}]}}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/user/getUserCollectedSongLists?uin=200&page=1&limit=100")))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"data\":{\"cdlist\":[" + collected + "]}}}", MediaType.APPLICATION_JSON));
+        server.expect(requestTo(containsString("/user/getUserCollectedSongLists?uin=200&page=2&limit=100")))
+            .andRespond(withSuccess("{\"response\":{\"code\":0,\"data\":{\"cdlist\":[{\"dissid\":\"301\",\"dissname\":\"Last collected\"}]}}}", MediaType.APPLICATION_JSON));
+        List<HomepagePlaylist> result = provider.loadAccountPlaylists("200", "uin=200");
+        assertEquals(202, result.size());
+        assertEquals("qq:101", result.get(100).id());
+        assertEquals("qq:301", result.getLast().id());
         server.verify();
     }
 

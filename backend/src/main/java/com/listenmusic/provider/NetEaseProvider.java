@@ -1005,38 +1005,43 @@ public class NetEaseProvider implements MusicProvider {
     @Override
     public List<HomepagePlaylist> loadAccountPlaylists(String accountId, String credential) {
         requireAccountCredential(accountId, credential);
-        JsonNode root = get("/user/playlist", uriBuilder -> uriBuilder
-            .path("/user/playlist")
-            .queryParam("uid", accountId)
-            .queryParam("cookie", credential)
-            .queryParam("limit", 100)
-            .queryParam("offset", 0)
-            .queryParam("timestamp", System.currentTimeMillis())
-            .build(), credential);
-        ensureAccountResponse(root);
-        List<HomepagePlaylist> playlists = new ArrayList<>();
-        for (JsonNode playlist : root.path("playlist")) {
-            String id = playlist.path("id").asText("");
-            String title = playlist.path("name").asText("").trim();
-            if (id.isBlank() || title.isBlank()) {
-                continue;
+        java.util.Map<String, HomepagePlaylist> playlists = new java.util.LinkedHashMap<>();
+        for (int page = 0; page < 100; page++) {
+            final int offset = page * 100;
+            JsonNode root = get("/user/playlist", uriBuilder -> uriBuilder
+                .path("/user/playlist")
+                .queryParam("uid", accountId)
+                .queryParam("cookie", credential)
+                .queryParam("limit", 100)
+                .queryParam("offset", offset)
+                .queryParam("timestamp", System.currentTimeMillis())
+                .build(), credential);
+            ensureAccountResponse(root);
+            JsonNode items = root.path("playlist");
+            int previousSize = playlists.size();
+            for (JsonNode playlist : items) {
+                String id = playlist.path("id").asText("");
+                String title = playlist.path("name").asText("").trim();
+                if (id.isBlank() || title.isBlank()) continue;
+                String creatorId = playlist.path("creator").path("userId").asText("");
+                boolean subscribed = playlist.path("subscribed").asBoolean(false);
+                boolean createdByAccount = accountId.equals(creatorId) || (creatorId.isBlank() && !subscribed);
+                boolean favorite = createdByAccount && playlist.path("specialType").asInt(0) == 5;
+                playlists.putIfAbsent(id, new HomepagePlaylist(
+                    PROVIDER_ID + ":" + id,
+                    title,
+                    firstNonBlank(playlist.path("description").asText(""), "网易云歌单"),
+                    firstNonBlank(playlist.path("coverImgUrl").asText(""), playlist.path("picUrl").asText("")),
+                    playlist.path("trackCount").asInt(0),
+                    createdByAccount,
+                    createdByAccount && !favorite,
+                    favorite
+                ));
             }
-            String creatorId = playlist.path("creator").path("userId").asText("");
-            boolean subscribed = playlist.path("subscribed").asBoolean(false);
-            boolean createdByAccount = accountId.equals(creatorId) || (creatorId.isBlank() && !subscribed);
-            boolean favorite = createdByAccount && playlist.path("specialType").asInt(0) == 5;
-            playlists.add(new HomepagePlaylist(
-                PROVIDER_ID + ":" + id,
-                title,
-                firstNonBlank(playlist.path("description").asText(""), "网易云歌单"),
-                firstNonBlank(playlist.path("coverImgUrl").asText(""), playlist.path("picUrl").asText("")),
-                playlist.path("trackCount").asInt(0),
-                createdByAccount,
-                createdByAccount && !favorite,
-                favorite
-            ));
+            if (!root.path("more").asBoolean(items.size() >= 100)) return List.copyOf(playlists.values());
+            if (playlists.size() == previousSize) throw new IllegalStateException("网易云歌单分页未返回新内容，请刷新重试");
         }
-        return playlists;
+        throw new IllegalStateException("网易云歌单分页超出安全上限，请稍后重试");
     }
 
     @Override
@@ -1048,14 +1053,15 @@ public class NetEaseProvider implements MusicProvider {
             throw new IllegalArgumentException("无效的网易云歌曲 ID");
         }
         List<String> rawTrackIds = trackIds.stream().map(NetEaseProvider::rawId).distinct().toList();
-        JsonNode root = get("/playlist/track/add", uriBuilder -> uriBuilder
-            .path("/playlist/track/add")
+        JsonNode root = get("/playlist/tracks", uriBuilder -> uriBuilder
+            .path("/playlist/tracks")
+            .queryParam("op", "add")
             .queryParam("pid", rawId(playlistId))
-            .queryParam("ids", String.join(",", rawTrackIds))
+            .queryParam("tracks", String.join(",", rawTrackIds))
             .queryParam("cookie", credential)
             .queryParam("timestamp", System.currentTimeMillis())
             .build(), credential);
-        ensureAccountResponse(root);
+        ensureAccountResponse(root.path("body").isObject() ? root.path("body") : root);
         java.util.Set<String> verified = loadAccountPlaylist(playlistId, accountId, credential).stream()
             .map(Track::id)
             .collect(java.util.stream.Collectors.toSet());
@@ -1071,17 +1077,75 @@ public class NetEaseProvider implements MusicProvider {
         if (trackId == null || !trackId.matches("netease:[1-9][0-9]*")) {
             throw new IllegalArgumentException("无效的网易云歌曲 ID");
         }
-        JsonNode root = get("/playlist/track/delete", uriBuilder -> uriBuilder
-            .path("/playlist/track/delete")
-            .queryParam("id", rawId(playlistId))
-            .queryParam("ids", rawId(trackId))
+        JsonNode root = get("/playlist/tracks", uriBuilder -> uriBuilder
+            .path("/playlist/tracks")
+            .queryParam("op", "del")
+            .queryParam("pid", rawId(playlistId))
+            .queryParam("tracks", rawId(trackId))
             .queryParam("cookie", credential)
             .queryParam("timestamp", System.currentTimeMillis())
             .build(), credential);
-        ensureAccountResponse(root);
+        ensureAccountResponse(root.path("body").isObject() ? root.path("body") : root);
         if (loadAccountPlaylist(playlistId, accountId, credential).stream().anyMatch(track -> trackId.equals(track.id()))) {
             throw new IllegalStateException("网易云音乐尚未确认歌曲已移出歌单，请刷新后重试");
         }
+    }
+
+    @Override
+    public PlaylistTrackBatchResult removeAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, String credential) {
+        requireAccountCredential(accountId, credential);
+        if (trackIds == null || trackIds.isEmpty() || trackIds.size() > 100
+            || trackIds.stream().anyMatch(id -> id == null || !id.matches("netease:[1-9][0-9]*"))) {
+            throw new IllegalArgumentException("无效的网易云歌曲 ID");
+        }
+        List<String> ids = trackIds.stream().distinct().toList();
+        requireOwnedPlaylist(accountId, playlistId, credential, false);
+        try {
+            JsonNode root = get("/playlist/tracks", uriBuilder -> uriBuilder.path("/playlist/tracks")
+                .queryParam("op", "del").queryParam("pid", rawId(playlistId))
+                .queryParam("tracks", String.join(",", ids.stream().map(NetEaseProvider::rawId).toList()))
+                .queryParam("cookie", credential).queryParam("timestamp", System.currentTimeMillis()).build(), credential);
+            ensurePlaylistBatchResponse(root.path("body").isObject() ? root.path("body") : root);
+            JsonNode detail = get("/playlist/detail", uriBuilder -> uriBuilder.path("/playlist/detail")
+                .queryParam("id", rawId(playlistId)).queryParam("uid", accountId)
+                .queryParam("cookie", credential).queryParam("timestamp", System.currentTimeMillis()).build(), credential);
+            ensurePlaylistBatchResponse(detail);
+            JsonNode playlist = detail.path("playlist");
+            JsonNode count = playlist.path("trackCount");
+            if (!playlist.isObject() || !count.isIntegralNumber() || !count.canConvertToInt() || count.intValue() < 0) {
+                throw new IllegalStateException("网易云音乐尚未确认完整歌单成员");
+            }
+            java.util.Set<String> membership = completePlaylistMembership(playlist.path("trackIds"), count.intValue());
+            if (membership == null) membership = completePlaylistMembership(playlist.path("tracks"), count.intValue());
+            if (membership == null) throw new IllegalStateException("网易云音乐尚未确认完整歌单成员");
+            List<String> succeeded = new ArrayList<>(), failed = new ArrayList<>();
+            Map<String, String> errors = new java.util.LinkedHashMap<>();
+            for (String id : ids) {
+                if (!membership.contains(rawId(id))) succeeded.add(id);
+                else { failed.add(id); errors.put(id, "平台尚未确认操作结果，请刷新歌单后再检查。"); }
+            }
+            return new PlaylistTrackBatchResult(succeeded, failed, errors);
+        } catch (RuntimeException error) {
+            return PlaylistTrackBatchResult.failure(ids, error);
+        }
+    }
+
+    private static void ensurePlaylistBatchResponse(JsonNode response) {
+        ensureAccountResponse(response);
+        JsonNode status = response.path("code");
+        if (!status.isIntegralNumber() || !status.canConvertToInt() || status.intValue() != 200) {
+            throw new IllegalStateException("网易云音乐尚未确认歌单操作结果");
+        }
+    }
+
+    private java.util.Set<String> completePlaylistMembership(JsonNode songs, int count) {
+        if (!songs.isArray() || songs.size() != count) return null;
+        java.util.Set<String> ids = new java.util.HashSet<>();
+        for (JsonNode song : songs) {
+            String id = song.path("id").asText("");
+            if (!id.matches("[1-9][0-9]*") || !ids.add(id)) return null;
+        }
+        return ids;
     }
 
     @Override

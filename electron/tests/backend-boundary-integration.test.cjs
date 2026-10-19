@@ -12,10 +12,10 @@ function compile(source) {
   } }).outputText;
 }
 
-function sharedBoundary() {
+function sharedBoundary(name = "backendRoutes", globals = {}) {
   const exports = {};
-  vm.runInNewContext(compile(fs.readFileSync(path.join(sourceRoot, "shared/backendRoutes.ts"), "utf8")),
-    { exports, URL });
+  vm.runInNewContext(compile(fs.readFileSync(path.join(sourceRoot, `shared/${name}.ts`), "utf8")),
+    { exports, URL, ...globals });
   return exports;
 }
 
@@ -32,14 +32,18 @@ test("renderer, preload and main use the shared backend boundary", () => {
 test("actual preload keeps device playback and online search on standalone transport", async () => {
   let api;
   const requests = [];
-  vm.runInNewContext(compile(fs.readFileSync(path.join(sourceRoot, "preload/preload.ts"), "utf8")), {
-    exports: {}, process: { platform: "win32" }, URLSearchParams, window: { location: { search: "" } },
+  const globals = {
+    process: { platform: "win32" }, URLSearchParams, window: { location: { search: "" } },
+    performance, AbortController, setTimeout, clearTimeout,
     fetch: async (url, options) => {
       requests.push({ url, options });
       return new Response("[]", { status: 200 });
-    },
+    }
+  };
+  vm.runInNewContext(compile(fs.readFileSync(path.join(sourceRoot, "preload/preload.ts"), "utf8")), {
+    exports: {}, ...globals,
     require(specifier) {
-      if (specifier.endsWith("/backendRoutes")) return sharedBoundary();
+      if (specifier.startsWith("../shared/")) return sharedBoundary(path.basename(specifier), globals);
       assert.equal(specifier, "electron");
       return { contextBridge: { exposeInMainWorld(_name, value) { api = value; } }, ipcRenderer: {} };
     }
@@ -64,7 +68,7 @@ test("auxiliary mini preloads expose only their narrowly scoped controls", () =>
     vm.runInNewContext(compile(fs.readFileSync(path.join(sourceRoot, "preload/preload.ts"), "utf8")), {
       exports: {}, process: { platform: "win32" }, URLSearchParams, window: { location: { search: `?window=${mode}` } },
       require(specifier) {
-        if (specifier.endsWith("/backendRoutes")) return sharedBoundary();
+        if (specifier.startsWith("../shared/")) return sharedBoundary(path.basename(specifier));
         return { contextBridge: { exposeInMainWorld(_name, value) { api = value; } }, ipcRenderer: {} };
       }
     });

@@ -14,7 +14,7 @@ const routes = new Map([
     `/assets/screenshots/${name}.png`, [`assets/screenshots/${name}.png`, 'image/png'],
   ]),
 ]);
-const installerPath = '/updates/windows/Tiaolv-Setup-0.1.4.exe';
+const installerPath = '/updates/windows/Tiaolv-Setup-0.1.7.exe';
 const server = http.createServer(async (req, res) => {
   if (!['GET', 'HEAD'].includes(req.method)) {
     res.writeHead(405, { Allow: 'GET, HEAD' });

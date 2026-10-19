@@ -15,6 +15,12 @@ let resizePointer: number | null = null;
 let resizePending = false;
 let readinessSent = false;
 let disposed = false;
+let pendingPlaylistMutation: {
+  requestId: string;
+  kind: "create" | "add";
+  complete: (error?: string) => void;
+  timer: ReturnType<typeof setTimeout>;
+} | undefined;
 
 watch(() => Boolean(snapshot.value?.playback), async ready => {
   if (!ready || readinessSent) return;
@@ -26,6 +32,37 @@ watch(() => Boolean(snapshot.value?.playback), async ready => {
 
 function action(value: MiniPlayerAction) { bridge?.sendMiniPlayerAction(value); }
 function queueKey(track: MiniPlayerTrack) { return track.queueKey ?? track.id; }
+
+function requestPlaylistMutation(
+  value: Extract<MiniPlayerAction, { type: "queue-create" | "queue-add" }>,
+  complete: (error?: string) => void
+) {
+  if (pendingPlaylistMutation) { complete("歌单保存正在进行，请稍后重试。"); return; }
+  const requestId = crypto.randomUUID();
+  const kind = value.type === "queue-create" ? "create" : "add";
+  const timer = setTimeout(() => {
+    if (pendingPlaylistMutation?.requestId !== requestId) return;
+    pendingPlaylistMutation = undefined;
+    complete("尚未收到保存结果，请检查歌单后重试。");
+  }, 15_000);
+  pendingPlaylistMutation = { requestId, kind, complete, timer };
+  try {
+    if (!bridge?.sendMiniPlayerAction) throw new Error("无法连接主窗口，请重新打开迷你播放器。");
+    bridge.sendMiniPlayerAction({ ...value, requestId });
+  } catch (error) {
+    clearTimeout(timer);
+    pendingPlaylistMutation = undefined;
+    complete(error instanceof Error ? error.message : "歌单保存请求发送失败，请重试。");
+  }
+}
+
+watch(() => snapshot.value?.playback?.playlistMutationResult, result => {
+  const pending = pendingPlaylistMutation;
+  if (!pending || result?.requestId !== pending.requestId || result.kind !== pending.kind) return;
+  clearTimeout(pending.timer);
+  pendingPlaylistMutation = undefined;
+  pending.complete(result.error);
+});
 
 async function setQueue(open: boolean) {
   const request = ++queueRequest;
@@ -75,6 +112,7 @@ onBeforeUnmount(() => {
   removeSnapshot?.();
   removeTime?.();
   if (queueLeaveTimer) clearTimeout(queueLeaveTimer);
+  if (pendingPlaylistMutation) clearTimeout(pendingPlaylistMutation.timer);
 });
 </script>
 
@@ -98,8 +136,8 @@ onBeforeUnmount(() => {
     @queue-track-play="track => action({ type: 'queue-play', key: queueKey(track) })"
     @queue-track-like="track => action({ type: 'queue-like', key: queueKey(track) })"
     @queue-track-remove="key => action({ type: 'queue-remove', key })"
-    @queue-track-add-playlist="(track, playlistId) => action({ type: 'queue-add', key: queueKey(track), playlistId })"
-    @queue-track-create-playlist="(track, name) => action({ type: 'queue-create', key: queueKey(track), name })"
+    @queue-track-add-playlist="(track, playlistId, complete) => requestPlaylistMutation({ type: 'queue-add', key: queueKey(track), playlistId }, complete)"
+    @queue-track-create-playlist="(track, name, complete) => requestPlaylistMutation({ type: 'queue-create', key: queueKey(track), name }, complete)"
     @queue-track-copy="track => action({ type: 'queue-copy', key: queueKey(track) })"
     @customize="bridge?.miniWindowCommand({ type: 'customize' })"
     @lock="bridge?.miniWindowCommand({ type: 'lock', value: !snapshot.window.locked })"

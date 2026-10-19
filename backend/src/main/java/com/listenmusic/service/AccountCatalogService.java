@@ -16,6 +16,7 @@ import com.listenmusic.provider.LyricData;
 import com.listenmusic.provider.SearchType;
 import com.listenmusic.domain.QqListeningRankEntry;
 import com.listenmusic.provider.ProviderLoginRequiredException;
+import com.listenmusic.provider.PlaylistTrackBatchResult;
 import com.listenmusic.repository.AccountRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -336,7 +337,29 @@ public class AccountCatalogService {
         });
     }
 
+    public PlaylistTrackBatchResult removePlaylistTracks(String provider, String playlistId, List<String> trackIds, String expectedAccountId) {
+        if (!"qq".equals(provider) && !"netease".equals(provider)) throw new IllegalArgumentException("无效的音乐源");
+        String playlistPattern = provider + ":[1-9][0-9]*";
+        String trackPattern = "qq".equals(provider) ? "qq:[a-zA-Z0-9]{1,64}" : "netease:[1-9][0-9]*";
+        if (playlistId == null || !playlistId.matches(playlistPattern) || trackIds == null
+            || trackIds.isEmpty() || trackIds.stream().anyMatch(id -> id == null || !id.matches(trackPattern))
+            || expectedAccountId == null || expectedAccountId.isBlank()) {
+            throw new IllegalArgumentException("需要有效歌单、歌曲 ID 和当前账号");
+        }
+        List<String> ids = trackIds.stream().distinct().toList();
+        if (ids.size() > 100) throw new IllegalArgumentException("每批需要 1 到 100 首不同歌曲");
+        AccountContext context = accountContext(provider);
+        if (!expectedAccountId.equals(context.account().providerUserId())) throw new IllegalArgumentException("账号已切换，请重新选择歌曲");
+        return accountCall(() -> context.provider().removeAccountPlaylistTracks(
+            context.account().providerUserId(), playlistId, ids, context.credential()
+        ));
+    }
+
     public void addPlaylistTracks(String provider, String playlistId, List<String> trackIds) {
+        addPlaylistTracks(provider, playlistId, trackIds, null);
+    }
+
+    public void addPlaylistTracks(String provider, String playlistId, List<String> trackIds, String expectedAccountId) {
         List<String> normalizedIds = trackIds == null ? List.of() : trackIds.stream()
             .filter(java.util.Objects::nonNull)
             .map(String::trim)
@@ -347,6 +370,9 @@ public class AccountCatalogService {
             throw new IllegalArgumentException("歌单 ID 和 1 到 100 首歌曲不能为空");
         }
         AccountContext context = accountContext(provider);
+        if (expectedAccountId != null && !expectedAccountId.equals(context.account().providerUserId())) {
+            throw new IllegalArgumentException("账号已切换，请重新选择歌曲");
+        }
         accountCall(() -> {
             context.provider().addAccountPlaylistTracks(
                 context.account().providerUserId(), playlistId, normalizedIds, context.credential()
@@ -436,6 +462,7 @@ public class AccountCatalogService {
             });
             return true;
         } catch (IllegalStateException ex) {
+            if (!subscribed) throw ex;
             return false;
         }
     }

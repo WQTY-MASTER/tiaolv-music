@@ -189,6 +189,10 @@ public interface MusicProvider {
         throw new UnsupportedOperationException("当前音源暂不支持移出歌单歌曲");
     }
 
+    default PlaylistTrackBatchResult removeAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, String credential) {
+        throw new UnsupportedOperationException("当前音源暂不支持批量移出歌单歌曲");
+    }
+
     default void addAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, String credential) {
         throw new UnsupportedOperationException("当前音源暂不支持添加歌单歌曲");
     }

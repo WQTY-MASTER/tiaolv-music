@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { setDiagnosticContext } from "./services/diagnostics";
 import { runTrackBatch, type TrackBatchAction, type TrackBatchResult } from "./services/streamingTrackManagement";
+import { canEditAccountPlaylist, isPlaylistAccountCurrent, runAccountPlaylistChunks, trackPlaylistProvider, type PlaylistAccountContext, type PlaylistBatchProgress } from "./services/accountPlaylistActions";
 import { matchLocalAudioSource, type LocalAudioSelection, type LocalAudioSourceGroup } from "./services/localAudioSources";
 import {
   AppWindow,
@@ -47,6 +48,11 @@ import PlaylistCard from "./components/PlaylistCard.vue";
 import SidebarNav from "./components/SidebarNav.vue";
 import AccountMenu from "./components/AccountMenu.vue";
 import AggregatePlaylistPage from "./components/AggregatePlaylistPage.vue";
+import PlaylistBatchControls from "./components/PlaylistBatchControls.vue";
+import PlaylistCoverArt from "./components/PlaylistCoverArt.vue";
+import PlaylistCoverStorageSettings from "./components/PlaylistCoverStorageSettings.vue";
+import { collectPlaylistCoverReferences } from "./services/playlistCoverStorage";
+import type { PlaylistCoverStorageStatistics } from "../../shared/playlistCoverStorage";
 import StreamingDailyMixPage from "./components/StreamingDailyMixPage.vue";
 import StreamingPlaylistDiscoveryPage from "./components/StreamingPlaylistDiscoveryPage.vue";
 import StreamingSearchPage from "./components/StreamingSearchPage.vue";
@@ -126,7 +132,7 @@ import {
   toggleCatalogArtistSubscription,
   saveAccountFavorite,
   removeAccountFavorite,
-  removeAccountPlaylistTrack,
+  removeAccountPlaylistTracks,
   addAccountPlaylistTracks,
   reorderAccountPlaylistTracks,
   restoreDefaultCacheDirectory,
@@ -141,6 +147,7 @@ import {
   searchCatalog,
   selectMusicDirectory,
   selectPlaylistCoverImage,
+  storePlaylistCoverImage,
   updateCacheSettings,
   clearManagedCache,
   loadCurrentAccounts,
@@ -225,6 +232,7 @@ import {
   type SleepTimerMinutes
 } from "./services/sleepTimer";
 import { selectPreferredLocalPlaybackTrack } from "./services/preferredLocalPlayback";
+import { createPlaybackQueuePersistence } from "./services/playbackQueuePersistence";
 import {
   NETEASE_QUALITY_OPTIONS,
   QQ_QUALITY_OPTIONS,
@@ -303,18 +311,31 @@ import {
   type ListeningScrobbleSession
 } from "./services/listeningScrobble";
 import {
+  AGGREGATE_PLAYLIST_STORAGE_KEY,
   LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY,
-  addTrackToAggregatePlaylist,
+  aggregatePlaylistCoverUrl,
+  addTracksToAggregatePlaylist,
   createAggregatePlaylist,
   mergeAggregatePlaylistCollections,
   mergeAggregateTracks,
   readAggregatePlaylists,
-  removeAggregateTrackGroup,
+  removeAggregateTrackGroups,
   reorderAggregateTrackGroups,
   writeAggregatePlaylists,
   type AggregatePlaylist,
   type AggregateTrackSource
 } from "./services/aggregatePlaylists";
+import {
+  LOCAL_PLAYLIST_STORAGE_KEY,
+  PLAYLIST_OVERVIEW_ORDER_STORAGE_KEY,
+  PLAYLIST_TRACK_ORDER_STORAGE_KEY,
+  PLAYLIST_COVER_PATH_STORAGE_KEY,
+  FAVORITES_PLAYLIST_METADATA_STORAGE_KEY,
+  readFavoritesPlaylistMetadata,
+  saveLocalPlaylistSnapshot,
+  savePlaylistStorageChanges,
+  playlistPersistenceError
+} from "./services/localPlaylistPersistence";
 import { applyTrackOrder, reorderVisibleKeys, trackOrderKey } from "./services/playlistOrder";
 import { mediaPathToUrl as filePathToUrl, resolvePlaylistCover } from "./services/playlistCovers";
 import {
@@ -624,10 +645,6 @@ function migrateLegacyStorage() {
 
 migrateLegacyStorage();
 
-const LOCAL_PLAYLIST_STORAGE_KEY = `${STORAGE_PREFIX}local-playlists`;
-const PLAYLIST_OVERVIEW_ORDER_STORAGE_KEY = `${STORAGE_PREFIX}playlist-overview-order`;
-const PLAYLIST_TRACK_ORDER_STORAGE_KEY = `${STORAGE_PREFIX}playlist-track-order`;
-const PLAYLIST_COVER_PATH_STORAGE_KEY = `${STORAGE_PREFIX}playlist-cover-paths`;
 const STREAMING_SOURCE_STORAGE_KEY = `${STORAGE_PREFIX}streaming-source`;
 const LOCAL_LYRICS_MATCH_STORAGE_KEY = `${STORAGE_PREFIX}local-lyrics-online-match`;
 const SAVE_MATCHED_LYRICS_BESIDE_AUDIO_STORAGE_KEY = `${STORAGE_PREFIX}save-matched-lyrics-beside-audio`;
@@ -904,6 +921,11 @@ const cacheStatistics = ref<CacheSnapshot["statistics"]>({
 });
 const cacheSettingsPending = ref(false);
 const backgroundCacheStatistics = ref({ directory: "", bytes: 0, entries: 0 });
+const originalCoverStatistics = ref<PlaylistCoverStorageStatistics | null>(null);
+const originalCoverPending = ref(false);
+const originalCoverError = ref("");
+const originalCoverNotice = ref("");
+const originalCoverConfirmVisible = ref(false);
 const totalCacheBytes = computed(() => cacheStatistics.value.totalBytes + backgroundCacheStatistics.value.bytes);
 const totalCacheEntries = computed(() => cacheStatistics.value.totalEntries + backgroundCacheStatistics.value.entries);
 const cacheSettingsLoaded = ref(false);
@@ -953,8 +975,24 @@ const localLyricsMatchPending = ref(false);
 let localLyricsMatchRequestId = 0;
 const localLyricsMatchNotice = ref("");
 const selectedLocalTrackIds = ref(new Set<string>());
-const localTrackContextMenu = ref<{ track: Track; queue: Track[]; x: number; y: number } | null>(null);
-const trackPlaylistPicker = ref<{ tracks: Track[]; mode: TrackPlaylistPickerMode } | null>(null);
+const localTrackContextMenu = ref<{ track: Track; queue: Track[]; tracks: Track[]; complete?: (result: TrackBatchResult) => void; accountContext?: PlaylistAccountContext; playlistId?: string; x: number; y: number } | null>(null);
+const contextMenuAllLiked = computed(() => Boolean(localTrackContextMenu.value?.tracks.length
+  && localTrackContextMenu.value.tracks.every(track => track.liked)));
+const contextMenuSelectionCount = computed(() => localTrackContextMenu.value?.complete
+  ? new Set(localTrackContextMenu.value.tracks.map(track => track.id)).size : 0);
+const trackPlaylistPicker = ref<{
+  tracks: Track[];
+  mode: TrackPlaylistPickerMode;
+  context?: PlaylistAccountContext;
+  playlists?: Playlist[];
+  state?: "loading" | "success" | "error";
+  error?: string;
+  progress?: PlaylistBatchProgress;
+  complete?: (result: TrackBatchResult) => void;
+} | null>(null);
+let playlistAccountRevision = 0;
+let playlistMutationRequestId = 0;
+let accountPlaylistsRevision = 0;
 const localArtistSearchKeyword = ref("");
 const localArtistSortMode = ref<"name-asc" | "name-desc" | "count-desc" | "count-asc">("name-asc");
 const localArtistGenreFilter = ref("全部流派");
@@ -1067,6 +1105,14 @@ const playlistDiscoveryPage = computed(() => activePlaylistDiscovery.value.page)
 const playlistDiscoveryState = computed(() => activePlaylistDiscovery.value.status);
 const playlistDiscoveryError = computed(() => activePlaylistDiscovery.value.error);
 const selectedPlaylist = ref<Playlist | null>(null);
+const playlistPageRevision = ref(0);
+watch([activeView, () => selectedPlaylist.value?.id, appMode], () => {
+  playlistPageRevision.value += 1;
+  playlistMutationRequestId += 1;
+  playlistMutationPending.value = false;
+  closeLocalTrackContextMenu();
+  if (trackPlaylistPicker.value?.mode === "streaming") finishTrackPlaylistPicker({ succeeded: [], failed: [], message: "页面已变化，请重新选择歌曲。" });
+}, { flush: "sync" });
 const isStreamingDailyPlaylist = computed(() => selectedPlaylist.value?.id.startsWith("streaming-daily-") ?? false);
 const isStreamingTemplatePlaylist = computed(() => isStreamingDailyPlaylist.value || selectedPlaylist.value?.streamingTemplate === true);
 const selectedLocalAlbum = ref<LocalAlbum | null>(null);
@@ -1074,6 +1120,12 @@ const localAlbumSearchKeyword = ref("");
 const localAlbumSortMode = ref<LocalAlbumSortMode>("default");
 const localAlbumFilterOpen = ref(false);
 const userPlaylists = ref<Playlist[]>(persistedLocalPlaylistState.playlists);
+const favoritesPlaylistMetadata = ref(readFavoritesPlaylistMetadata());
+const localFavoritesPlaylist = computed<Playlist>(() => {
+  const defaults = demoPlaylists.find(playlist => playlist.id === "favorites")!;
+  const title = favoritesPlaylistMetadata.value.title;
+  return title ? { ...defaults, title, mark: title.slice(0, 1) } : defaults;
+});
 const localPlaylistTrackMap = ref<Record<string, Track[]>>(persistedLocalPlaylistState.tracks);
 const playlistTrackOrder = ref<Record<string, string[]>>(readPersistedPlaylistTrackOrder());
 const playlistCoverPaths = ref<Record<string, string>>(readPersistedPlaylistCoverPaths());
@@ -1091,16 +1143,25 @@ async function migrateLegacyAggregatePlaylists() {
     const legacyPlaylists = await window.listenMusic.getLegacyAggregatePlaylists();
     const merged = mergeAggregatePlaylistCollections(aggregatePlaylists.value, legacyPlaylists);
     if (merged.length !== aggregatePlaylists.value.length) {
+      savePlaylistStorageChanges([
+        { key: AGGREGATE_PLAYLIST_STORAGE_KEY, value: merged },
+        { key: LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY, value: "1", raw: true }
+      ]);
       aggregatePlaylists.value = merged;
-      writeAggregatePlaylists(merged);
+    } else {
+      savePlaylistStorageChanges([{ key: LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY, value: "1", raw: true }]);
     }
-    window.localStorage.setItem(LEGACY_AGGREGATE_PLAYLIST_MIGRATION_KEY, "1");
-  } catch {
+  } catch (error) {
     // Leave the migration unmarked so a later startup can retry safely.
+    showSearchToast(playlistPersistenceError(error, "旧聚合歌单恢复失败，下次启动将重试。"));
   }
 }
 const mainScrollElement = ref<HTMLElement | null>(null);
 const playlistFilterOpen = ref(false);
+const localPlaylistBatchSelecting = ref(false);
+const localPlaylistSelectedKeys = ref<string[]>([]);
+const localPlaylistBatchBusy = ref(false);
+const localPlaylistBatchMessage = ref("");
 const localToolMenuOpen = ref<"library" | "filter" | null>(null);
 const localLibraryToolsRef = ref<HTMLElement | null>(null);
 const playlistFilter = ref({
@@ -1112,6 +1173,12 @@ const playlistNameDialogMode = ref<"rename" | "create" | "streaming-create">("re
 const playlistNameInput = ref("");
 const playlistNameError = ref("");
 const playlistNameSubmitting = ref(false);
+const playlistNameInputElement = ref<HTMLInputElement | null>(null);
+watch(playlistNameDialogVisible, async visible => {
+  if (!visible) return;
+  await nextTick();
+  playlistNameInputElement.value?.focus();
+});
 const playlistState = ref<"idle" | "loading" | "success" | "error">("idle");
 const playlistError = ref("");
 const dailyRecommendationTracks = ref<Track[]>([]);
@@ -1119,14 +1186,20 @@ const dailyRecommendationState = ref<"idle" | "loading" | "success" | "error">("
 const dailyRecommendationError = ref("");
 const accountFavoriteTracks = ref<Track[]>([]);
 const accountPlaylists = ref<Playlist[]>([]);
-const streamingPlaylistTargets = computed(() => accountPlaylists.value.filter(playlist => (
-  playlist.source === streamingSource.value
-  && playlist.accountScoped
-  && playlist.createdByAccount
-  && playlist.deletable
-  && !playlist.favorite
-)));
+const streamingPlaylistTargets = computed(() => {
+  const picker = trackPlaylistPicker.value;
+  return picker?.context
+    ? (picker.playlists || []).filter(playlist => canEditAccountPlaylist(playlist, picker.context!.provider))
+    : [];
+});
 const playlistDeletionPending = ref(false);
+const playlistDeleteDialog = ref<{ playlist: Playlist; context: PlaylistAccountContext } | null>(null);
+const playlistDeleteCancelElement = ref<HTMLButtonElement | null>(null);
+watch(playlistDeleteDialog, async dialog => {
+  if (!dialog) return;
+  await nextTick();
+  playlistDeleteCancelElement.value?.focus();
+});
 const playlistMutationPending = ref(false);
 const playlistOrderMessage = ref("");
 const playlistOrderCooling = ref(false);
@@ -1138,20 +1211,33 @@ const selectedPlaylistBatchMode = computed<"favorites" | "playlist" | undefined>
   return playlist.createdByAccount && playlist.deletable ? "playlist" : undefined;
 });
 
-async function deleteStreamingPlaylist(entry: { id: string }) {
+function deleteStreamingPlaylist(entry: { id: string }) {
   const playlist = accountPlaylists.value.find(item => item.id === entry.id);
   const provider = streamingSource.value;
   if (!playlist?.createdByAccount || !playlist.deletable || (provider !== 'qq' && provider !== 'netease') || playlistDeletionPending.value) return;
-  const providerName = provider === 'qq' ? 'QQ 音乐' : '网易云音乐';
-  if (!window.confirm(`删除歌单「${playlist.title}」？这会同步删除${providerName}中的该歌单，无法撤销。`)) return;
+  const context = currentPlaylistAccountContext(provider);
+  if (context) playlistDeleteDialog.value = { playlist, context };
+}
+
+function closePlaylistDeleteDialog() {
+  if (!playlistDeletionPending.value) playlistDeleteDialog.value = null;
+}
+
+async function confirmStreamingPlaylistDelete() {
+  const target = playlistDeleteDialog.value;
+  if (!target || playlistDeletionPending.value) return;
+  const { playlist, context } = target;
+  if (!playlistAccountContextIsCurrent(context)) { playlistDeleteDialog.value = null; return; }
   playlistDeletionPending.value = true;
   try {
-    await deleteAccountPlaylist(playlist.id, provider);
-    if (streamingSource.value !== provider) return;
+    await deleteAccountPlaylist(playlist.id, context.provider);
+    if (!playlistAccountContextIsCurrent(context)) return;
+    accountPlaylistsRevision += 1;
     accountPlaylists.value = accountPlaylists.value.filter(item => item.id !== playlist.id);
     if (selectedPlaylist.value?.id === playlist.id) selectedPlaylist.value = null;
+    playlistDeleteDialog.value = null;
   } catch (error) {
-    scanError.value = accountContentErrorMessage(error, '删除歌单失败，请稍后重试。');
+    if (playlistAccountContextIsCurrent(context)) scanError.value = accountContentErrorMessage(error, '删除歌单失败，请稍后重试。');
   } finally {
     playlistDeletionPending.value = false;
   }
@@ -1474,7 +1560,9 @@ const qqListeningFlushes = new Map<number, Promise<void>>();
 let qqListeningRetryTimer: ReturnType<typeof window.setTimeout> | undefined;
 let lastPlaybackStateSaveSecond = -Infinity;
 let sessionRestored = false;
-let queueSaveChain: Promise<void> = Promise.resolve();
+const queuePersistence = createPlaybackQueuePersistence(savePlaybackQueue, () => {
+  scanError.value = "播放队列暂时无法保存，请确认后端已启动。";
+});
 let queueItemSerial = 0;
 let stateSaveChain: Promise<void> = Promise.resolve();
 let accountContentRequestId = 0;
@@ -1512,7 +1600,7 @@ function playlistWithDefaultCover(playlist: Playlist, tracks: Track[]) {
 
 const allPlaylists = computed(() => [
   playlistWithDefaultCover(
-    { ...demoPlaylists.find((playlist) => playlist.id === "favorites")!, count: favoriteTracks.value.length },
+    { ...localFavoritesPlaylist.value, count: favoriteTracks.value.length },
     favoriteTracks.value
   ),
   playlistWithDefaultCover(
@@ -1527,7 +1615,7 @@ const allPlaylists = computed(() => [
 ]);
 const playlistOverviewSource = computed(() => [
   playlistWithDefaultCover(
-    { ...demoPlaylists.find((playlist) => playlist.id === "favorites")!, count: favoriteTracks.value.length },
+    { ...localFavoritesPlaylist.value, count: favoriteTracks.value.length },
     favoriteTracks.value
   ),
   ...userPlaylists.value.map((playlist) => playlistWithDefaultCover({
@@ -2557,6 +2645,80 @@ const filteredPlaylistTracks = computed(() => {
   return tracks;
 });
 
+const localPlaylistCanRemove = computed(() => appMode.value === "local" && Boolean(selectedPlaylist.value
+  && (selectedPlaylist.value.id === "favorites" || selectedPlaylist.value.userManaged || selectedPlaylist.value.source === "local-user")));
+const localPlaylistSelectedTracks = computed(() => {
+  const selected = new Set(localPlaylistSelectedKeys.value);
+  return filteredPlaylistTracks.value.filter(track => selected.has(trackOrderKey(track)));
+});
+const localPlaylistAllSelected = computed(() => filteredPlaylistTracks.value.length > 0
+  && localPlaylistSelectedTracks.value.length === filteredPlaylistTracks.value.length);
+watch(() => [selectedPlaylist.value?.id, activeView.value, appMode.value], () => {
+  localPlaylistBatchSelecting.value = false;
+  localPlaylistSelectedKeys.value = [];
+  localPlaylistBatchMessage.value = "";
+});
+watch(filteredPlaylistTracks, tracks => {
+  const visible = new Set(tracks.map(trackOrderKey));
+  localPlaylistSelectedKeys.value = localPlaylistSelectedKeys.value.filter(key => visible.has(key));
+});
+function toggleLocalPlaylistBatch() {
+  if (localPlaylistBatchBusy.value) return;
+  localPlaylistBatchSelecting.value = !localPlaylistBatchSelecting.value;
+  localPlaylistSelectedKeys.value = [];
+  localPlaylistBatchMessage.value = "";
+  finishPlaylistTrackDrag();
+}
+function toggleLocalPlaylistTrack(track: Track) {
+  if (localPlaylistBatchBusy.value) return;
+  const key = trackOrderKey(track);
+  localPlaylistSelectedKeys.value = localPlaylistSelectedKeys.value.includes(key)
+    ? localPlaylistSelectedKeys.value.filter(item => item !== key) : [...localPlaylistSelectedKeys.value, key];
+}
+function clickLocalPlaylistTrack(track: Track) {
+  if (localPlaylistBatchBusy.value) return;
+  if (localPlaylistBatchSelecting.value) toggleLocalPlaylistTrack(track);
+  else void playTrack(track);
+}
+async function removeSelectedLocalPlaylistTracks() {
+  const playlist = selectedPlaylist.value;
+  const tracks = [...localPlaylistSelectedTracks.value];
+  if (!playlist || !localPlaylistCanRemove.value || !tracks.length || localPlaylistBatchBusy.value) return;
+  const keys = tracks.map(trackOrderKey);
+  const isCurrent = () => selectedPlaylist.value?.id === playlist.id && appMode.value === "local" && activeView.value === "playlist";
+  localPlaylistBatchBusy.value = true;
+  let result: TrackBatchResult;
+  try {
+    if (playlist.id === "favorites") {
+      const byKey = new Map(tracks.map(track => [trackOrderKey(track), track]));
+      result = await runTrackBatch(keys, async key => {
+        const track = byKey.get(key)!;
+        if (favoriteMutationPending.has(track.id)) throw new Error("这首歌曲的喜欢状态正在保存，请稍后重试。");
+        favoriteMutationPending.add(track.id);
+        try {
+          await removeFavorite(track.id);
+          favoriteTracks.value = favoriteTracks.value.filter(item => trackOrderKey(item) !== key);
+          syncFavoriteFlag(track.id, false);
+        } finally { favoriteMutationPending.delete(track.id); }
+      }, isCurrent);
+    } else {
+      const selected = new Set(keys);
+      const next = { ...localPlaylistTrackMap.value, [playlist.id]: (localPlaylistTrackMap.value[playlist.id] ?? []).filter(track => !selected.has(trackOrderKey(track))) };
+      persistLocalPlaylists(next);
+      localPlaylistTrackMap.value = next;
+      result = { succeeded: keys, failed: [] };
+    }
+  } catch (error) {
+    result = { succeeded: [], failed: keys, message: error instanceof Error ? error.message : "歌单保存失败，请重试。" };
+  } finally { localPlaylistBatchBusy.value = false; }
+  if (!isCurrent()) return;
+  const succeeded = new Set(result.succeeded);
+  localPlaylistSelectedKeys.value = localPlaylistSelectedKeys.value.filter(key => !succeeded.has(key));
+  localPlaylistBatchMessage.value = result.message || (result.failed.length
+    ? `成功 ${result.succeeded.length} 首，失败 ${result.failed.length} 首，可重试。` : `已移出 ${result.succeeded.length} 首歌曲。`);
+  showSearchToast(localPlaylistBatchMessage.value);
+}
+
 function toTrack(raw: unknown, index: number): Track | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -2790,7 +2952,7 @@ function toAccountPlaylistList(raw: unknown): Playlist[] {
     ? raw
       .map(toPlaylist)
       .filter((playlist): playlist is Playlist => Boolean(playlist))
-      .map((playlist) => ({ ...playlist, accountScoped: true, streamingTemplate: true }))
+      .map((playlist) => ({ ...playlistWithDefaultCover(playlist, []), accountScoped: true, streamingTemplate: true }))
     : [];
 }
 
@@ -2970,7 +3132,7 @@ function clearAccountContent() {
     ...catalogResults.value,
     ...playbackQueue.value,
     ...historyTracks.value
-  ].filter((track) => track.source === "netease").map((track) => track.id));
+  ].filter((track) => trackPlaylistProvider(track) !== null).map((track) => track.id));
   accountTrackIds.forEach((trackId) => syncAccountFavoriteFlag(trackId, false));
   accountFavoriteTracks.value = [];
   accountPlaylists.value = [];
@@ -3015,6 +3177,7 @@ async function loadAccountContent() {
   }
 
   const requestId = ++accountContentRequestId;
+  const playlistsRevision = accountPlaylistsRevision;
   const recentRevision = accountRecentRevision;
   const provider = activeAccount.provider;
   accountFavoriteTracks.value = [];
@@ -3075,7 +3238,9 @@ async function loadAccountContent() {
     accountFavoriteTracks.value = [];
   }
 
-  if (playlistsResult.status === "fulfilled") {
+  if (playlistsRevision !== accountPlaylistsRevision) {
+    // A newer playlist mutation or picker refresh already supplied the current list.
+  } else if (playlistsResult.status === "fulfilled") {
     accountPlaylists.value = toAccountPlaylistListWithOverrides(playlistsResult.value, provider);
   } else {
     failures.push(playlistsResult.reason);
@@ -4101,6 +4266,7 @@ async function refreshCacheSettings(force = false) {
   if (cacheSettingsPending.value || (cacheSettingsLoaded.value && !force)) return;
   cacheSettingsPending.value = true;
   cacheSettingsError.value = "";
+  void refreshOriginalCoverStorage();
   try {
     if (window.listenMusic?.getBackgroundCacheStatistics) {
       backgroundCacheStatistics.value = await window.listenMusic.getBackgroundCacheStatistics();
@@ -4115,6 +4281,51 @@ async function refreshCacheSettings(force = false) {
   } finally {
     cacheSettingsPending.value = false;
   }
+}
+
+function originalCoverReferences() {
+  return collectPlaylistCoverReferences(window.localStorage, [
+    playlistCoverPaths.value, userPlaylists.value, localPlaylistTrackMap.value, favoritesPlaylistMetadata.value,
+    aggregatePlaylists.value, selectedPlaylist.value, selectedPlaylistTracks.value, navigationHistory.value,
+    playbackQueue.value, currentTrack.value, currentLibrary.value, remoteTracks.value, favoriteTracks.value,
+    historyTracks.value, trackPlaylistPicker.value, localTrackContextMenu.value, allPlaylists.value,
+    accountFavoriteTracks.value, accountPlaylists.value, streamingHomeTracks.value, streamingHomePlaylists.value,
+    streamingRadarTracks.value, privateRoamingTracks.value, dailyRecommendationTracks.value, accountRecentTracks.value
+  ], Boolean(window.listenMusic?.getLegacyAggregatePlaylists));
+}
+
+async function refreshOriginalCoverStorage() {
+  if (originalCoverPending.value || !window.listenMusic?.getPlaylistCoverStorageStatistics) return;
+  originalCoverPending.value = true;
+  originalCoverError.value = "";
+  try {
+    originalCoverStatistics.value = await window.listenMusic.getPlaylistCoverStorageStatistics(originalCoverReferences());
+  } catch (error) {
+    originalCoverStatistics.value = null;
+    originalCoverError.value = error instanceof Error ? error.message : "原始封面统计读取失败，请重试。";
+  } finally { originalCoverPending.value = false; }
+}
+
+function requestOriginalCoverCleanup() {
+  if (originalCoverPending.value || originalCoverError.value || !originalCoverStatistics.value?.reclaimableEntries) return;
+  originalCoverNotice.value = "";
+  originalCoverConfirmVisible.value = true;
+}
+
+async function confirmOriginalCoverCleanup() {
+  if (originalCoverPending.value || !originalCoverConfirmVisible.value || !window.listenMusic?.prunePlaylistCoverStorage) return;
+  originalCoverPending.value = true;
+  originalCoverError.value = "";
+  try {
+    // Recollect at execution time; a dialog's earlier count grants no deletion authority.
+    const result = await window.listenMusic.prunePlaylistCoverStorage(originalCoverReferences());
+    originalCoverStatistics.value = result;
+    originalCoverNotice.value = `已清理 ${result.removedEntries} 项原始封面（${formatCacheSize(result.removedBytes)}）。`;
+    originalCoverConfirmVisible.value = false;
+  } catch (error) {
+    originalCoverStatistics.value = null;
+    originalCoverError.value = error instanceof Error ? error.message : "原始封面清理失败，请重试。";
+  } finally { originalCoverPending.value = false; }
 }
 
 async function saveCacheSettings(notice = "缓存设置已保存。") {
@@ -4336,7 +4547,10 @@ async function deleteSelectedListeningStats() {
 
 async function handleAuthenticated(nextAccount: AccountView) {
   const provider = nextAccount.provider === "qq" ? "qq" : "netease";
+  resetPlaylistAccountSession();
   setPageDataCacheAccountScope(provider, nextAccount.userId);
+  invalidatePageDataCacheForProvider(provider);
+  streamingHomeCache.clear(provider);
   accounts.value = [
     ...accounts.value.filter((candidate) => candidate.provider !== nextAccount.provider),
     nextAccount
@@ -4383,9 +4597,8 @@ async function handleProviderLogout(provider: AccountProvider) {
     }
     if (provider === "netease") {
       account.value = null;
-      accountContentRequestId += 1;
-      clearAccountContent();
     }
+    if (streamingSource.value === provider) resetPlaylistAccountSession();
     authPanelVisible.value = false;
   } catch (error) {
     scanError.value = error instanceof Error ? error.message : "退出登录失败，请稍后重试。";
@@ -4771,16 +4984,17 @@ async function runAccountRecentTrackBatch(action: TrackBatchAction, ids: string[
   const accountAtStart = selectedStreamingAccount.value;
   if (!accountAtStart || playlistMutationPending.value) return { succeeded: [], failed: ids };
   const provider = accountAtStart.provider;
+  const revision = playlistAccountRevision;
+  const pageRevision = playlistPageRevision.value;
   const tracks = accountRecentTracksById(ids);
   const trackById = new Map(tracks.map(track => [track.id, track]));
   const selectedIds = ids.filter(id => trackById.has(id));
   const isCurrent = () => selectedStreamingAccount.value?.userId === accountAtStart.userId
-    && streamingSource.value === provider;
+    && streamingSource.value === provider && playlistAccountRevision === revision && playlistPageRevision.value === pageRevision;
 
   if (action === "add-to-playlist") {
     if (!tracks.length) return { succeeded: [], failed: ids };
-    trackPlaylistPicker.value = { tracks, mode: "streaming" };
-    return { succeeded: selectedIds, failed: ids.filter(id => !trackById.has(id)), message: "请选择要加入的自建歌单。" };
+    return new Promise(resolve => openTracksPlaylistPicker(tracks, "streaming", resolve));
   }
   if (action === "queue") {
     const existing = new Set(playbackQueue.value.map(track => track.id));
@@ -4790,6 +5004,7 @@ async function runAccountRecentTrackBatch(action: TrackBatchAction, ids: string[
     return { succeeded: selectedIds, failed: ids.filter(id => !trackById.has(id)), message: `已将 ${selectedIds.length} 首歌曲加入播放列表。` };
   }
 
+  const requestId = ++playlistMutationRequestId;
   playlistMutationPending.value = true;
   try {
     if (action === "clear-recent") {
@@ -4817,7 +5032,7 @@ async function runAccountRecentTrackBatch(action: TrackBatchAction, ids: string[
     }
     return { succeeded: [], failed: ids };
   } finally {
-    playlistMutationPending.value = false;
+    if (requestId === playlistMutationRequestId) playlistMutationPending.value = false;
   }
 }
 
@@ -5241,24 +5456,33 @@ function reconcilePlaylistSubscriptionRefresh(
 async function toggleSelectedPlaylistCollection() {
   const playlist = selectedPlaylist.value;
   if (!playlist || !selectedPlaylistCollectable.value || playlistCollectionPending.value) return;
+  await setPlaylistCollection(playlist, !selectedPlaylistCollected.value);
+}
 
+async function unsubscribeStreamingPlaylist(entry: { id: string }) {
+  const playlist = accountPlaylists.value.find(item => item.id === entry.id);
+  if (!playlist || playlist.createdByAccount || playlistCollectionPending.value) return;
+  await setPlaylistCollection(playlist, false);
+}
+
+async function setPlaylistCollection(playlist: Playlist, subscribe: boolean) {
   const provider: AccountProvider = playlist.source === "qq" ? "qq" : "netease";
-  const providerAccount = accounts.value.find((candidate) => candidate.provider === provider) ?? null;
-  if (!providerAccount) {
+  const context = currentPlaylistAccountContext(provider);
+  if (!context) {
     scanError.value = `收藏${provider === "qq" ? "QQ 音乐" : "网易云音乐"}歌单前请先登录对应账号。`;
     openProviderAuthPanel(provider);
     return;
   }
 
-  const subscribe = !selectedPlaylistCollected.value;
-  const previousPlaylists = accountPlaylists.value;
   playlistCollectionPending.value = true;
   scanError.value = "";
   try {
     const platformSynced = await setAccountPlaylistSubscription(playlist.id, subscribe, provider)
       .then((result) => result.synced)
-      .catch(() => false);
-    savePlaylistSubscriptionOverride(provider, providerAccount.userId, {
+      .catch(error => { if (!subscribe) throw error; return false; });
+    if (!playlistAccountContextIsCurrent(context)) return;
+    if (!subscribe && !platformSynced) throw new Error("平台尚未确认取消收藏，请稍后重试。");
+    savePlaylistSubscriptionOverride(provider, context.userId, {
       id: playlist.id,
       title: playlist.title,
       subtitle: playlist.subtitle,
@@ -5267,7 +5491,8 @@ async function toggleSelectedPlaylistCollection() {
       createdByAccount: false
     }, subscribe);
     if (streamingSource.value !== provider) return;
-    accountPlaylists.value = reconcilePlaylistSubscriptionRefresh(previousPlaylists, playlist, subscribe);
+    accountPlaylistsRevision += 1;
+    accountPlaylists.value = reconcilePlaylistSubscriptionRefresh(accountPlaylists.value, playlist, subscribe);
     const actionText = subscribe ? `已收藏歌单「${playlist.title}」` : `已取消收藏歌单「${playlist.title}」`;
     scanNotice.value = platformSynced
       ? `${actionText}。`
@@ -5275,18 +5500,18 @@ async function toggleSelectedPlaylistCollection() {
 
     if (platformSynced) try {
       const refreshedPlaylists = toAccountPlaylistListWithOverrides(
-        await loadAccountPlaylists(provider),
+        await loadAccountPlaylists(provider, true),
         provider
       );
-      if (streamingSource.value === provider) {
+      if (playlistAccountContextIsCurrent(context) && streamingSource.value === provider) {
+        accountPlaylistsRevision += 1;
         accountPlaylists.value = reconcilePlaylistSubscriptionRefresh(refreshedPlaylists, playlist, subscribe);
       }
     } catch {
       // The mutation succeeded; retain the immediate local state until the next account refresh.
     }
   } catch (error) {
-    if (streamingSource.value === provider) accountPlaylists.value = previousPlaylists;
-    scanError.value = error instanceof Error ? error.message : "歌单收藏状态保存失败，请稍后重试。";
+    if (playlistAccountContextIsCurrent(context)) scanError.value = error instanceof Error ? error.message : "歌单收藏状态保存失败，请稍后重试。";
   } finally {
     playlistCollectionPending.value = false;
   }
@@ -5332,45 +5557,66 @@ async function refreshStreamingPlaylist() {
   }
 }
 
-async function runStreamingTrackBatch(action: TrackBatchAction, ids: string[]): Promise<TrackBatchResult> {
+async function runStreamingTrackBatch(action: TrackBatchAction, ids: string[], onProgress?: (progress: PlaylistBatchProgress) => void): Promise<TrackBatchResult> {
   const playlist = selectedPlaylist.value;
   const mode = selectedPlaylistBatchMode.value;
   const accountAtStart = selectedStreamingAccount.value;
-  const actionAllowed = mode === "favorites" ? action === "unlike" : action === "like" || action === "remove";
+  const actionAllowed = action === "add-to-aggregate" || (mode === "favorites" ? action === "unlike" : action === "like" || action === "unlike" || action === "remove");
   if (!playlist || !mode || !accountAtStart || playlistMutationPending.value || !actionAllowed) {
     return { succeeded: [], failed: ids };
   }
   const provider = accountAtStart.provider;
   const tracks = new Map(selectedPlaylistTracks.value.map(track => [track.id, track]));
-  const isCurrent = () => selectedStreamingAccount.value?.userId === accountAtStart.userId
-    && streamingSource.value === accountAtStart.provider && selectedPlaylist.value?.id === playlist.id;
+  const revision = playlistAccountRevision;
+  const pageRevision = playlistPageRevision.value;
+  if (action === "add-to-aggregate") {
+    const selected = ids.map(id => tracks.get(id)).filter((track): track is Track => Boolean(track));
+    if (!selected.length) return { succeeded: [], failed: ids };
+    return new Promise(resolve => openTracksPlaylistPicker(selected, "aggregate", resolve));
+  }
+  const isCurrent = () => revision === playlistAccountRevision && selectedStreamingAccount.value?.userId === accountAtStart.userId
+    && streamingSource.value === accountAtStart.provider && selectedPlaylist.value?.id === playlist.id && playlistPageRevision.value === pageRevision;
+  const requestId = ++playlistMutationRequestId;
   playlistMutationPending.value = true;
   try {
+    if (action === "remove") {
+      return await runAccountPlaylistChunks(ids, async chunk => {
+        if (chunk.some(id => tracks.get(id)?.source !== provider)) throw new Error("歌曲不可用");
+        return removeAccountPlaylistTracks(playlist.id, chunk, provider, accountAtStart.userId);
+      }, {
+        chunkSize: provider === "qq" ? 5 : 100, isCurrent, onProgress,
+        onChunk: result => {
+          const removed = new Set(result.succeeded);
+          catalogResults.value = catalogResults.value.filter(item => !removed.has(item.id));
+          updateSelectedPlaylist({ ...selectedPlaylist.value!, count: catalogResults.value.length });
+          accountPlaylists.value = accountPlaylists.value.map(item => item.id === playlist.id ? { ...item, count: catalogResults.value.length } : item);
+          if (removed.size) invalidatePageDataCacheForProvider(provider);
+        }
+      });
+    }
     return await runTrackBatch(ids, async id => {
       const track = tracks.get(id);
       if (!track || track.source !== provider) throw new Error("歌曲不可用");
-      if (action === "remove") await removeAccountPlaylistTrack(playlist.id, id, provider);
-      else if (action === "unlike") await removeAccountFavorite(id, provider);
+      if (action === "unlike") await removeAccountFavorite(id, provider);
       else if (!accountFavoriteTracks.value.some(item => item.id === id)) await saveAccountFavorite(toPersistedTrack(track), provider);
       if (!isCurrent()) return;
-      if (action !== "remove") {
+      {
         const liked = action === "like";
         syncAccountFavoriteFlag(id, liked);
         accountFavoriteTracks.value = liked
           ? [{ ...track, liked: true }, ...accountFavoriteTracks.value.filter(item => item.id !== id)]
           : accountFavoriteTracks.value.filter(item => item.id !== id);
       }
-      if (action !== "like") {
+      if (action === "unlike" && mode === "favorites") {
         catalogResults.value = catalogResults.value.filter(item => item.id !== id);
-        updateSelectedPlaylist({ ...selectedPlaylist.value!, count: catalogResults.value.length, imageUrl: catalogResults.value[0]?.coverUrl || "" });
+        updateSelectedPlaylist({ ...selectedPlaylist.value!, count: catalogResults.value.length, imageUrl: mode === "favorites" ? catalogResults.value[0]?.coverUrl || "" : selectedPlaylist.value!.imageUrl });
       }
       accountPlaylists.value = accountPlaylists.value.map(item => {
-        if (item.favorite && action !== "remove") return { ...item, count: accountFavoriteTracks.value.length, imageUrl: accountFavoriteTracks.value[0]?.coverUrl || "" };
-        if (item.id === playlist.id && action === "remove") return { ...item, count: catalogResults.value.length, imageUrl: catalogResults.value[0]?.coverUrl || "" };
+        if (item.favorite) return playlistWithDefaultCover({ ...item, count: accountFavoriteTracks.value.length }, accountFavoriteTracks.value);
         return item;
       });
     }, isCurrent);
-  } finally { playlistMutationPending.value = false; }
+  } finally { if (requestId === playlistMutationRequestId) playlistMutationPending.value = false; }
 }
 
 async function reorderStreamingPlaylistTrack(draggedTrackId: string, targetTrackId: string) {
@@ -5388,7 +5634,11 @@ async function reorderStreamingPlaylistTrack(draggedTrackId: string, targetTrack
   const actualPlaylist = playlist.id.startsWith("account-favorites-detail-")
     ? accountPlaylists.value.find(item => item.favorite && item.source === provider) : playlist;
   if (!actualPlaylist) { playlistOrderMessage.value = "请先刷新音乐库，再调整顺序。"; return; }
-  const isCurrent = () => selectedPlaylist.value?.id === playlist.id && selectedStreamingAccount.value?.userId === accountAtStart.userId && streamingSource.value === provider;
+  const revision = playlistAccountRevision;
+  const pageRevision = playlistPageRevision.value;
+  const isCurrent = () => selectedPlaylist.value?.id === playlist.id && selectedStreamingAccount.value?.userId === accountAtStart.userId
+    && streamingSource.value === provider && playlistAccountRevision === revision && playlistPageRevision.value === pageRevision;
+  const requestId = ++playlistMutationRequestId;
   playlistMutationPending.value = true;
   playlistOrderMessage.value = `正在保存并校验${streamingProviderName.value}歌曲顺序…`;
   try {
@@ -5396,21 +5646,56 @@ async function reorderStreamingPlaylistTrack(draggedTrackId: string, targetTrack
     if (!isCurrent()) return;
     catalogResults.value = tracks;
     if (selectedPlaylistBatchMode.value === "favorites") accountFavoriteTracks.value = tracks.map(track => ({ ...track, liked: true }));
-    updateSelectedPlaylist({ ...playlist, imageUrl: tracks[0]?.coverUrl || "" });
-    accountPlaylists.value = accountPlaylists.value.map(item => item.id === actualPlaylist.id ? { ...item, imageUrl: tracks[0]?.coverUrl || "" } : item);
+    updateSelectedPlaylist({ ...playlist, imageUrl: selectedPlaylistBatchMode.value === "favorites" ? tracks[0]?.coverUrl || "" : playlist.imageUrl });
+    accountPlaylists.value = accountPlaylists.value.map(item => item.id === actualPlaylist.id
+      ? playlistWithDefaultCover(item, tracks) : item);
     playlistOrderMessage.value = `顺序已同步${streamingProviderName.value}并校验，3 秒后可继续调整。`;
   } catch (error) {
     if (isCurrent()) playlistOrderMessage.value = error instanceof Error ? error.message : "排序未保存，请刷新后重试。";
   } finally {
-    playlistMutationPending.value = false;
-    playlistOrderCooling.value = true;
-    clearTimeout(playlistOrderCooldownTimer);
-    playlistOrderCooldownTimer = setTimeout(() => { playlistOrderCooling.value = false; }, 3000);
+    if (requestId === playlistMutationRequestId) playlistMutationPending.value = false;
+    if (isCurrent()) {
+      playlistOrderCooling.value = true;
+      clearTimeout(playlistOrderCooldownTimer);
+      playlistOrderCooldownTimer = setTimeout(() => { playlistOrderCooling.value = false; }, 3000);
+    }
   }
 }
 
 watch(() => selectedPlaylist.value?.id, () => { playlistOrderMessage.value = ""; });
 onBeforeUnmount(() => clearTimeout(playlistOrderCooldownTimer));
+
+function resetPlaylistAccountSession(clearContent = true) {
+  playlistAccountRevision += 1;
+  playlistMutationRequestId += 1;
+  playlistMutationPending.value = false;
+  playlistPageRevision.value += 1;
+  finishTrackPlaylistPicker({ succeeded: [], failed: [], message: "账号已变化，请重新选择歌曲。" });
+  closeLocalTrackContextMenu();
+  playlistNameDialogVisible.value = false;
+  playlistDeleteDialog.value = null;
+  if (!clearContent) return;
+  accountPlaylistsRevision += 1;
+  accountContentRequestId += 1;
+  playlistRequestId += 1;
+  navigationHistory.value = navigationHistory.value.map(entry => entry.playlist?.accountScoped
+    ? { view: "streaming-library" } : entry);
+  if (selectedPlaylist.value?.accountScoped) {
+    selectedPlaylist.value = null;
+    catalogResults.value = [];
+    if (activeView.value === "playlist") activeView.value = "streaming-library";
+  }
+  clearAccountContent();
+}
+
+watch(
+  () => [
+    `${streamingSource.value}:${selectedStreamingAccount.value?.userId || ''}`,
+    accounts.value.map(item => `${item.provider}:${item.userId}`).sort().join('|')
+  ],
+  (next, previous) => resetPlaylistAccountSession(next[0] !== previous?.[0]),
+  { flush: "sync" }
+);
 
 async function searchFromStreamingDailyMix(query: string) {
   const homeEntry: NavigationEntry = { view: "home" };
@@ -5420,20 +5705,13 @@ async function searchFromStreamingDailyMix(query: string) {
   await submitSearch();
 }
 
-function persistLocalPlaylists() {
-  const entries: StoredPlaylist[] = userPlaylists.value.map((playlist) => ({
-    playlist,
-    tracks: (localPlaylistTrackMap.value[playlist.id] ?? []).map(toPlaylistTrackSnapshot)
-  }));
-  window.localStorage.setItem(LOCAL_PLAYLIST_STORAGE_KEY, JSON.stringify(entries));
+function persistLocalPlaylists(trackMap = localPlaylistTrackMap.value, playlists = userPlaylists.value) {
+  saveLocalPlaylistSnapshot({ playlists, tracks: trackMap }, toPlaylistTrackSnapshot);
 }
 
-function persistPlaylistTrackOrder() {
-  window.localStorage.setItem(PLAYLIST_TRACK_ORDER_STORAGE_KEY, JSON.stringify(playlistTrackOrder.value));
-}
-
-function persistPlaylistCoverPaths() {
-  window.localStorage.setItem(PLAYLIST_COVER_PATH_STORAGE_KEY, JSON.stringify(playlistCoverPaths.value));
+function persistPlaylistTrackOrder(next: Record<string, string[]>) {
+  savePlaylistStorageChanges([{ key: PLAYLIST_TRACK_ORDER_STORAGE_KEY, value: next }]);
+  playlistTrackOrder.value = next;
 }
 
 function startPlaylistTrackDrag(track: Track) {
@@ -5457,15 +5735,20 @@ function dropPlaylistTrack(targetTrack: Track) {
     draggedKey,
     trackOrderKey(targetTrack)
   );
-  playlistTrackOrder.value = { ...playlistTrackOrder.value, [playlist.id]: nextOrder };
-  persistPlaylistTrackOrder();
-  finishPlaylistTrackDrag();
+  try {
+    persistPlaylistTrackOrder({ ...playlistTrackOrder.value, [playlist.id]: nextOrder });
+  } catch (error) {
+    showSearchToast(playlistPersistenceError(error, "歌曲顺序保存失败，请重试。"));
+  } finally {
+    finishPlaylistTrackDrag();
+  }
 }
 
-function persistPlaylistOverviewOrder() {
+function persistPlaylistOverviewOrder(order: string[]) {
   const validIds = new Set(playlistOverviewSource.value.map((playlist) => playlist.id));
-  playlistOverviewOrder.value = playlistOverviewOrder.value.filter((id) => validIds.has(id));
-  window.localStorage.setItem(PLAYLIST_OVERVIEW_ORDER_STORAGE_KEY, JSON.stringify(playlistOverviewOrder.value));
+  const next = order.filter(id => validIds.has(id));
+  savePlaylistStorageChanges([{ key: PLAYLIST_OVERVIEW_ORDER_STORAGE_KEY, value: next }]);
+  playlistOverviewOrder.value = next;
 }
 
 function startPlaylistOverviewDrag(playlistId: string) {
@@ -5494,13 +5777,17 @@ function dropPlaylistOverviewCard(targetPlaylistId: string) {
   if (fromIndex >= 0 && toIndex >= 0) {
     const [movedId] = nextOrder.splice(fromIndex, 1);
     nextOrder.splice(toIndex, 0, movedId);
-    playlistOverviewOrder.value = nextOrder;
-    persistPlaylistOverviewOrder();
+    try {
+      persistPlaylistOverviewOrder(nextOrder);
+    } catch (error) {
+      showSearchToast(playlistPersistenceError(error, "歌单顺序保存失败，请重试。"));
+    }
   }
   finishPlaylistOverviewDrag();
 }
 
 function updateSelectedPlaylist(nextPlaylist: Playlist) {
+  nextPlaylist = playlistWithDefaultCover(nextPlaylist, selectedPlaylistTracks.value);
   selectedPlaylist.value = nextPlaylist;
   const historyEntry = navigationHistory.value[navigationIndex.value];
   if (historyEntry?.playlist?.id === nextPlaylist.id) {
@@ -5532,30 +5819,41 @@ function openStreamingPlaylistCreateDialog() {
   playlistNameDialogVisible.value = true;
 }
 
-function createUserPlaylist(name: string) {
+function createUserPlaylist(name: string, tracks: Track[] = []) {
   const playlist: Playlist = {
     id: `local-user-${Date.now()}`,
     title: name,
-    subtitle: "点击添加歌曲",
-    count: 0,
+    subtitle: tracks.length ? `${tracks.length} 首歌曲` : "点击添加歌曲",
+    count: tracks.length,
     primary: "#f7f8fb",
     secondary: "#eef3f8",
     mark: name.slice(0, 1),
     source: "local-user",
     userManaged: true
   };
-  userPlaylists.value = [...userPlaylists.value, playlist];
-  localPlaylistTrackMap.value = { ...localPlaylistTrackMap.value, [playlist.id]: [] };
-  playlistOverviewOrder.value = [...playlistOverviewOrder.value, playlist.id];
-  persistLocalPlaylists();
-  persistPlaylistOverviewOrder();
+  const nextPlaylists = [...userPlaylists.value, playlist];
+  const nextTracks = { ...localPlaylistTrackMap.value, [playlist.id]: tracks.map(track => ({ ...track })) };
+  const validIds = new Set(["favorites", ...nextPlaylists.map(item => item.id)]);
+  const nextOrder = [...playlistOverviewOrder.value.filter(id => validIds.has(id)), playlist.id];
+  saveLocalPlaylistSnapshot({ playlists: nextPlaylists, tracks: nextTracks, overviewOrder: nextOrder }, toPlaylistTrackSnapshot);
+  userPlaylists.value = nextPlaylists;
+  localPlaylistTrackMap.value = nextTracks;
+  playlistOverviewOrder.value = nextOrder;
   return playlist;
 }
 
-function handleCreateAggregatePlaylist(name: string) {
-  const playlist = createAggregatePlaylist(name, aggregatePlaylists.value);
-  aggregatePlaylists.value = [...aggregatePlaylists.value, playlist];
-  writeAggregatePlaylists(aggregatePlaylists.value);
+function handleCreateAggregatePlaylist(name: string, complete?: (error?: string) => void) {
+  try {
+    const playlist = createAggregatePlaylist(name, aggregatePlaylists.value);
+    const next = [...aggregatePlaylists.value, playlist];
+    writeAggregatePlaylists(next);
+    aggregatePlaylists.value = next;
+    complete?.();
+  } catch (error) {
+    const message = playlistPersistenceError(error, "聚合歌单保存失败，请重试。");
+    if (complete) complete(message);
+    else showSearchToast(message);
+  }
 }
 
 function normalizedAggregateSource(source: string) {
@@ -5626,29 +5924,89 @@ function playAggregatePlaylistSources(sources: AggregateTrackSource[], shuffle: 
 }
 
 function removeGroupFromAggregatePlaylist(playlist: AggregatePlaylist, groupId: string, title: string) {
-  aggregatePlaylists.value = aggregatePlaylists.value.map((item) => (
-    item.id === playlist.id ? removeAggregateTrackGroup(item, groupId) : item
-  ));
-  writeAggregatePlaylists(aggregatePlaylists.value);
-  scanNotice.value = `已从「${playlist.name}」删除「${title}」及其全部音源。`;
+  removeGroupsFromAggregatePlaylist(playlist, [groupId], result => {
+    if (result.failed.length) scanError.value = result.message || "聚合歌单保存失败，请重试。";
+    else scanNotice.value = `已从「${playlist.name}」移出「${title}」及其全部音源。`;
+    showSearchToast(result.message || scanNotice.value);
+  });
+}
+
+function removeGroupsFromAggregatePlaylist(playlist: AggregatePlaylist, groupIds: string[], complete: (result: TrackBatchResult) => void) {
+  const current = aggregatePlaylists.value.find(item => item.id === playlist.id);
+  const available = new Set(mergeAggregateTracks(current?.tracks ?? []).map(group => group.id));
+  const ids = [...new Set(groupIds)].filter(id => available.has(id));
+  if (!current || !ids.length) {
+    complete({ succeeded: [], failed: groupIds, message: "目标歌曲或聚合歌单已变化，请重新选择。" });
+    return;
+  }
+  try {
+    const next = aggregatePlaylists.value.map(item => item.id === playlist.id ? removeAggregateTrackGroups(item, ids) : item);
+    writeAggregatePlaylists(next);
+    aggregatePlaylists.value = next;
+    const message = `已移出 ${ids.length} 首歌曲及其全部音源。`;
+    complete({ succeeded: ids, failed: [], message });
+    showSearchToast(message);
+  } catch (error) {
+    complete({ succeeded: [], failed: groupIds, message: error instanceof Error ? error.message : "聚合歌单保存失败，请重试。" });
+  }
 }
 
 function reorderAggregatePlaylistGroups(playlist: AggregatePlaylist, orderedGroupIds: string[]) {
-  aggregatePlaylists.value = aggregatePlaylists.value.map((item) => (
+  const next = aggregatePlaylists.value.map((item) => (
     item.id === playlist.id ? reorderAggregateTrackGroups(item, orderedGroupIds) : item
   ));
-  writeAggregatePlaylists(aggregatePlaylists.value);
+  try {
+    writeAggregatePlaylists(next);
+    aggregatePlaylists.value = next;
+  } catch (error) {
+    showSearchToast(playlistPersistenceError(error, "聚合歌单顺序保存失败，请重试。"));
+  }
 }
 
 async function chooseAggregatePlaylistCover(playlist: AggregatePlaylist) {
-  const imagePath = await selectPlaylistCoverImage();
-  if (!imagePath) {
-    return;
+  try {
+    const imagePath = await selectPlaylistCoverImage();
+    if (!imagePath) return;
+    const coverUrl = filePathToUrl(await storePlaylistCoverImage(imagePath));
+    const next = aggregatePlaylists.value.map(item => item.id === playlist.id ? { ...item, coverUrl } : item);
+    writeAggregatePlaylists(next);
+    aggregatePlaylists.value = next;
+  } catch (error) {
+    showSearchToast(error instanceof Error ? error.message : "封面保存失败，请重试。");
   }
-  aggregatePlaylists.value = aggregatePlaylists.value.map((item) => (
-    item.id === playlist.id ? { ...item, coverUrl: filePathToUrl(imagePath) } : item
-  ));
-  writeAggregatePlaylists(aggregatePlaylists.value);
+  void refreshOriginalCoverStorage();
+}
+
+async function migrateLegacyPlaylistCovers() {
+  if (!window.listenMusic?.resolvePlaylistCoverImage) return;
+  const isFile = (value: string) => /^(file:|[a-z]:[\\/]|\/|\\\\)/i.test(value);
+  for (const [id, previous] of Object.entries(playlistCoverPaths.value)) {
+    if (!isFile(previous)) continue;
+    try {
+      const imported = await storePlaylistCoverImage(previous);
+      if (playlistCoverPaths.value[id] !== previous) continue;
+      const next = { ...playlistCoverPaths.value, [id]: imported };
+      window.localStorage.setItem(PLAYLIST_COVER_PATH_STORAGE_KEY, JSON.stringify(next));
+      playlistCoverPaths.value = next;
+      if (selectedPlaylist.value?.id === id) updateSelectedPlaylist({ ...selectedPlaylist.value, coverPath: imported, imageUrl: imported });
+    } catch {
+      // Keep unavailable legacy paths so a failed import never replaces a custom cover.
+    }
+  }
+  for (const playlist of [...aggregatePlaylists.value]) {
+    const previous = playlist.coverUrl;
+    if (!previous || !isFile(previous)) continue;
+    try {
+      const imported = await storePlaylistCoverImage(previous);
+      if (aggregatePlaylists.value.find(item => item.id === playlist.id)?.coverUrl !== previous) continue;
+      const next = aggregatePlaylists.value.map(item => item.id === playlist.id ? { ...item, coverUrl: imported } : item);
+      writeAggregatePlaylists(next);
+      aggregatePlaylists.value = next;
+    } catch {
+      // Preserve the stored choice when the source file is missing or storage is unavailable.
+    }
+  }
+  void refreshOriginalCoverStorage();
 }
 
 function closePlaylistNameDialog() {
@@ -5664,26 +6022,34 @@ async function confirmPlaylistNameDialog() {
     return;
   }
   if (playlistNameDialogMode.value === "create") {
-    createUserPlaylist(name);
-    closePlaylistNameDialog();
+    try {
+      createUserPlaylist(name);
+      closePlaylistNameDialog();
+    } catch (error) {
+      playlistNameError.value = playlistPersistenceError(error);
+    }
     return;
   }
   if (playlistNameDialogMode.value === "streaming-create") {
+    const context = currentPlaylistAccountContext(streamingSource.value);
+    if (!context) { playlistNameError.value = "请先登录对应账号"; return; }
     playlistNameSubmitting.value = true;
     try {
       const created = toPlaylist(
-        await createAccountPlaylist(name, streamingSource.value),
+        await createAccountPlaylist(name, context.provider),
         accountPlaylists.value.length
       );
+      if (!playlistAccountContextIsCurrent(context)) return;
       if (!created) {
         playlistNameError.value = "创建成功，但未能读取新歌单";
         return;
       }
-      accountPlaylists.value = [{ ...created, accountScoped: true }, ...accountPlaylists.value];
+      accountPlaylistsRevision += 1;
+      accountPlaylists.value = [{ ...created, accountScoped: true, streamingTemplate: true }, ...accountPlaylists.value.filter(item => item.id !== created.id)];
       playlistNameDialogVisible.value = false;
       playlistNameError.value = "";
     } catch (error) {
-      playlistNameError.value = error instanceof Error ? error.message : "创建歌单失败，请稍后重试";
+      if (playlistAccountContextIsCurrent(context)) playlistNameError.value = error instanceof Error ? error.message : "创建歌单失败，请稍后重试";
     } finally {
       playlistNameSubmitting.value = false;
     }
@@ -5695,14 +6061,21 @@ async function confirmPlaylistNameDialog() {
     return;
   }
   const nextPlaylist = { ...playlist, title: name, mark: name.slice(0, 1) };
-  if (nextPlaylist.id === "favorites") {
-    demoPlaylists.splice(demoPlaylists.findIndex((item) => item.id === "favorites"), 1, nextPlaylist);
-  } else if (nextPlaylist.userManaged || nextPlaylist.source === "local-user") {
-    userPlaylists.value = userPlaylists.value.map((item) => item.id === nextPlaylist.id ? nextPlaylist : item);
-    persistLocalPlaylists();
+  try {
+    if (nextPlaylist.id === "favorites") {
+      const metadata = { title: name };
+      savePlaylistStorageChanges([{ key: FAVORITES_PLAYLIST_METADATA_STORAGE_KEY, value: metadata }]);
+      favoritesPlaylistMetadata.value = metadata;
+    } else if (nextPlaylist.userManaged || nextPlaylist.source === "local-user") {
+      const next = userPlaylists.value.map(item => item.id === nextPlaylist.id ? nextPlaylist : item);
+      persistLocalPlaylists(localPlaylistTrackMap.value, next);
+      userPlaylists.value = next;
+    }
+    updateSelectedPlaylist(nextPlaylist);
+    closePlaylistNameDialog();
+  } catch (error) {
+    playlistNameError.value = playlistPersistenceError(error);
   }
-  updateSelectedPlaylist(nextPlaylist);
-  closePlaylistNameDialog();
 }
 
 async function duplicateSelectedPlaylist() {
@@ -5723,11 +6096,19 @@ async function duplicateSelectedPlaylist() {
     accountScoped: false,
     userManaged: true
   };
-  userPlaylists.value = [...userPlaylists.value, duplicate];
-  localPlaylistTrackMap.value = { ...localPlaylistTrackMap.value, [duplicate.id]: copiedTracks };
-  playlistOverviewOrder.value = [...playlistOverviewOrder.value, duplicate.id];
-  persistLocalPlaylists();
-  persistPlaylistOverviewOrder();
+  const nextPlaylists = [...userPlaylists.value, duplicate];
+  const nextTracks = { ...localPlaylistTrackMap.value, [duplicate.id]: copiedTracks };
+  const validIds = new Set(["favorites", ...nextPlaylists.map(item => item.id)]);
+  const nextOrder = [...playlistOverviewOrder.value.filter(id => validIds.has(id)), duplicate.id];
+  try {
+    saveLocalPlaylistSnapshot({ playlists: nextPlaylists, tracks: nextTracks, overviewOrder: nextOrder }, toPlaylistTrackSnapshot);
+  } catch (error) {
+    showSearchToast(playlistPersistenceError(error));
+    return;
+  }
+  userPlaylists.value = nextPlaylists;
+  localPlaylistTrackMap.value = nextTracks;
+  playlistOverviewOrder.value = nextOrder;
   const entry = { view: "playlist" as ViewKey, playlist: duplicate };
   pushNavigation(entry);
   await applyNavigation(entry);
@@ -5738,24 +6119,29 @@ async function choosePlaylistCover() {
   if (!playlist) {
     return;
   }
-  const imagePath = await selectPlaylistCoverImage();
-  if (!imagePath) {
-    return;
+  try {
+    const selected = await selectPlaylistCoverImage();
+    if (!selected) return;
+    const imagePath = await storePlaylistCoverImage(selected);
+    const nextCoverPaths = { ...playlistCoverPaths.value, [playlist.id]: imagePath };
+    const nextPlaylist = {
+      ...playlist,
+      coverPath: imagePath,
+      imageUrl: filePathToUrl(imagePath)
+    };
+    if (nextPlaylist.id !== "favorites" && (nextPlaylist.userManaged || nextPlaylist.source === "local-user")) {
+      const next = userPlaylists.value.map(item => item.id === nextPlaylist.id ? nextPlaylist : item);
+      saveLocalPlaylistSnapshot({ playlists: next, tracks: localPlaylistTrackMap.value, coverPaths: nextCoverPaths }, toPlaylistTrackSnapshot);
+      userPlaylists.value = next;
+    } else {
+      savePlaylistStorageChanges([{ key: PLAYLIST_COVER_PATH_STORAGE_KEY, value: nextCoverPaths }]);
+    }
+    playlistCoverPaths.value = nextCoverPaths;
+    updateSelectedPlaylist(nextPlaylist);
+    void refreshOriginalCoverStorage();
+  } catch (error) {
+    showSearchToast(playlistPersistenceError(error, "封面保存失败，请重试。"));
   }
-  playlistCoverPaths.value = { ...playlistCoverPaths.value, [playlist.id]: imagePath };
-  persistPlaylistCoverPaths();
-  const nextPlaylist = {
-    ...playlist,
-    coverPath: imagePath,
-    imageUrl: filePathToUrl(imagePath)
-  };
-  if (nextPlaylist.id === "favorites") {
-    demoPlaylists.splice(demoPlaylists.findIndex((item) => item.id === "favorites"), 1, nextPlaylist);
-  } else if (nextPlaylist.userManaged || nextPlaylist.source === "local-user") {
-    userPlaylists.value = userPlaylists.value.map((item) => item.id === nextPlaylist.id ? nextPlaylist : item);
-    persistLocalPlaylists();
-  }
-  updateSelectedPlaylist(nextPlaylist);
 }
 
 function playSelectedPlaylistAll() {
@@ -5857,15 +6243,7 @@ function ensureTrackQueue(track: Track) {
 }
 
 function persistPlaybackQueue() {
-  const snapshot = playbackQueue.value.map(toPersistedTrack);
-  queueSaveChain = queueSaveChain
-    .catch(() => undefined)
-    .then(() => savePlaybackQueue(snapshot))
-    .then(() => undefined)
-    .catch(() => {
-      scanError.value = "播放队列暂时无法保存，请确认后端已启动。";
-    });
-  return queueSaveChain;
+  return queuePersistence.enqueue(playbackQueue.value.map(toPersistedTrack));
 }
 
 function currentPlaybackPosition() {
@@ -7150,12 +7528,20 @@ function toggleLocalTrackSelection(track: Track) {
   selectedLocalTrackIds.value = next;
 }
 
-function openTrackContextMenu(track: Track, event: MouseEvent, queue: Track[] = [track]) {
+function openTrackContextMenu(track: Track, event: MouseEvent, queue: Track[] = [track], batch?: { selectedIds?: string[]; complete?: (result: TrackBatchResult) => void }) {
   event.preventDefault();
+  const selected = new Set(batch?.selectedIds || []);
+  const useSelection = selected.has(track.id);
+  const provider = trackPlaylistProvider(track);
+  const menuWidth = useSelection && batch?.complete ? 260 : 200;
   localTrackContextMenu.value = {
     track,
     queue: queue.length ? queue : [track],
-    x: Math.max(8, Math.min(event.clientX, window.innerWidth - 190)),
+    tracks: useSelection ? queue.filter(item => selected.has(item.id)) : [track],
+    complete: useSelection ? batch?.complete : undefined,
+    accountContext: useSelection && provider ? currentPlaylistAccountContext(provider) || undefined : undefined,
+    playlistId: useSelection ? selectedPlaylist.value?.id : undefined,
+    x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
     y: Math.max(8, Math.min(event.clientY, window.innerHeight - 300))
   };
 }
@@ -7203,46 +7589,124 @@ function playContextMenuTrackNext() {
 }
 
 async function toggleContextMenuTrackFavorite() {
-  const track = localTrackContextMenu.value?.track;
-  if (!track) return;
+  const menu = localTrackContextMenu.value;
+  if (!menu) return;
+  const unlike = contextMenuAllLiked.value;
   closeLocalTrackContextMenu();
-  await toggleTrackLiked(track);
+  if (!menu.complete) {
+    await toggleTrackLiked(menu.track);
+    return;
+  }
+  const ids = menu.tracks.map(track => track.id);
+  const context = menu.accountContext;
+  const pageRevision = playlistPageRevision.value;
+  if (!context || !playlistAccountContextIsCurrent(context) || menu.playlistId !== selectedPlaylist.value?.id || playlistMutationPending.value) {
+    const message = "歌单或账号已变化，或操作正在进行，请重新选择后重试。";
+    menu.complete({ succeeded: [], failed: ids, message });
+    showSearchToast(message);
+    return;
+  }
+  const result = await runStreamingTrackBatch(unlike ? "unlike" : "like", ids);
+  if (!playlistAccountContextIsCurrent(context) || menu.playlistId !== selectedPlaylist.value?.id || playlistPageRevision.value !== pageRevision) return;
+  result.message ||= result.failed.length
+    ? `成功 ${result.succeeded.length} 首，失败 ${result.failed.length} 首，请重试。`
+    : `已${unlike ? "取消喜欢" : "喜欢"} ${result.succeeded.length} 首歌曲。`;
+  menu.complete(result);
+  showSearchToast(result.message);
+}
+
+function currentPlaylistAccountContext(provider: AccountProvider): PlaylistAccountContext | null {
+  const activeAccount = accounts.value.find(item => item.provider === provider);
+  return activeAccount ? { provider, userId: activeAccount.userId, revision: playlistAccountRevision } : null;
+}
+
+function playlistAccountContextIsCurrent(context: PlaylistAccountContext) {
+  return isPlaylistAccountCurrent(context, accounts.value, playlistAccountRevision);
+}
+
+function openTracksPlaylistPicker(tracks: Track[], mode: TrackPlaylistPickerMode, complete?: (result: TrackBatchResult) => void) {
+  const provider = tracks[0] ? trackPlaylistProvider(tracks[0]) : null;
+  const actualMode = mode === "regular" && provider ? "streaming" : mode;
+  const context = provider ? currentPlaylistAccountContext(provider) : null;
+  scanError.value = "";
+  closeLocalTrackContextMenu();
+  if (actualMode === "streaming" && (!context || tracks.some(track => trackPlaylistProvider(track) !== provider))) {
+    scanError.value = context ? "请选择同一平台的歌曲。" : "请先登录歌曲所属平台的账号。";
+    complete?.({ succeeded: [], failed: tracks.map(track => track.id), message: scanError.value });
+    if (provider && !context) openProviderAuthPanel(provider);
+    return;
+  }
+  trackPlaylistPicker.value = { tracks, mode: actualMode, context: context || undefined, complete };
+  if (actualMode === "streaming") void refreshTrackPlaylistTargets();
 }
 
 function openTrackPlaylistPicker(track: Track, mode: TrackPlaylistPickerMode) {
-  trackPlaylistPicker.value = { tracks: [track], mode };
-  scanError.value = "";
-  closeLocalTrackContextMenu();
+  openTracksPlaylistPicker([track], mode);
+}
+
+async function refreshTrackPlaylistTargets() {
+  const picker = trackPlaylistPicker.value;
+  const context = picker?.context;
+  if (!picker || picker.mode !== "streaming" || !context || !playlistAccountContextIsCurrent(context)) return;
+  picker.state = "loading";
+  picker.error = "";
+  try {
+    const refreshed = await loadAccountPlaylists(context.provider, true);
+    if (trackPlaylistPicker.value !== picker || !playlistAccountContextIsCurrent(context)) return;
+    picker.playlists = toAccountPlaylistList(refreshed);
+    picker.state = "success";
+    if (streamingSource.value === context.provider) {
+      accountPlaylistsRevision += 1;
+      accountPlaylists.value = toAccountPlaylistListWithOverrides(refreshed, context.provider);
+    }
+  } catch (error) {
+    if (trackPlaylistPicker.value !== picker || !playlistAccountContextIsCurrent(context)) return;
+    picker.state = "error";
+    picker.error = error instanceof Error ? error.message : "歌单加载失败，请重试。";
+  }
+}
+
+function finishTrackPlaylistPicker(result: TrackBatchResult) {
+  const picker = trackPlaylistPicker.value;
+  trackPlaylistPicker.value = null;
+  picker?.complete?.(result);
 }
 
 function closeTrackPlaylistPicker() {
-  trackPlaylistPicker.value = null;
+  if (playlistMutationPending.value) return;
+  finishTrackPlaylistPicker({ succeeded: [], failed: [], message: "已取消，已保留选择。" });
 }
 
-async function addTrackToRegularPlaylist(playlist: Playlist) {
-  const picker = trackPlaylistPicker.value;
+async function addTrackToRegularPlaylist(playlist: Playlist, picker = trackPlaylistPicker.value) {
   if (!picker || picker.mode !== "regular") {
-    return;
+    return "待加入的歌曲已变化，请重新选择。";
   }
   const track = picker.tracks[0];
-  if (!track) return;
+  if (!track) return "待加入的歌曲已变化，请重新选择。";
+  const closePicker = () => {
+    if (trackPlaylistPicker.value === picker) closeTrackPlaylistPicker();
+  };
 
   if (playlist.id === "favorites") {
     if (favoriteTracks.value.some((item) => item.id === track.id && item.source === track.source)) {
       scanNotice.value = `「${track.title}」已经在「${playlist.title}」中。`;
-      closeTrackPlaylistPicker();
+      showSearchToast(scanNotice.value);
+      closePicker();
       return;
     }
     favoriteTracks.value = [{ ...track, liked: true }, ...favoriteTracks.value];
     syncFavoriteFlag(track.id, true);
-    closeTrackPlaylistPicker();
+    closePicker();
     try {
       await saveFavorite(toPersistedTrack(track));
       scanNotice.value = `已将「${track.title}」加入「${playlist.title}」。`;
+      showSearchToast(scanNotice.value);
     } catch {
       favoriteTracks.value = favoriteTracks.value.filter((item) => item.id !== track.id || item.source !== track.source);
       syncFavoriteFlag(track.id, false);
       scanError.value = `无法将「${track.title}」加入「${playlist.title}」，请确认后端已启动。`;
+      showSearchToast(scanError.value);
+      return scanError.value;
     }
     return;
   }
@@ -7250,16 +7714,25 @@ async function addTrackToRegularPlaylist(playlist: Playlist) {
   const tracks = localPlaylistTrackMap.value[playlist.id] ?? [];
   if (tracks.some((item) => item.id === track.id && item.source === track.source)) {
     scanNotice.value = `「${track.title}」已经在「${playlist.title}」中。`;
-    closeTrackPlaylistPicker();
+    showSearchToast(scanNotice.value);
+    closePicker();
     return;
   }
-  localPlaylistTrackMap.value = {
+  const next = {
     ...localPlaylistTrackMap.value,
     [playlist.id]: [{ ...track }, ...tracks]
   };
-  persistLocalPlaylists();
+  try {
+    persistLocalPlaylists(next);
+  } catch (error) {
+    picker.error = playlistPersistenceError(error);
+    scanError.value = picker.error;
+    return picker.error;
+  }
+  localPlaylistTrackMap.value = next;
   scanNotice.value = `已将「${track.title}」加入「${playlist.title}」。`;
-  closeTrackPlaylistPicker();
+  showSearchToast(scanNotice.value);
+  closePicker();
 }
 
 function aggregateSourceLabel(source: string | undefined) {
@@ -7277,67 +7750,81 @@ function aggregateSourceLabel(source: string | undefined) {
 
 function addTrackToSelectedAggregatePlaylist(playlist: AggregatePlaylist) {
   const picker = trackPlaylistPicker.value;
-  if (!picker || picker.mode !== "aggregate") {
-    return;
+  if (!picker || picker.mode !== "aggregate" || !picker.tracks.length) return;
+  const current = aggregatePlaylists.value.find(item => item.id === playlist.id);
+  picker.error = "";
+  if (!current) { picker.error = "目标聚合歌单已不存在，请重新选择。"; scanError.value = picker.error; return; }
+  const tracks: AggregateTrackSource[] = picker.tracks.map(track => ({
+    id: track.id, title: track.title, artist: track.artist, album: track.album,
+    duration: track.duration, source: track.source || "local", sourceLabel: aggregateSourceLabel(track.source),
+    coverUrl: track.coverUrl, audioUrl: track.audioUrl, filePath: track.filePath
+  }));
+  const result = addTracksToAggregatePlaylist(current, tracks);
+  const next = aggregatePlaylists.value.map(item => item.id === current.id ? result.playlist : item);
+  try {
+    writeAggregatePlaylists(next);
+    aggregatePlaylists.value = next;
+    const message = `已加入 ${result.added} 个音源到「${playlist.name}」${result.skipped ? `，跳过 ${result.skipped} 个重复音源` : ""}。`;
+    scanNotice.value = message;
+    showSearchToast(message);
+    finishTrackPlaylistPicker({ succeeded: picker.tracks.map(track => track.id), failed: [], message });
+  } catch (error) {
+    picker.error = error instanceof Error ? error.message : "聚合歌单保存失败，请重试。";
+    scanError.value = picker.error;
   }
-  const track = picker.tracks[0];
-  if (!track) return;
-  const source = track.source || "local";
-  const aggregateTrack: AggregateTrackSource = {
-    id: track.id,
-    title: track.title,
-    artist: track.artist,
-    album: track.album,
-    duration: track.duration,
-    source,
-    sourceLabel: aggregateSourceLabel(source),
-    coverUrl: track.coverUrl,
-    audioUrl: track.audioUrl,
-    filePath: track.filePath
-  };
-  const result = addTrackToAggregatePlaylist(playlist, aggregateTrack);
-  if (!result.added) {
-    scanNotice.value = `「${track.title}」的这个音源已经在「${playlist.name}」中。`;
-    closeTrackPlaylistPicker();
-    return;
-  }
-  aggregatePlaylists.value = aggregatePlaylists.value.map((item) => (
-    item.id === playlist.id ? result.playlist : item
-  ));
-  writeAggregatePlaylists(aggregatePlaylists.value);
-  scanNotice.value = `已将「${track.title}」加入聚合歌单「${playlist.name}」。`;
-  closeTrackPlaylistPicker();
 }
 
 async function addTracksToStreamingPlaylist(playlist: Playlist) {
   const picker = trackPlaylistPicker.value;
-  const activeAccount = selectedStreamingAccount.value;
-  if (!picker || picker.mode !== "streaming" || !activeAccount || playlistMutationPending.value) return;
-  const tracks = picker.tracks.filter(track => track.source === activeAccount.provider);
+  const context = picker?.context;
+  if (!picker || picker.mode !== "streaming" || !context || !playlistAccountContextIsCurrent(context) || playlistMutationPending.value) return;
+  if (!canEditAccountPlaylist(playlist, context.provider) || !streamingPlaylistTargets.value.some(item => item.id === playlist.id)) return;
+  const tracks = picker.tracks.filter(track => trackPlaylistProvider(track) === context.provider);
   if (!tracks.length) return;
+  const pageRevision = playlistPageRevision.value;
+  const isCurrent = () => playlistAccountContextIsCurrent(context) && trackPlaylistPicker.value === picker
+    && playlistPageRevision.value === pageRevision;
+  const requestId = ++playlistMutationRequestId;
   playlistMutationPending.value = true;
+  picker.error = "";
   try {
-    await addAccountPlaylistTracks(playlist.id, tracks.map(track => track.id), activeAccount.provider);
+    const result = await runAccountPlaylistChunks(tracks.map(track => track.id), async ids => {
+      await addAccountPlaylistTracks(playlist.id, ids, context.provider, context.userId);
+    }, { isCurrent, onProgress: progress => { picker.progress = progress; } });
+    if (!isCurrent()) return;
+    if (!result.succeeded.length) {
+      picker.error = result.message || "加入歌单失败，请稍后重试。";
+      scanError.value = picker.error;
+      return;
+    }
     try {
-      const refreshed = await loadAccountPlaylists(activeAccount.provider);
-      if (selectedStreamingAccount.value?.userId === activeAccount.userId) {
+      const refreshed = await loadAccountPlaylists(context.provider, true);
+      if (isCurrent() && streamingSource.value === context.provider) {
+        accountPlaylistsRevision += 1;
         accountPlaylists.value = toAccountPlaylistListWithOverrides(
           refreshed,
-          activeAccount.provider === "qq" ? "qq" : "netease"
+          context.provider
         );
       }
     } catch {
-      accountPlaylists.value = accountPlaylists.value.map(item => item.id === playlist.id
-        ? { ...item, imageUrl: item.imageUrl || tracks[0]?.coverUrl }
-        : item);
+      if (isCurrent() && streamingSource.value === context.provider) {
+        accountPlaylists.value = accountPlaylists.value.map(item => item.id === playlist.id
+          ? { ...item, imageUrl: item.imageUrl || tracks[0]?.coverUrl } : item);
+      }
     }
-    scanNotice.value = `已将 ${tracks.length} 首歌曲加入「${playlist.title}」。`;
-    closeTrackPlaylistPicker();
-    invalidatePageDataCacheForProvider(activeAccount.provider);
+    if (!isCurrent()) return;
+    scanNotice.value = result.message || `已将 ${result.succeeded.length} 首歌曲加入「${playlist.title}」。`;
+    showSearchToast(scanNotice.value);
+    finishTrackPlaylistPicker({ ...result, message: scanNotice.value });
+    invalidatePageDataCacheForProvider(context.provider);
   } catch (error) {
-    scanError.value = error instanceof Error ? error.message : "批量加入歌单失败，请稍后重试。";
+    if (isCurrent()) {
+      picker.error = error instanceof Error ? error.message : "加入歌单失败，请稍后重试。";
+      scanError.value = picker.error;
+    }
   } finally {
-    playlistMutationPending.value = false;
+    if (requestId === playlistMutationRequestId) playlistMutationPending.value = false;
+    if (trackPlaylistPicker.value === picker && !isCurrent()) finishTrackPlaylistPicker({ succeeded: [], failed: [], message: "页面已变化，请重新选择歌曲。" });
   }
 }
 
@@ -9234,21 +9721,29 @@ function dismissMiniQueue() {
   if (miniQueueVisible.value) void setMiniQueueVisible(false);
 }
 
-function addMiniQueueTrackToPlaylist(track: Track, playlistId: string) {
+async function addMiniQueueTrackToPlaylist(track: Track, playlistId: string, complete?: (error?: string) => void) {
   const playlist = playlistOverviewSource.value.find((item) => item.id === playlistId);
-  if (!playlist) return;
-  trackPlaylistPicker.value = { tracks: [track], mode: "regular" };
-  void addTrackToRegularPlaylist(playlist);
+  if (!playlist) {
+    const error = "目标歌单已不存在，请重新选择。";
+    if (complete) complete(error);
+    else showSearchToast(error);
+    return;
+  }
+  const error = await addTrackToRegularPlaylist(playlist, { tracks: [track], mode: "regular" });
+  complete?.(error);
 }
 
-function createMiniPlaylistWithTrack(track: Track, name: string) {
-  const playlist = createUserPlaylist(name.trim());
-  localPlaylistTrackMap.value = {
-    ...localPlaylistTrackMap.value,
-    [playlist.id]: [{ ...track }]
-  };
-  persistLocalPlaylists();
-  scanNotice.value = `已新建「${playlist.title}」并加入「${track.title}」。`;
+function createMiniPlaylistWithTrack(track: Track, name: string, complete?: (error?: string) => void) {
+  try {
+    const playlist = createUserPlaylist(name.trim(), [track]);
+    scanNotice.value = `已新建「${playlist.title}」并加入「${track.title}」。`;
+    showSearchToast(scanNotice.value);
+    complete?.();
+  } catch (error) {
+    const message = playlistPersistenceError(error);
+    showSearchToast(message);
+    complete?.(message);
+  }
 }
 
 async function copyMiniQueueTrackInfo(track: Track) {
@@ -9304,6 +9799,8 @@ function miniPresentationTrack(track: Track): MiniPlayerTrack {
     mark: track.mark, liked: track.liked, history: track.history, queueKey: track.queueKey };
 }
 
+const miniPlaylistMutationResult = ref<MiniPlayerSnapshot["playlistMutationResult"]>();
+
 function syncMiniPlayerSnapshot() {
   const bridge = window.listenMusic;
   if (!bridge?.updateMiniPlayerSnapshot) return;
@@ -9318,7 +9815,8 @@ function syncMiniPlayerSnapshot() {
     themeStyle: songDetailThemeStyle.value, preferences: appearancePreferences.value.miniPlayer,
     volume: volume.value, playMode: playMode.value, currentTime: lyricClockTime,
     duration: playbackDuration.value, alwaysOnTop: appearancePreferences.value.playerControls.miniAlwaysOnTop,
-    showInTaskbar: appearancePreferences.value.playerControls.miniShowInTaskbar
+    showInTaskbar: appearancePreferences.value.playerControls.miniShowInTaskbar,
+    playlistMutationResult: miniPlaylistMutationResult.value
   };
   bridge.updateMiniPlayerSnapshot(JSON.parse(JSON.stringify(snapshot)));
 }
@@ -9335,15 +9833,20 @@ function handleMiniPlayerAction(action: MiniPlayerAction) {
     case "appearance": appearancePreferences.value.miniPlayer = action.preferences; return;
   }
   if (!("key" in action)) return;
+  const complete = (error?: string) => {
+    if ((action.type !== "queue-create" && action.type !== "queue-add") || !action.requestId) return;
+    miniPlaylistMutationResult.value = { requestId: action.requestId, kind: action.type === "queue-create" ? "create" : "add", error };
+    syncMiniPlayerSnapshot();
+  };
   const track = playbackQueue.value.find((item, index) => queueTrackKey(item, index) === action.key || (!item.queueKey && item.id === action.key));
-  if (!track) return;
+  if (!track) { complete("歌曲已不在播放列表，请重新选择。"); return; }
   switch (action.type) {
     case "queue-play": void playQueueTrack(track); break;
     case "queue-like": void toggleTrackLiked(track); break;
     case "queue-remove": removeQueueTrack(action.key); break;
     case "queue-copy": void copyMiniQueueTrackInfo(track); break;
-    case "queue-add": addMiniQueueTrackToPlaylist(track, action.playlistId); break;
-    case "queue-create": createMiniPlaylistWithTrack(track, action.name); break;
+    case "queue-add": void addMiniQueueTrackToPlaylist(track, action.playlistId, complete); break;
+    case "queue-create": createMiniPlaylistWithTrack(track, action.name, complete); break;
   }
 }
 
@@ -9663,6 +10166,7 @@ watch([activeLyricIndex, showSongDetail, lyricLines, manualLyricsScroll, isPlayi
 });
 
 onMounted(async () => {
+  void migrateLegacyPlaylistCovers();
   window.addEventListener("keydown", handleGlobalNavigationShortcut);
   window.addEventListener("resize", handleLyricViewportResize);
   window.addEventListener("focus", handleListeningStatsReconnect);
@@ -10095,6 +10599,7 @@ onBeforeUnmount(() => {
           @open-playlist="openAccountPlaylistInUnifiedView"
           @create-playlist="openStreamingPlaylistCreateDialog"
           @delete-playlist="deleteStreamingPlaylist"
+          @unsubscribe-playlist="unsubscribeStreamingPlaylist"
           @login="openProviderAuthPanel(streamingSource)"
         />
 
@@ -10233,6 +10738,7 @@ onBeforeUnmount(() => {
           @play="playAggregateSource"
           @play-list="playAggregatePlaylistSources"
           @remove-group="removeGroupFromAggregatePlaylist"
+          @remove-groups="removeGroupsFromAggregatePlaylist"
           @reorder="reorderAggregatePlaylistGroups"
           @set-cover="chooseAggregatePlaylistCover"
         />
@@ -10757,6 +11263,13 @@ onBeforeUnmount(() => {
                     <small>{{ backgroundCacheStatistics.entries }} 项</small>
                   </div>
                 </section>
+
+                <PlaylistCoverStorageSettings
+                  :statistics="originalCoverStatistics" :busy="originalCoverPending" :error="originalCoverError"
+                  :notice="originalCoverNotice" :confirm-visible="originalCoverConfirmVisible"
+                  @refresh="refreshOriginalCoverStorage" @request-cleanup="requestOriginalCoverCleanup"
+                  @confirm="confirmOriginalCoverCleanup" @cancel="originalCoverConfirmVisible = false"
+                />
 
                 <div class="settings-cache-clear background-cache-clear">
                   <div>
@@ -12136,7 +12649,8 @@ onBeforeUnmount(() => {
 
         <StreamingDailyMixPage
           v-if="activeView === 'playlist' && selectedPlaylist && isStreamingTemplatePlaylist"
-          :key="`${streamingSource}:${selectedStreamingAccount?.userId}:${selectedPlaylist.id}`"
+          :key="`${streamingSource}:${selectedStreamingAccount?.userId}:${selectedPlaylist.id}:${playlistPageRevision}`"
+          :scope-key="`${selectedPlaylist.id}:${playlistPageRevision}`"
           :class="{ 'is-library-detail-page': selectedPlaylist.id.startsWith('account-favorites-detail-') }"
           :tracks="selectedPlaylistTracks"
           :provider-name="selectedPlaylist.source === 'qq' ? 'QQ 音乐' : '网易云音乐'"
@@ -12157,7 +12671,7 @@ onBeforeUnmount(() => {
           :refreshing="isStreamingDailyPlaylist ? streamingHomeState === 'loading' : playlistState === 'loading'"
           @back="navigateBack"
           @play="playStreamingDailyTrack"
-          @context-menu="openTrackContextMenu($event.track, $event.event, selectedPlaylistTracks)"
+          @context-menu="openTrackContextMenu($event.track, $event.event, selectedPlaylistTracks, $event)"
           @play-all="playStreamingDailyTrackList"
           @play-random="playStreamingDailyTrackListRandom"
           @toggle-favorite="toggleStreamingDailyFavorite"
@@ -12212,6 +12726,10 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
+            <PlaylistBatchControls v-if="localPlaylistCanRemove" :enabled="localPlaylistBatchSelecting" :count="localPlaylistSelectedTracks.length"
+              :total="filteredPlaylistTracks.length" :all-selected="localPlaylistAllSelected" :busy="localPlaylistBatchBusy"
+              :message="localPlaylistBatchMessage" :playlist-name="selectedPlaylist.title" @toggle="toggleLocalPlaylistBatch"
+              @select-all="localPlaylistSelectedKeys = $event ? filteredPlaylistTracks.map(trackOrderKey) : []" @remove="removeSelectedLocalPlaylistTracks" />
             <article class="playlist-track-container">
               <div v-if="playlistState === 'loading'" class="playlist-loading-state">正在加载歌单歌曲...</div>
               <div v-else-if="playlistState === 'error'" class="playlist-loading-state error">
@@ -12225,21 +12743,24 @@ onBeforeUnmount(() => {
                   <span>专辑</span>
                   <span>时长</span>
                 </div>
-                <button
+                <article
                   v-for="(track, index) in filteredPlaylistTracks"
                   :key="`${track.id}-${index}`"
                   class="playlist-track-card"
-                  :class="{ active: track.id === currentTrack.id, 'is-dragging': playlistTrackDraggedKey === trackOrderKey(track) }"
-                  type="button"
-                  draggable="true"
+                  :class="{ active: track.id === currentTrack.id, selected: localPlaylistBatchSelecting && localPlaylistSelectedKeys.includes(trackOrderKey(track)), 'is-dragging': playlistTrackDraggedKey === trackOrderKey(track) }"
+                  role="button"
+                  tabindex="0"
+                  :draggable="!localPlaylistBatchSelecting && !localPlaylistBatchBusy"
                   @dragstart="startPlaylistTrackDrag(track)"
                   @dragover.prevent
                   @drop.prevent.stop="dropPlaylistTrack(track)"
                   @dragend="finishPlaylistTrackDrag"
-                  @click="playTrack(track)"
+                  @click="clickLocalPlaylistTrack(track)"
+                  @keydown.enter.self="clickLocalPlaylistTrack(track)"
+                  @keydown.space.self.prevent="clickLocalPlaylistTrack(track)"
                   @contextmenu.prevent="openTrackContextMenu(track, $event, filteredPlaylistTracks)"
                 >
-                  <span class="playlist-track-index">{{ (index + 1).toString().padStart(2, "0") }}</span>
+                  <span class="playlist-track-index"><input v-if="localPlaylistBatchSelecting" type="checkbox" :aria-label="`选择 ${track.title}`" :checked="localPlaylistSelectedKeys.includes(trackOrderKey(track))" :disabled="localPlaylistBatchBusy" @click.stop @change="toggleLocalPlaylistTrack(track)" /><template v-else>{{ (index + 1).toString().padStart(2, "0") }}</template></span>
                   <span class="playlist-track-cover" :style="{ background: `linear-gradient(135deg, ${track.primary}, ${track.secondary})` }">
                     <img v-if="track.coverUrl && !failedCoverIds.has(trackCoverKey(track))" :src="resolveBackendUrl(track.coverUrl)" :alt="`${track.title}封面`" @error="handleTrackCoverError($event, track)" />
                     <span v-else aria-hidden="true">{{ track.mark }}</span>
@@ -12247,7 +12768,7 @@ onBeforeUnmount(() => {
                   <span class="playlist-track-main"><strong>{{ track.title }}</strong><small>{{ track.artist }}</small></span>
                   <span class="playlist-track-album">{{ track.album }}</span>
                   <span class="playlist-track-duration">{{ Math.floor(track.duration / 60) }}:{{ (track.duration % 60).toString().padStart(2, "0") }}</span>
-                </button>
+                </article>
               </div>
               <div v-else class="playlist-empty-state">
                 <span class="playlist-empty-wave" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
@@ -12365,7 +12886,7 @@ onBeforeUnmount(() => {
           <h2>{{ playlistNameDialogMode === "rename" ? "重命名歌单" : "创建歌单" }}</h2>
           <label>
             <span>歌单名称</span>
-            <input v-model="playlistNameInput" type="text" maxlength="40" placeholder="请输入歌单名称" autofocus :disabled="playlistNameSubmitting" />
+            <input ref="playlistNameInputElement" v-model="playlistNameInput" type="text" maxlength="40" placeholder="请输入歌单名称" :disabled="playlistNameSubmitting" />
           </label>
           <p v-if="playlistNameError" class="playlist-name-error">{{ playlistNameError }}</p>
           <div class="playlist-name-actions">
@@ -12373,6 +12894,17 @@ onBeforeUnmount(() => {
             <button class="primary" type="submit" :disabled="playlistNameSubmitting">{{ playlistNameSubmitting ? "创建中..." : "确认" }}</button>
           </div>
         </form>
+      </div>
+
+      <div v-if="playlistDeleteDialog" class="playlist-name-dialog" role="dialog" aria-modal="true" aria-label="删除歌单" @click.self="closePlaylistDeleteDialog" @keydown.esc.stop="closePlaylistDeleteDialog">
+        <section class="playlist-name-modal">
+          <h2>删除歌单</h2>
+          <p class="playlist-delete-copy">删除「{{ playlistDeleteDialog.playlist.title }}」？这会同步删除{{ playlistDeleteDialog.context.provider === 'qq' ? 'QQ 音乐' : '网易云音乐' }}中的该歌单，无法撤销。</p>
+          <div class="playlist-name-actions">
+            <button ref="playlistDeleteCancelElement" type="button" :disabled="playlistDeletionPending" @click="closePlaylistDeleteDialog">取消</button>
+            <button class="primary" type="button" :disabled="playlistDeletionPending" @click="confirmStreamingPlaylistDelete">{{ playlistDeletionPending ? '删除中...' : '删除' }}</button>
+          </div>
+        </section>
       </div>
 
       <div
@@ -12389,7 +12921,7 @@ onBeforeUnmount(() => {
               <h2>{{ trackPlaylistPicker.mode === "aggregate" ? "加入聚合歌单" : "加入歌单" }}</h2>
               <p>选择要加入的目标：{{ trackPlaylistPicker.tracks.length === 1 ? trackPlaylistPicker.tracks[0]?.title : `已选择 ${trackPlaylistPicker.tracks.length} 首` }}</p>
             </div>
-            <button class="track-playlist-picker-close" type="button" title="关闭" aria-label="关闭" @click="closeTrackPlaylistPicker">×</button>
+            <button class="track-playlist-picker-close" type="button" title="关闭" aria-label="关闭" :disabled="playlistMutationPending" @click="closeTrackPlaylistPicker"><X :size="18" aria-hidden="true" /></button>
           </header>
 
           <div v-if="trackPlaylistPicker.mode === 'regular'" class="track-playlist-target-list">
@@ -12399,7 +12931,7 @@ onBeforeUnmount(() => {
               type="button"
               @click="addTrackToRegularPlaylist(playlist)"
             >
-              <span class="track-playlist-target-art" :style="{ background: `linear-gradient(135deg, ${playlist.primary}, ${playlist.secondary})` }" aria-hidden="true">{{ playlist.mark }}</span>
+              <PlaylistCoverArt :image-url="playlist.imageUrl" :mark="playlist.mark" :style="{ background: `linear-gradient(135deg, ${playlist.primary}, ${playlist.secondary})` }" />
               <span>
                 <strong>{{ playlist.title }}</strong>
                 <small>{{ playlist.count }} 首</small>
@@ -12408,6 +12940,11 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
+          <div v-else-if="trackPlaylistPicker.mode === 'streaming' && trackPlaylistPicker.state === 'loading'" class="track-playlist-picker-empty" role="status">正在加载账号歌单…</div>
+          <div v-else-if="trackPlaylistPicker.mode === 'streaming' && trackPlaylistPicker.state === 'error'" class="track-playlist-picker-empty" role="alert">
+            <strong>{{ trackPlaylistPicker.error }}</strong>
+            <button type="button" @click="refreshTrackPlaylistTargets"><RefreshCw :size="16" aria-hidden="true" />重试</button>
+          </div>
           <div v-else-if="trackPlaylistPicker.mode === 'streaming' && streamingPlaylistTargets.length" class="track-playlist-target-list">
             <button
               v-for="playlist in streamingPlaylistTargets"
@@ -12416,7 +12953,7 @@ onBeforeUnmount(() => {
               :disabled="playlistMutationPending"
               @click="addTracksToStreamingPlaylist(playlist)"
             >
-              <span class="track-playlist-target-art" :style="{ background: `linear-gradient(135deg, ${playlist.primary}, ${playlist.secondary})` }" aria-hidden="true">{{ playlist.mark }}</span>
+              <PlaylistCoverArt :image-url="playlist.imageUrl" :mark="playlist.mark" :style="{ background: `linear-gradient(135deg, ${playlist.primary}, ${playlist.secondary})` }" />
               <span><strong>{{ playlist.title }}</strong><small>{{ playlist.count }} 首</small></span>
               <i aria-hidden="true">＋</i>
             </button>
@@ -12434,7 +12971,7 @@ onBeforeUnmount(() => {
               type="button"
               @click="addTrackToSelectedAggregatePlaylist(playlist)"
             >
-              <span class="track-playlist-target-art aggregate" aria-hidden="true">⌘</span>
+              <PlaylistCoverArt class="aggregate" :image-url="aggregatePlaylistCoverUrl(playlist)"><Network :size="19" aria-hidden="true" /></PlaylistCoverArt>
               <span>
                 <strong>{{ playlist.name }}</strong>
                 <small>{{ mergeAggregateTracks(playlist.tracks).length }} 首 · {{ playlist.identifier }}</small>
@@ -12448,6 +12985,8 @@ onBeforeUnmount(() => {
             <span>先创建一个聚合歌单，再把这首歌加进去。</span>
             <button type="button" @click="openAggregatePageFromPicker">前往新建</button>
           </div>
+          <p v-if="trackPlaylistPicker.error && trackPlaylistPicker.state !== 'error'" class="track-playlist-picker-error" role="alert">{{ trackPlaylistPicker.error }}</p>
+          <p v-if="trackPlaylistPicker.progress && playlistMutationPending" class="track-playlist-picker-progress" role="status">正在处理 {{ trackPlaylistPicker.progress.processed }}/{{ trackPlaylistPicker.progress.total }} 首歌曲</p>
         </section>
       </div>
 
@@ -12857,36 +13396,37 @@ onBeforeUnmount(() => {
     >
       <div
         class="local-track-context-menu"
+        :class="{ 'is-batch': contextMenuSelectionCount > 0 }"
         :style="{ left: `${localTrackContextMenu.x}px`, top: `${localTrackContextMenu.y}px` }"
         role="menu"
         @pointerdown.stop
       >
         <button type="button" role="menuitem" @click="playContextMenuTrack">
           <Play :size="17" aria-hidden="true" />
-          <span>播放</span>
+          <span>{{ contextMenuSelectionCount ? "播放此歌曲" : "播放" }}</span>
         </button>
         <button type="button" role="menuitem" @click="playContextMenuTrackNext">
           <ListEnd :size="17" aria-hidden="true" />
-          <span>下一首播放</span>
+          <span>{{ contextMenuSelectionCount ? "此歌曲下一首播放" : "下一首播放" }}</span>
         </button>
         <div class="local-track-context-menu-separator" aria-hidden="true"></div>
         <button
           type="button"
           role="menuitem"
-          :class="{ 'is-active': localTrackContextMenu.track.liked }"
+          :class="{ 'is-active': contextMenuAllLiked }"
           @click="toggleContextMenuTrackFavorite"
         >
-          <Heart :size="17" :fill="localTrackContextMenu.track.liked ? 'currentColor' : 'none'" aria-hidden="true" />
-          <span>{{ localTrackContextMenu.track.liked ? "取消喜欢" : "喜欢" }}</span>
+          <Heart :size="17" :fill="contextMenuAllLiked ? 'currentColor' : 'none'" aria-hidden="true" />
+          <span>{{ contextMenuAllLiked ? "取消喜欢" : "喜欢" }}{{ contextMenuSelectionCount ? `选中的 ${contextMenuSelectionCount} 首` : "" }}</span>
         </button>
-        <button type="button" role="menuitem" @click="openTrackPlaylistPicker(localTrackContextMenu.track, 'regular')">
+        <button type="button" role="menuitem" @click="openTracksPlaylistPicker(localTrackContextMenu.tracks, 'regular', localTrackContextMenu.complete)">
           <ListMusic :size="17" aria-hidden="true" />
-          <span>添加到歌单</span>
+          <span>添加到歌单{{ contextMenuSelectionCount ? `（${contextMenuSelectionCount} 首）` : "" }}</span>
           <ChevronRight class="local-track-context-menu-chevron" :size="15" aria-hidden="true" />
         </button>
-        <button type="button" role="menuitem" @click="openTrackPlaylistPicker(localTrackContextMenu.track, 'aggregate')">
+        <button type="button" role="menuitem" @click="openTracksPlaylistPicker(localTrackContextMenu.tracks, 'aggregate', localTrackContextMenu.complete)">
           <Network :size="17" aria-hidden="true" />
-          <span>添加到聚合歌单</span>
+          <span>添加到聚合歌单{{ contextMenuSelectionCount ? `（${contextMenuSelectionCount} 首）` : "" }}</span>
           <ChevronRight class="local-track-context-menu-chevron" :size="15" aria-hidden="true" />
         </button>
         <template v-if="localTrackContextMenu.track.filePath">
@@ -13260,7 +13800,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .recent-history-empty strong { color: #667286; font-size: 14px; }
 .recent-history-empty span { font-size: 12px; }
 .local-track-context-menu-layer { position: fixed; inset: 0; z-index: 180; }
-.local-track-context-menu { position: absolute; display: grid; width: 184px; gap: 2px; padding: 6px; border: 1px solid #e5e7eb; border-radius: 8px; background: rgba(255,255,255,.98); box-shadow: 0 18px 40px rgba(28,39,55,.16); backdrop-filter: blur(16px); }
+.local-track-context-menu { position: absolute; display: grid; box-sizing: border-box; width: 200px; max-width: calc(100vw - 16px); max-height: calc(100vh - 16px); overflow-y: auto; gap: 2px; padding: 6px; border: 1px solid #e5e7eb; border-radius: 8px; background: rgba(255,255,255,.98); box-shadow: 0 18px 40px rgba(28,39,55,.16); backdrop-filter: blur(16px); }
+.local-track-context-menu.is-batch { width: 260px; }
 .local-track-context-menu button { display: grid; grid-template-columns: 20px minmax(0,1fr) auto; min-height: 38px; align-items: center; gap: 8px; border: 0; border-radius: 7px; padding: 8px 9px; background: transparent; color: #344054; cursor: pointer; font-size: 13px; font-weight: 650; text-align: left; }
 .local-track-context-menu button:hover,.local-track-context-menu button:focus-visible { outline: 0; background: #f1edff; color: #263653; }
 .local-track-context-menu button.is-active { color: #e25163; }
@@ -13556,6 +14097,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 }
 .playlist-track-card:hover { background: #f7f9fc; }
 .playlist-track-card.active { border-color: rgba(153,126,76,.16); background: var(--app-playing-background); }
+.playlist-track-card.selected { border-color: #c8d6f4; background: #eaf0ff; }
+.app-shell.theme-dark .playlist-track-card.selected { border-color: #506888; background: #2b3d56; }
+.playlist-track-index input { width: 14px; height: 14px; margin: 0; accent-color: #315fbd; }
 .playlist-track-card.is-dragging { opacity: .45; }
 .playlist-track-index {
   overflow: hidden;
@@ -13630,6 +14174,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
   box-shadow: 0 28px 70px rgba(0, 0, 0, .24);
 }
 .playlist-name-modal h2 { margin: 0; color: #202735; font-size: 20px; font-weight: 900; }
+.playlist-delete-copy { margin: 0; color: #596579; font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
 .playlist-name-modal label { display: grid; gap: 8px; color: #7a8493; font-size: 12px; }
 .playlist-name-modal input { height: 46px; border: 1px solid #d9dde4; border-radius: 9px; padding: 0 15px; color: #121826; font: inherit; outline: none; }
 .playlist-name-error { margin: -6px 0 0; color: #c7545c; font-size: 12px; }
@@ -13679,6 +14224,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #20d57a; outline-
 .track-playlist-picker-empty span { font-size: 11px; }
 .track-playlist-picker-empty button { height: 34px; margin-top: 8px; border: 1px solid #d9e0e9; border-radius: 8px; padding: 0 13px; background: #fff; color: #315fbd; cursor: pointer; font-weight: 700; }
 .track-playlist-picker-empty button:hover { background: #f2f5f8; }
+.track-playlist-picker-error { margin: 0; color: #b72d42; font-size: 12px; overflow-wrap: anywhere; }
+.track-playlist-picker-progress { margin: 0; color: #60708b; font-size: 12px; overflow-wrap: anywhere; }
 .playlist-grid { display: grid; grid-template-columns: repeat(6, minmax(100px, 1fr)); gap: 18px; }
 .track-section { width: min(1288px, 100%); margin-right: auto; margin-left: auto; }
 .track-list { display: grid; overflow: hidden; border: 1px solid #e4e7eb; border-radius: 14px; background: var(--app-card-background); box-shadow: var(--app-card-shadow); }

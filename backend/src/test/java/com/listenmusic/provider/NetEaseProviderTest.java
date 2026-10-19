@@ -108,8 +108,9 @@ class NetEaseProviderTest {
             .andRespond(withSuccess("""
                 {"code":200,"playlist":[{"id":900,"name":"自建歌单","creator":{"userId":100},"specialType":0,"trackCount":0}]}
                 """, org.springframework.http.MediaType.APPLICATION_JSON));
-        server.expect(requestTo(startsWith("http://api.test/playlist/track/add?pid=900&ids=123,456&cookie=MUSIC_U%3Dsecret")))
-            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=add&pid=900&tracks=123,456&cookie=MUSIC_U%3Dsecret")))
+            .andExpect(header(HttpHeaders.COOKIE, cookie))
+            .andRespond(withSuccess("{\"status\":200,\"body\":{\"code\":200}}", org.springframework.http.MediaType.APPLICATION_JSON));
         server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100&cookie=MUSIC_U%3Dsecret")))
             .andRespond(withSuccess("""
                 {"code":200,"playlist":{"trackCount":2,"tracks":[
@@ -122,6 +123,156 @@ class NetEaseProviderTest {
             "100", "netease:900", List.of("netease:123", "netease:456"), cookie
         );
 
+        server.verify();
+    }
+
+    @Test
+    void rejectsWrappedNeteasePlaylistWriteFailureBeforeReadingBack() {
+        String cookie = "MUSIC_U=secret";
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100")))
+            .andRespond(withSuccess("""
+                {"code":200,"playlist":[{"id":900,"name":"自建歌单","creator":{"userId":100},"specialType":0}]}
+                """, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=add&pid=900&tracks=123")))
+            .andRespond(withSuccess("{\"status\":200,\"body\":{\"code\":502}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        IllegalStateException error = assertThrows(IllegalStateException.class, () ->
+            provider.addAccountPlaylistTracks("100", "netease:900", List.of("netease:123"), cookie));
+        assertTrue(error.getMessage().contains("502"));
+        server.verify();
+    }
+
+    @Test
+    void removesOrdinaryPlaylistSongsThroughTheSongEndpointAndReadsBack() {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del&pid=900&tracks=123&cookie=MUSIC_U%3Dsecret")))
+            .andExpect(header(HttpHeaders.COOKIE, "MUSIC_U=secret"))
+            .andRespond(withSuccess("{\"status\":200,\"body\":{\"code\":200}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100")))
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":{\"trackCount\":1,\"tracks\":[{\"id\":456}]}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        provider.removeAccountPlaylistTrack("100", "netease:900", "netease:123", "MUSIC_U=secret");
+        server.verify();
+    }
+
+    @Test
+    void rejectsWrappedRemovalFailureWithoutReadingBack() {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del&pid=900&tracks=123")))
+            .andRespond(withSuccess("{\"status\":200,\"body\":{\"code\":502}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        var error = assertThrows(IllegalStateException.class, () ->
+            provider.removeAccountPlaylistTrack("100", "netease:900", "netease:123", "MUSIC_U=secret"));
+        assertTrue(error.getMessage().contains("502"));
+        server.verify();
+    }
+
+    @Test
+    void doesNotClaimRemovalWhenTheReadBackStillContainsTheSong() {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del&pid=900&tracks=123")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100")))
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":{\"trackCount\":1,\"tracks\":[{\"id\":123}]}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        var error = assertThrows(IllegalStateException.class, () ->
+            provider.removeAccountPlaylistTrack("100", "netease:900", "netease:123", "MUSIC_U=secret"));
+        assertTrue(error.getMessage().contains("尚未确认"));
+        server.verify();
+    }
+
+    private void expectOwnedRemovalPlaylist() {
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100")))
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":[{\"id\":900,\"name\":\"自建歌单\",\"creator\":{\"userId\":100},\"specialType\":0}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+    }
+
+    @Test
+    void batchRemovalOwnsOnceWritesOnceAndReadsCompleteMembershipOnce() {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del&pid=900&tracks=123,456")))
+            .andExpect(header(HttpHeaders.COOKIE, "MUSIC_U=secret"))
+            .andRespond(withSuccess("{\"body\":{\"code\":200}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail?id=900&uid=100")))
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":{\"trackCount\":1,\"trackIds\":[{\"id\":456}]}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("100", "netease:900", List.of("netease:123", "netease:456"), "MUSIC_U=secret");
+        assertEquals(List.of("netease:123"), result.succeeded());
+        assertEquals(List.of("netease:456"), result.failed());
+        assertTrue(result.errors().get("netease:456").contains("尚未确认"));
+        server.verify();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "{\"code\":200}", "{\"code\":200,\"playlist\":{}}", "{\"code\":200,\"playlist\":{\"tracks\":[]}}",
+        "{\"code\":200,\"playlist\":{\"trackCount\":1,\"trackIds\":[]}}",
+        "{\"code\":200,\"playlist\":{\"trackCount\":0,\"trackIds\":[{\"id\":\"bad\"}]}}",
+        "{\"code\":200,\"playlist\":{\"trackCount\":\"0\",\"tracks\":[]}}"
+    })
+    void batchRemovalNeverInfersAbsenceFromIncompleteMembership(String detail) {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail")))
+            .andRespond(withSuccess(detail, org.springframework.http.MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("100", "netease:900", List.of("netease:123"), "MUSIC_U=secret");
+        assertEquals(List.of(), result.succeeded());
+        assertEquals(List.of("netease:123"), result.failed());
+        server.verify();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {
+        "", "\"code\":null,", "\"code\":\"bad\",", "\"code\":\"200\",", "\"code\":502,"
+    })
+    void batchRemovalRequiresExplicitSuccessEvenWithCompleteLookingEmptyMembership(String status) {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail")))
+            .andRespond(withSuccess("{" + status + "\"playlist\":{\"trackCount\":0,\"trackIds\":[]}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("100", "netease:900", List.of("netease:123"), "MUSIC_U=secret");
+        assertEquals(List.of(), result.succeeded());
+        assertEquals(List.of("netease:123"), result.failed());
+        assertTrue(result.errors().containsKey("netease:123"));
+        server.verify();
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = { "{}", "{\"code\":null}", "{\"body\":{\"code\":\"bad\"}}", "{\"code\":\"200\"}", "{\"code\":502}" })
+    void batchRemovalRequiresExplicitWriteSuccessBeforeReadingMembership(String response) {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del")))
+            .andRespond(withSuccess(response, org.springframework.http.MediaType.APPLICATION_JSON));
+        int[] reads = { 0 };
+        server.expect(org.springframework.test.web.client.ExpectedCount.between(0, 1), requestTo(startsWith("http://api.test/playlist/detail")))
+            .andExpect(request -> reads[0]++)
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":{\"trackCount\":0,\"trackIds\":[]}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("100", "netease:900", List.of("netease:123"), "MUSIC_U=secret");
+        assertEquals(List.of(), result.succeeded());
+        assertEquals(List.of("netease:123"), result.failed());
+        assertEquals(0, reads[0]);
+        server.verify();
+    }
+
+    @Test
+    void batchRemovalVerifiesEmptyPlaylistAndPreservesLargeTextIds() {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail")))
+            .andRespond(withSuccess("{\"code\":200,\"playlist\":{\"trackCount\":0,\"trackIds\":[]}}", org.springframework.http.MediaType.APPLICATION_JSON));
+        var result = provider.removeAccountPlaylistTracks("100", "netease:900", List.of("netease:9007199254740993123"), "MUSIC_U=secret");
+        assertEquals(List.of("netease:9007199254740993123"), result.succeeded());
+        server.verify();
+    }
+
+    @Test
+    void batchRemovalDoesNotLeakFailedReadbackResponseBodies() {
+        expectOwnedRemovalPlaylist();
+        server.expect(requestTo(startsWith("http://api.test/playlist/tracks?op=del")))
+            .andRespond(withSuccess("{\"code\":200}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/playlist/detail")))
+            .andRespond(withStatus(HttpStatus.BAD_GATEWAY).body("MUSIC_U=secret; G:/Private/test"));
+        var result = provider.removeAccountPlaylistTracks("100", "netease:900", List.of("netease:123"), "MUSIC_U=secret");
+        assertEquals(List.of(), result.succeeded());
+        assertTrue(result.errors().get("netease:123").contains("HTTP 502"));
+        assertTrue(!result.errors().get("netease:123").contains("secret"));
         server.verify();
     }
 
@@ -448,6 +599,33 @@ class NetEaseProviderTest {
         assertTrue(created.createdByAccount());
         assertTrue(created.deletable());
         assertTrue(!created.favorite());
+        server.verify();
+    }
+
+    @Test
+    void loadsAllAccountPlaylistPagesAndDeduplicatesBoundaryItems() {
+        String firstPage = java.util.stream.IntStream.rangeClosed(1, 100)
+            .mapToObj(id -> "{\"id\":" + id + ",\"name\":\"List " + id + "\",\"creator\":{\"userId\":100}}")
+            .collect(java.util.stream.Collectors.joining(","));
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret&limit=100&offset=0")))
+            .andRespond(withSuccess("{\"code\":200,\"more\":true,\"playlist\":[" + firstPage + "]}", org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret&limit=100&offset=100")))
+            .andRespond(withSuccess("{\"code\":200,\"more\":false,\"playlist\":[{\"id\":100,\"name\":\"Boundary\",\"creator\":{\"userId\":100}},{\"id\":101,\"name\":\"Collected\",\"creator\":{\"userId\":200}}]}", org.springframework.http.MediaType.APPLICATION_JSON));
+        List<HomepagePlaylist> result = provider.loadAccountPlaylists("100", "MUSIC_U=secret");
+        assertEquals(101, result.size());
+        assertEquals("netease:101", result.getLast().id());
+        assertTrue(!result.getLast().createdByAccount());
+        server.verify();
+    }
+
+    @Test
+    void rejectsAnUnchangingPlaylistPageInsteadOfLoopingOrReturningAnIncompleteList() {
+        String body = "{\"code\":200,\"more\":true,\"playlist\":[{\"id\":1,\"name\":\"List\",\"creator\":{\"userId\":100}}]}";
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret&limit=100&offset=0")))
+            .andRespond(withSuccess(body, org.springframework.http.MediaType.APPLICATION_JSON));
+        server.expect(requestTo(startsWith("http://api.test/user/playlist?uid=100&cookie=MUSIC_U%3Dsecret&limit=100&offset=100")))
+            .andRespond(withSuccess(body, org.springframework.http.MediaType.APPLICATION_JSON));
+        assertThrows(IllegalStateException.class, () -> provider.loadAccountPlaylists("100", "MUSIC_U=secret"));
         server.verify();
     }
 

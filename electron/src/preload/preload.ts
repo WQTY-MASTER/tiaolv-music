@@ -1,9 +1,11 @@
 import { contextBridge, ipcRenderer } from "electron";
 import { standaloneBackendRequestUrl } from "../shared/backendRoutes";
+import { requestJson, REQUEST_TIMEOUT_MS } from "../shared/requestLifecycle";
 import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../shared/shortcuts";
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../shared/about";
 import { sanitizeDiagnosticPath, type RendererDiagnostic, type DiagnosticAppearance, type DiagnosticExportResult } from "../shared/diagnostics";
 import type { CloseBehavior, MainWindowCommand } from "../shared/desktopIntegration";
+import type { PlaylistCoverReferences } from "../shared/playlistCoverStorage";
 import type { MiniPlayerPreferences } from "../renderer/src/services/appearanceSettings";
 import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../shared/miniPlayer";
 import type {
@@ -32,19 +34,10 @@ interface SystemTrayState {
   miniPlayerVisible: boolean;
 }
 
-async function request(path: string, init?: RequestInit) {
-  const started = performance.now();
-  let status = 0;
-  try {
-    const response = await fetch(standaloneBackendRequestUrl(path), init);
-    status = response.status;
-    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
-    return await response.json();
-  } catch (error) {
-    reportDiagnostic({ kind: "request", path: sanitizeDiagnosticPath(path), method: (init?.method || "GET").toUpperCase(),
-      status, elapsedMs: performance.now() - started, message: error instanceof Error ? error.message : "Request failed" });
-    throw error;
-  }
+function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+  return requestJson<T>(standaloneBackendRequestUrl(path), init, { timeoutMs,
+    onFailure: failure => reportDiagnostic({ kind: "request", path: sanitizeDiagnosticPath(path),
+      method: (init?.method || "GET").toUpperCase(), ...failure }) });
 }
 
 function reportDiagnostic(value: RendererDiagnostic) { ipcRenderer.send("report-diagnostic", value); }
@@ -138,7 +131,12 @@ const mainBridge = {
   readCoverDataUrl: (coverUrl: string): Promise<string | null> => (
     ipcRenderer.invoke("read-cover-data-url", coverUrl)
   ),
+  resolvePlaylistCoverImage: (imagePath: string): Promise<string | null> => (
+    ipcRenderer.invoke("resolve-playlist-cover-image", imagePath)
+  ),
   getBackgroundCacheStatistics: () => ipcRenderer.invoke("background-cache-statistics"),
+  getPlaylistCoverStorageStatistics: (references: PlaylistCoverReferences) => ipcRenderer.invoke("playlist-cover-storage-statistics", references),
+  prunePlaylistCoverStorage: (references: PlaylistCoverReferences) => ipcRenderer.invoke("prune-playlist-cover-storage", references),
   clearBackgroundCache: () => ipcRenderer.invoke("clear-background-cache"),
   getLegacyAggregatePlaylists: () => ipcRenderer.invoke("get-legacy-aggregate-playlists"),
   uploadCloudAudio: () => ipcRenderer.invoke("upload-cloud-audio"),

@@ -33,7 +33,7 @@ assert.match(page, /class="aggregate-source-switch"/, "聚合歌曲行应支持�
 assert.match(page, /class="aggregate-track-row"[\s\S]*@click="playGroup\(group\)"/, "点击聚合歌曲整行应播放当前选中的音源");
 assert.doesNotMatch(page, /aggregate-track-play-icon/, "聚合歌曲行首不应再显示蓝色播放图标");
 assert.match(page, /class="aggregate-track-index"/, "聚合歌曲行首应始终保留数字序号");
-assert.match(page, /draggable="true"[\s\S]*@dragstart="startGroupDrag\(group\.id\)"[\s\S]*@drop(?:\.[a-z]+)*="dropGroup\(group\.id\)"/, "聚合歌曲整行应默认支持拖拽排序");
+assert.match(page, /:draggable="!batchSelecting && !batchBusy"[\s\S]*@dragstart="startGroupDrag\(group\.id\)"[\s\S]*@drop(?:\.[a-z]+)*="dropGroup\(group\.id\)"/, "聚合歌曲整行应支持拖拽排序，批量操作期间禁用");
 assert.match(page, /aggregateFolderFilter/, "聚合歌单应保留文件夹筛选");
 assert.match(page, /aggregateSourceFilter/, "聚合歌单应保留来源筛选");
 assert.doesNotMatch(page, />排序<|>顺序<|重置排序/, "聚合歌单不应提供自动排序控件");

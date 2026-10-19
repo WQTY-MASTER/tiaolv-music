@@ -10,6 +10,7 @@ test('batch execution deduplicates, continues after errors and keeps exact faile
   assert.deepEqual(calls, ['a','b','c']);
   assert.deepEqual(result.succeeded, ['a','c']);
   assert.deepEqual(result.failed, ['b']);
+  assert.match(result.message, /成功 2 首.*失败 1 首.*失败/);
 });
 test('account change prevents remaining writes', async () => {
   const { runTrackBatch } = await modulePromise;

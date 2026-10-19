@@ -35,6 +35,7 @@ export interface MiniPlayerSnapshot {
   duration: number;
   alwaysOnTop: boolean;
   showInTaskbar: boolean;
+  playlistMutationResult?: { requestId: string; kind: "create" | "add"; error?: string };
 }
 
 export interface MiniWindowStatus { locked: boolean; alwaysOnTop: boolean; queueExpanded: boolean }
@@ -43,8 +44,8 @@ export type MiniPlayerAction =
   | { type: "toggle" | "previous" | "next" | "like" | "mode" }
   | { type: "volume"; value: number }
   | { type: "queue-play" | "queue-like" | "queue-remove" | "queue-copy"; key: string }
-  | { type: "queue-add"; key: string; playlistId: string }
-  | { type: "queue-create"; key: string; name: string }
+  | { type: "queue-add"; key: string; playlistId: string; requestId?: string }
+  | { type: "queue-create"; key: string; name: string; requestId?: string }
   | { type: "appearance"; preferences: MiniPlayerPreferences }
   | { type: "pin"; value: boolean };
 export type MiniWindowCommand =
@@ -71,14 +72,17 @@ export function parseMiniPlayerAction(raw: unknown): MiniPlayerAction | null {
   }
   if (typeof value.key !== "string" || !value.key || value.key.length > 512) return null;
   const key = value.key;
+  if ((type === "queue-add" || type === "queue-create") && value.requestId !== undefined
+    && (typeof value.requestId !== "string" || !value.requestId.trim() || value.requestId.length > 128)) return null;
+  const correlation = typeof value.requestId === "string" ? { requestId: value.requestId } : {};
   if (["queue-play", "queue-like", "queue-remove", "queue-copy"].includes(type)) {
     return { type, key } as MiniPlayerAction;
   }
   if (type === "queue-add" && typeof value.playlistId === "string" && value.playlistId && value.playlistId.length <= 512) {
-    return { type, key, playlistId: value.playlistId };
+    return { type, key, playlistId: value.playlistId, ...correlation };
   }
   if (type === "queue-create" && typeof value.name === "string" && value.name.trim() && value.name.length <= 40) {
-    return { type, key, name: value.name.trim() };
+    return { type, key, name: value.name.trim(), ...correlation };
   }
   return null;
 }

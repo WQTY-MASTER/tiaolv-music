@@ -77,6 +77,10 @@ export function mergeAggregateTracks(tracks: AggregateTrackSource[]): AggregateT
   return Array.from(groups.values());
 }
 
+export function aggregatePlaylistCoverUrl(playlist: AggregatePlaylist) {
+  return playlist.coverUrl || mergeAggregateTracks(playlist.tracks)[0]?.coverUrl;
+}
+
 function isAggregateTrackSource(value: unknown): value is AggregateTrackSource {
   if (!value || typeof value !== "object") {
     return false;
@@ -180,6 +184,21 @@ export function addTrackToAggregatePlaylist(
   };
 }
 
+export function addTracksToAggregatePlaylist(
+  playlist: AggregatePlaylist,
+  tracks: readonly AggregateTrackSource[]
+): { playlist: AggregatePlaylist; added: number; skipped: number } {
+  let result = playlist;
+  let added = 0;
+  // Single-track insertion prepends new groups; reverse the batch to retain selection order.
+  for (const track of [...tracks].reverse()) {
+    const next = addTrackToAggregatePlaylist(result, track);
+    result = next.playlist;
+    if (next.added) added += 1;
+  }
+  return { playlist: result, added, skipped: tracks.length - added };
+}
+
 export function reorderAggregateTrackGroups(
   playlist: AggregatePlaylist,
   orderedGroupIds: string[]
@@ -222,8 +241,16 @@ export function removeAggregateTrackGroup(
   playlist: AggregatePlaylist,
   groupId: string
 ): AggregatePlaylist {
+  return removeAggregateTrackGroups(playlist, [groupId]);
+}
+
+export function removeAggregateTrackGroups(
+  playlist: AggregatePlaylist,
+  groupIds: readonly string[]
+): AggregatePlaylist {
+  const selected = new Set(groupIds);
   return {
     ...playlist,
-    tracks: playlist.tracks.filter((track) => normalizeTrackIdentity(track) !== groupId)
+    tracks: playlist.tracks.filter((track) => !selected.has(normalizeTrackIdentity(track)))
   };
 }

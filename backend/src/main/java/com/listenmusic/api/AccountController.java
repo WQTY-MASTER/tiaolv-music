@@ -4,6 +4,8 @@ import com.listenmusic.auth.AccountView;
 import com.listenmusic.domain.Track;
 import com.listenmusic.domain.QqListeningDataSummary;
 import com.listenmusic.provider.HomepagePlaylist;
+import com.listenmusic.provider.PlaylistTrackBatchResult;
+import com.listenmusic.provider.PlaylistWriteFailure;
 import com.listenmusic.provider.AccountProfile;
 import com.listenmusic.provider.AccountSocialUser;
 import com.listenmusic.provider.FavoriteOperationException;
@@ -13,6 +15,8 @@ import com.listenmusic.provider.RecentTracksDeleteResult;
 import com.listenmusic.provider.RecentPlayReportException;
 import com.listenmusic.service.AccountCatalogService;
 import com.listenmusic.service.AccountLoginRequiredException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -23,13 +27,13 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-
 import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/account")
 public class AccountController {
+    private static final Logger logger = LoggerFactory.getLogger(AccountController.class);
     private final AccountCatalogService accountCatalogService;
 
     public AccountController(AccountCatalogService accountCatalogService) {
@@ -205,22 +209,60 @@ public class AccountController {
     }
 
     @DeleteMapping("/{provider}/playlists/{id}/tracks/{trackId}")
-    public Map<String, Boolean> removePlaylistTrack(@PathVariable String provider, @PathVariable String id, @PathVariable String trackId) {
-        accountCatalogService.removePlaylistTrack(provider, id, trackId);
-        return Map.of("ok", true);
+    public ResponseEntity<Map<String, Object>> removePlaylistTrack(@PathVariable String provider, @PathVariable String id, @PathVariable String trackId) {
+        try {
+            accountCatalogService.removePlaylistTrack(provider, id, trackId);
+            return ResponseEntity.ok(Map.of("ok", true));
+        } catch (AccountLoginRequiredException | PlaylistOrderConflictException | PlaylistOrderRateLimitException | FavoriteOperationException ex) {
+            throw ex;
+        } catch (IllegalStateException ex) {
+            String platform = "qq".equals(provider) ? "QQ 音乐" : "netease".equals(provider) ? "网易云音乐" : "平台";
+            String message = platform + "移出歌单失败：" + playlistWriteFailureReason(ex);
+            logger.warn("{}", message);
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(Map.of("code", "PLAYLIST_TRACK_REMOVE_FAILED", "message", message));
+        }
     }
 
     public record PlaylistTrackOrderRequest(List<String> trackIds, List<String> previousTrackIds) {}
-    public record PlaylistTracksRequest(List<String> trackIds) {}
+    public record PlaylistTracksRequest(List<String> trackIds, String expectedAccountId) {}
+
+    @PostMapping("/{provider}/playlists/{id}/tracks/remove-batch")
+    public PlaylistTrackBatchResult removePlaylistTracks(
+        @PathVariable String provider, @PathVariable String id, @RequestBody PlaylistTracksRequest request
+    ) {
+        try {
+            return accountCatalogService.removePlaylistTracks(provider, id, request.trackIds(), request.expectedAccountId());
+        } catch (IllegalArgumentException | AccountLoginRequiredException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            return PlaylistTrackBatchResult.failure(request.trackIds().stream().distinct().toList(), ex);
+        }
+    }
 
     @PostMapping("/{provider}/playlists/{id}/tracks")
-    public Map<String, Boolean> addPlaylistTracks(
+    public ResponseEntity<Map<String, Object>> addPlaylistTracks(
         @PathVariable String provider,
         @PathVariable String id,
         @RequestBody PlaylistTracksRequest request
     ) {
-        accountCatalogService.addPlaylistTracks(provider, id, request.trackIds());
-        return Map.of("ok", true);
+        try {
+            if (request.expectedAccountId() == null) accountCatalogService.addPlaylistTracks(provider, id, request.trackIds());
+            else accountCatalogService.addPlaylistTracks(provider, id, request.trackIds(), request.expectedAccountId());
+            return ResponseEntity.ok(Map.of("ok", true));
+        } catch (AccountLoginRequiredException | PlaylistOrderConflictException | PlaylistOrderRateLimitException | FavoriteOperationException ex) {
+            throw ex;
+        } catch (IllegalStateException ex) {
+            String platform = "qq".equals(provider) ? "QQ 音乐" : "netease".equals(provider) ? "网易云音乐" : "平台";
+            String message = platform + "加入歌单失败：" + playlistWriteFailureReason(ex);
+            logger.warn("{}", message);
+            return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(Map.of("code", "PLAYLIST_TRACK_WRITE_FAILED", "message", message));
+        }
+    }
+
+    private String playlistWriteFailureReason(Throwable error) {
+        return PlaylistWriteFailure.reason(error);
     }
 
     @PostMapping("/{provider}/playlists/{id}/order")

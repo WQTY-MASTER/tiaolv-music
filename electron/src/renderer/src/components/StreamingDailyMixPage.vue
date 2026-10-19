@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { canActivateTrackHold, selectedVisibleIds, type TrackBatchAction, type TrackBatchResult } from "../services/streamingTrackManagement";
+import type { PlaylistBatchProgress } from "../services/accountPlaylistActions";
 import {
   ArrowDownAZ,
   ArrowLeft,
@@ -25,6 +26,7 @@ import {
   type DailySortField
 } from "../services/streamingDailyMix";
 import { resolveBackendUrl } from "../services/api";
+import PlaylistRemovalDialog from "./PlaylistRemovalDialog.vue";
 
 interface DailyTrack {
   id: string;
@@ -58,7 +60,8 @@ const props = defineProps<{
   reorderPending?: boolean;
   orderMessage?: string;
   batchMode?: "favorites" | "playlist" | "recent";
-  runBatch?: (action: TrackBatchAction, ids: string[]) => Promise<TrackBatchResult>;
+  runBatch?: (action: TrackBatchAction, ids: string[], onProgress?: (progress: PlaylistBatchProgress) => void) => Promise<TrackBatchResult>;
+  scopeKey?: string;
   sourceOptions?: ReadonlyArray<{ value: string; label: string }>;
   sourceValue?: string;
   collectable?: boolean;
@@ -77,7 +80,7 @@ const emit = defineEmits<{
   refresh: [];
   "search-global": [keyword: string];
   "source-change": [source: string];
-  "context-menu": [payload: { track: DailyTrack; event: MouseEvent }];
+  "context-menu": [payload: { track: DailyTrack; event: MouseEvent; selectedIds?: string[]; complete?: (result: TrackBatchResult) => void }];
 }>();
 
 const globalKeyword = ref("");
@@ -92,6 +95,7 @@ const batchSelecting = ref(false);
 const batchBusy = ref(false);
 const selectedIds = ref<string[]>([]);
 const batchMessage = ref("");
+const removalIds = ref<string[] | null>(null);
 const busy = computed(() => batchBusy.value || props.mutationPending);
 const canReorder = computed(() => props.reorderable !== false && !busy.value && !props.reorderPending && !batchSelecting.value && sortField.value === "default" && !playlistKeyword.value.trim());
 const selectedVisible = computed(() => selectedVisibleIds(selectedIds.value, visibleTracks.value));
@@ -100,6 +104,7 @@ let holdTimer: number | undefined;
 let heldPointer: { id: number; x: number; y: number; at: number; row: HTMLElement } | null = null;
 let suppressClickUntil = 0;
 let locateTimer: number | undefined;
+let batchScopeRevision = 0;
 
 const visibleTracks = computed(() => filterAndSortDailyTracks(
   props.tracks,
@@ -155,24 +160,53 @@ function toggleAllVisible() {
   const visible = new Set(visibleTracks.value.map(track => track.id));
   selectedIds.value = allVisibleSelected.value ? selectedIds.value.filter(id => !visible.has(id)) : [...new Set([...selectedIds.value, ...visible])];
 }
-async function executeBatch(action: TrackBatchAction) {
-  if (busy.value || !props.runBatch || !selectedVisible.value.length) return;
-  const ids = [...selectedVisible.value];
+function requestRemoval() {
+  if (busy.value || props.batchMode !== "playlist" || !props.runBatch || !selectedVisible.value.length) return;
+  removalIds.value = [...selectedVisible.value];
+}
+function confirmRemoval() {
+  if (busy.value || !removalIds.value?.length) return;
+  const ids = removalIds.value;
+  removalIds.value = null;
+  void executeBatch("remove", ids);
+}
+async function executeBatch(action: TrackBatchAction, selected = selectedVisible.value) {
+  if (busy.value || !props.runBatch || !selected.length) return;
+  const ids = [...selected];
+  const revision = batchScopeRevision;
   batchBusy.value = true;
-  batchMessage.value = `正在处理 ${ids.length} 首歌曲…`;
+  batchMessage.value = `正在处理 0/${ids.length} 首歌曲…`;
   try {
-    const result = await props.runBatch(action, ids);
+    const result = await props.runBatch(action, ids, progress => {
+      if (revision === batchScopeRevision) batchMessage.value = `正在处理 ${progress.processed}/${progress.total} 首歌曲…`;
+    });
+    if (revision !== batchScopeRevision) return;
     const succeeded = new Set(result.succeeded);
     selectedIds.value = selectedIds.value.filter(id => !succeeded.has(id));
     batchMessage.value = result.message || `成功 ${result.succeeded.length} 首${result.failed.length ? `，失败 ${result.failed.length} 首，可重试` : ""}`;
   } catch {
-    batchMessage.value = "操作失败，已保留选择，请重试。";
-  } finally { batchBusy.value = false; }
+    if (revision === batchScopeRevision) batchMessage.value = "操作失败，已保留选择，请重试。";
+  } finally { if (revision === batchScopeRevision) batchBusy.value = false; }
 }
 function clickTrack(id: string) {
   if (Date.now() < suppressClickUntil || busy.value) return;
   if (batchSelecting.value) toggleSelection(id);
   else emit("play", id);
+}
+function openTrackMenu(track: DailyTrack, event: MouseEvent) {
+  if (busy.value) return;
+  const selected = batchSelecting.value && selectedVisible.value.includes(track.id);
+  const revision = batchScopeRevision;
+  emit("context-menu", {
+    track, event,
+    selectedIds: selected ? [...selectedVisible.value] : undefined,
+    complete: selected ? result => {
+      if (revision !== batchScopeRevision) return;
+      const succeeded = new Set(result.succeeded);
+      selectedIds.value = selectedIds.value.filter(id => !succeeded.has(id));
+      batchMessage.value = result.message || "";
+    } : undefined
+  });
 }
 function cancelHold() {
   if (holdTimer !== undefined) window.clearTimeout(holdTimer);
@@ -220,9 +254,22 @@ function finishTrackHold(event: PointerEvent) {
 }
 
 watch(() => props.tracks.map(track => track.id), ids => { selectedIds.value = selectedIds.value.filter(id => ids.includes(id)); });
+watch(selectedVisible, ids => {
+  if (removalIds.value && (ids.length !== removalIds.value.length || ids.some(id => !removalIds.value!.includes(id)))) removalIds.value = null;
+});
+watch([() => props.title, () => props.providerName, () => props.batchMode, batchSelecting, busy], () => { removalIds.value = null; });
+watch([() => props.scopeKey, () => props.title, () => props.providerName, () => props.batchMode], () => {
+  batchScopeRevision += 1;
+  batchBusy.value = false;
+  batchMessage.value = "";
+  selectedIds.value = [];
+  batchSelecting.value = false;
+  removalIds.value = null;
+}, { flush: "sync" });
 watch([sortField, playlistKeyword, busy], cancelHold);
 
 onBeforeUnmount(() => {
+  batchScopeRevision += 1;
   cancelHold();
   if (locateTimer !== undefined) window.clearTimeout(locateTimer);
 });
@@ -342,8 +389,7 @@ onBeforeUnmount(() => {
         <span>已选 {{ selectedVisible.length }} 首</span>
         <button v-if="batchMode === 'favorites'" type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('unlike')"><HeartOff :size="15" aria-hidden="true" />取消喜欢</button>
         <template v-else-if="batchMode === 'playlist'">
-          <button type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('like')"><Heart :size="15" aria-hidden="true" />添加喜欢</button>
-          <button class="danger" type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('remove')"><Trash2 :size="15" aria-hidden="true" />移出歌单</button>
+          <button class="danger" type="button" :disabled="busy || !selectedVisible.length" @click="requestRemoval"><Trash2 :size="15" aria-hidden="true" />移出歌单</button>
         </template>
         <template v-else>
           <button class="danger" type="button" :disabled="busy || !selectedVisible.length" @click="executeBatch('clear-recent')"><Trash2 :size="15" aria-hidden="true" />清除记录</button>
@@ -379,7 +425,7 @@ onBeforeUnmount(() => {
           @lostpointercapture="cancelHold"
           @pointerleave="!draggedTrackId && cancelHold()"
           @click="clickTrack(track.id)"
-          @contextmenu.prevent="emit('context-menu', { track, event: $event })"
+          @contextmenu.prevent="openTrackMenu(track, $event)"
           @keydown.enter.self.prevent="clickTrack(track.id)"
           @keydown.space.self.prevent="clickTrack(track.id)"
           @keydown.esc="cancelHold"
@@ -414,6 +460,7 @@ onBeforeUnmount(() => {
         <div v-if="!visibleTracks.length" class="daily-detail-empty">{{ tracks.length ? "没有找到匹配的歌曲" : `当前${providerName}暂未返回${title || "每日推荐"}` }}</div>
       </div>
     </div>
+    <PlaylistRemovalDialog :visible="removalIds !== null" :playlist-name="title || '歌单'" :count="removalIds?.length || 0" :busy="busy" :notice="`此操作会同步到${providerName}，不会取消歌曲的喜欢。`" @cancel="removalIds = null" @remove="confirmRemoval" />
   </section>
 </template>
 

@@ -57,9 +57,11 @@ import type { CloseBehavior } from "../shared/desktopIntegration";
 
 const rendererUrl = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL;
 protocol.registerSchemesAsPrivileged([
-  { scheme: "tiaolv-background", privileges: { standard: true, secure: true, supportFetchAPI: true } }
+  { scheme: "tiaolv-background", privileges: { standard: true, secure: true, supportFetchAPI: true } },
+  { scheme: "tiaolv-cover", privileges: { standard: true, secure: true, supportFetchAPI: true } }
 ]);
 let backgroundImageCache: BackgroundImageCache;
+let playlistCoverImageCache: BackgroundImageCache;
 const rendererFileUrl = pathToFileURL(path.join(__dirname, "../renderer/index.html")).href;
 const localAccessTokenFile = process.env.LISTENMUSIC_LOCAL_ACCESS_TOKEN_FILE || path.join(os.homedir(), ".tiaolv-music", "local-access.token");
 let localAccessToken = "";
@@ -903,6 +905,29 @@ ipcMain.handle("select-playlist-cover-image", async (event) => {
   return selected;
 });
 
+ipcMain.handle("resolve-playlist-cover-image", async (event, imagePath: unknown) => {
+  if (BrowserWindow.fromWebContents(event.sender) !== mainWindow || typeof imagePath !== "string") return null;
+  if (/^tiaolv-cover:/i.test(imagePath)) {
+    await playlistCoverImageCache.resolve(imagePath);
+    return imagePath;
+  }
+  return playlistCoverImageCache.importImage(imagePath);
+});
+
+function requirePlaylistCoverStorageOwner(event: Electron.IpcMainInvokeEvent) {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents
+    || event.senderFrame !== mainWindow.webContents.mainFrame) throw new Error("原始封面管理仅限主窗口。");
+}
+
+ipcMain.handle("playlist-cover-storage-statistics", (event, references: unknown) => {
+  requirePlaylistCoverStorageOwner(event);
+  return playlistCoverImageCache.originalStatistics(references);
+});
+ipcMain.handle("prune-playlist-cover-storage", (event, references: unknown) => {
+  requirePlaylistCoverStorageOwner(event);
+  return playlistCoverImageCache.pruneOriginals(references);
+});
+
 ipcMain.handle("read-appearance-background", async (event, imagePath: unknown) => {
   if (typeof imagePath !== "string") throw new Error("Invalid background path");
   const mainOwner = BrowserWindow.fromWebContents(event.sender) === mainWindow;
@@ -1299,6 +1324,14 @@ if (!hasSingleInstanceLock) {
     installBackendAccess();
     diagnostics.addSecret(localAccessToken);
     backgroundImageCache = new BackgroundImageCache(path.join(app.getPath("userData"), "cache", "backgrounds"));
+    playlistCoverImageCache = new BackgroundImageCache(path.join(app.getPath("userData"), "playlist-covers"), "tiaolv-cover");
+    protocol.handle("tiaolv-cover", async (request) => {
+      try {
+        return await net.fetch(pathToFileURL(await playlistCoverImageCache.resolve(request.url)).href);
+      } catch {
+        return new Response("Cover not found", { status: 404 });
+      }
+    });
     protocol.handle("tiaolv-background", async (request) => {
       try {
         return await net.fetch(pathToFileURL(await backgroundImageCache.resolve(request.url)).href);

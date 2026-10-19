@@ -73,7 +73,7 @@ test("resource resolution rebases backend URLs without changing external resourc
     assert.equal(resolveStandaloneBackendResourceUrl(`http://127.0.0.1:17890${route}`, origin), `${origin}/backend${route}`);
   }
   for (const url of ["https://y.gtimg.cn/cover.jpg", "http://cdn.example/audio?x=1", "file:///C:/music/a.mp3",
-    "data:image/png;base64,AA", "blob:http://127.0.0.1:5173/123"]) {
+    "data:image/png;base64,AA", "blob:http://127.0.0.1:5173/123", "tiaolv-cover://cache/" + "a".repeat(64) + ".png"]) {
     assert.equal(resolveStandaloneBackendResourceUrl(url, origin), url);
   }
 });

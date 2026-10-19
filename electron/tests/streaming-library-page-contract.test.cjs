@@ -76,7 +76,8 @@ assert.match(
   "QQ 与网易云音乐库概览应按同一周榜/全部筛选读取各自数据源",
 );
 assert.match(app, /provider !== 'qq' && provider !== 'netease'/, "歌单删除流程应支持 QQ 与网易云");
-assert.match(app, /providerName = provider === 'qq' \? 'QQ 音乐' : '网易云音乐'/, "删除确认应显示当前音乐平台");
+assert.match(app, /playlistDeleteDialog\.context\.provider === 'qq' \? 'QQ 音乐' : '网易云音乐'/, "删除确认应显示捕获账号上下文中的音乐平台");
+assert.match(app, /playlistDeleteDialog\.value = \{ playlist, context \}/, "删除确认应保留发起时捕获的歌单和账号上下文");
 assert.doesNotMatch(app, /account-profile/, "旧个人主页路由应被移除");
 assert.match(app, /account-following/, "应提供关注列表路由");
 assert.match(app, /account-followers/, "应提供粉丝列表路由");
@@ -114,8 +115,10 @@ assert.match(
   /loadAccountFollowing\(provider,\s*ACCOUNT_SOCIAL_PAGE_SIZE,\s*\(page - 1\) \* ACCOUNT_SOCIAL_PAGE_SIZE\)/,
   "关注列表应和粉丝列表一样按页请求",
 );
-assert.match(api, /const REQUEST_TIMEOUT_MS = 12_000;/, "前端请求应设置统一超时，避免页面无限加载");
-assert.match(api, /controller\.abort\(\)/, "请求超时后应主动中止 fetch");
+const requestLifecycle = fs.readFileSync(path.join(root, "src/shared/requestLifecycle.ts"), "utf8");
+assert.match(requestLifecycle, /const REQUEST_TIMEOUT_MS = 12_000;/, "前端共享请求应保持 12 秒默认超时");
+assert.match(api, /import \{ requestJson, REQUEST_TIMEOUT_MS \} from "\.\.\/\.\.\/\.\.\/shared\/requestLifecycle"/, "前端应使用共享请求生命周期与默认超时");
+assert.match(requestLifecycle, /controller\.abort\(\)/, "共享请求超时后应主动中止 fetch");
 assert.match(accountController, /@GetMapping\("\/\{provider\}\/following"\)/, "后端应暴露关注列表接口");
 assert.match(accountController, /@GetMapping\("\/\{provider\}\/followers"\)/, "后端应暴露粉丝列表接口");
 assert.match(accountController, /@GetMapping\("\/\{provider\}\/users\/\{userId\}"\)/, "后端应暴露公开用户资料接口");

@@ -47,6 +47,11 @@ async function main() {
     "data:image/png;base64,AAAA",
     "浏览器文件选择回退生成的数据地址不应被改写"
   );
+  const originalCover = "tiaolv-cover://cache/" + "a".repeat(64) + ".png";
+  assert.equal(mediaPathToUrl(originalCover), originalCover, "原图存储 URL 不应被误写成文件路径");
+  assert.equal(resolvePlaylistCover(managedPlaylist, [], originalCover, resolveCover), originalCover, "清空歌曲后仍保留自定义封面");
+  const platformCover = "https://example.test/cover.png?original=1";
+  assert.equal(resolvePlaylistCover({ source: "netease", imageUrl: platformCover }, tracks), platformCover, "平台封面优先，不改写原图地址或质量参数");
 
   console.log("歌单封面派生逻辑通过");
 }

@@ -25,6 +25,43 @@ test('release runner rejects shell placeholders and missing test paths', () => {
   assert.throws(() => validateTestFiles([{ file: 'tests/missing.test.cjs' }], __dirname), /Missing/);
 });
 
+test('release runner accepts multiple files after flags and merges duplicate file flags', () => {
+  const { discoverFrontendTests } = require(script);
+  const commands = discoverFrontendTests({ scripts: {
+    test: 'node --test tests/a.test.cjs tests/b.test.cjs tests/a.test.cjs',
+    'test:extra': 'node --experimental-transform-types --test tests/b.test.cjs tests/c.test.cjs'
+  } });
+  assert.deepEqual(commands, [
+    { file: 'tests/a.test.cjs', flags: ['--test'] },
+    { file: 'tests/b.test.cjs', flags: ['--test', '--experimental-transform-types'] },
+    { file: 'tests/c.test.cjs', flags: ['--experimental-transform-types', '--test'] }
+  ]);
+});
+
+test('release runner refuses traversal, shell syntax, trailing flags and unapproved Node flags', () => {
+  const { discoverFrontendTests } = require(script);
+  for (const command of [
+    'node --test tests/../outside.test.cjs', 'node --test tests/a.test.cjs --test',
+    'node --require tests/a.test.cjs', 'node --test tests/a.test.cjs | node tests/b.test.cjs',
+    'node --test tests/a.test.cjs; node tests/b.test.cjs',
+    'node --test tests/a.test.cjs &&', 'node --test tests/a.test.cjs > output',
+    'node --test "tests/a.test.cjs"', 'node --test tests//a.test.cjs'
+  ]) {
+    assert.throws(() => discoverFrontendTests({ scripts: { test: command } }), /Unsupported/, command);
+  }
+});
+
+test('offline playlist regressions are registered and isolated browser acceptance stays separate', () => {
+  const { discoverFrontendTests, ISOLATED_E2E_FILES } = require(script);
+  const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8'));
+  const commands = discoverFrontendTests(packageJson);
+  for (const name of ['account-playlist-actions', 'aggregate-batch-removal', 'netease-playlist-gateway', 'request-lifecycle', 'local-playlist-persistence']) {
+    assert.ok(commands.some(command => command.file === `tests/${name}.test.cjs`), name);
+  }
+  assert.deepEqual(ISOLATED_E2E_FILES, ['account-playlist-actions.smoke.cjs', 'account-playlist-batches.smoke.cjs', 'playlist-batch-removal.smoke.cjs', 'playlist-persistence.smoke.cjs']);
+  assert.equal(packageJson.scripts['test:e2e:isolated'], 'node ../scripts/verify.cjs e2e-isolated');
+});
+
 test('browser acceptance has a bounded real smoke suite and refuses remote preview URLs', () => {
   assert.ok(fs.existsSync(script), 'release verification runner must exist');
   const { E2E_FILES, previewUrl } = require(script);

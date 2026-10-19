@@ -1,6 +1,6 @@
 # 调律音乐官网
 
-纯静态介绍与下载页，无需构建或安装依赖。保留现有品牌、备案号和两个下载入口；内容依据播放器 README 与用户指定的 `更新日志.md`，当前版本 0.1.4，仅支持 Windows x64。
+纯静态介绍与下载页，无需构建或安装依赖。保留现有品牌、备案号和两个下载入口；官网当前版本 0.1.7，仅支持 Windows x64。官网和 GitHub Release 使用相同版本的安装包、blockmap 与更新清单。
 
 ## 本地预览
 
@@ -10,20 +10,13 @@
 
 ## 上传宝塔
 
-上线 0.1.4 请使用播放器目录中的 `electron/release/server-distribution/网站及更新上传包-0.1.4.zip`，内含网页、安装包、blockmap 和清单。不要只上传新网页而遗漏对应安装包。先上传 `updates/windows/` 中的 EXE 和 blockmap，核对后再更新首页和 `latest.yml`。
+服务器已有 0.1.7 安装包和更新清单时，只需上传 `electron/release/server-distribution/0.1.7/网站更新包-0.1.7.zip`，覆盖网站根目录的 `index.html`。此包不含安装包或 `updates/`，不会影响已上传的更新文件和封面素材。上传前备份原首页，完成后刷新 `https://wqty.online/` 检查版本、截图、下载入口和备案信息。
 
-版本文件已经上线后，单独更新网页可以将 `网站上传包.zip` 上传到 `wqty.online` 对应的网站根目录并解压，合并覆盖以下网页文件：
+本次网页包只更新以下文件：
 
 - `index.html`
-- `styles.css`
-- `script.js`
-- `assets/logo.png`
-- `assets/screenshots/local-home.png`
-- `assets/screenshots/lyrics.png`
-- `assets/screenshots/online-music.png`
-- `assets/screenshots/mini-player.png`
 
-不要删除网站根目录，不要清空已有的 `updates/`，保留旧版本文件。这里的 `网站上传包.zip` 只包含上述网页文件，没有安装包、更新清单、blockmap、服务器配置或播放器后端。合并上传，无需修改宝塔、Nginx、SSL 或默认首页配置。
+不要删除网站根目录，不要清空已有的 `assets/` 或 `updates/`，保留历史安装包。此 ZIP 只包含首页，没有安装包、更新清单、blockmap、服务器配置或播放器后端。合并覆盖即可，无需修改宝塔、Nginx、SSL 或默认首页配置。
 
 `README.md`、`preview.mjs`、`验证结果.json`、预览截图和 `.backups/` 仅在本地使用，无需上传。上传后在浏览器刷新并检查首页、截图、备案信息和现有下载入口即可。
 
@@ -40,11 +33,11 @@
 
 原截图中的默认“律”封面、演示歌词和空闲播放器来自旧测试画面，不是网页图片路径损坏；现已替换。图片链接加入 `v=20261012-real` 缓存标记。旧网页、素材和上传包备份于 `.backups/20261012-real-screenshots/`。兼容保留的旧 `netease.png` 不再被网页引用，也不包含在新上传包中。
 
-按 0.1.4 发布方案更新入口，既有真实截图和备案信息保留：
+按 0.1.7 服务器上传方案更新入口，既有真实截图和备案信息保留：
 
-- 官网安装包：`./updates/windows/Tiaolv-Setup-0.1.4.exe`
-- GitHub：`https://github.com/WQTY-MASTER/tiaolv-music/releases/tag/v0.1.4`
+- 官网安装包：`./updates/windows/Tiaolv-Setup-0.1.7.exe`
+- GitHub Release：`https://github.com/WQTY-MASTER/tiaolv-music/releases/tag/v0.1.7`
 
-官网安装包地址上线后解析为 `https://wqty.online/updates/windows/Tiaolv-Setup-0.1.4.exe`，复制按钮提供此地址。没有自动改为 `releases/latest`。旧版本安装包下载链接不修改。
+官网安装包地址上线后解析为 `https://wqty.online/updates/windows/Tiaolv-Setup-0.1.7.exe`，复制按钮提供此地址。没有自动改为 `releases/latest`。旧版本安装包下载链接不修改。
 
 备案号保留为 **琼ICP备2026005196号-1**，链接到工信部备案查询。网页未接入在线播放、调律账号注册或云端数据同步。

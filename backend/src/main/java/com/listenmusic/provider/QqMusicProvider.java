@@ -677,23 +677,38 @@ public class QqMusicProvider implements MusicProvider {
     @Override
     public List<HomepagePlaylist> loadAccountPlaylists(String accountId, String credential) {
         requireCredential(accountId, credential);
-        JsonNode createdRoot = get(uriBuilder -> uriBuilder
-            .path("/user/getUserPlaylists")
-            .queryParam("uin", accountId)
-            .queryParam("offset", 0)
-            .queryParam("limit", 100)
-            .build(), credential);
         List<HomepagePlaylist> playlists = new ArrayList<>();
-        appendAccountPlaylists(playlists, createdRoot, true, accountId, credential);
+        loadAccountPlaylistPages(playlists, true, accountId, credential);
+        loadAccountPlaylistPages(playlists, false, accountId, credential);
+        java.util.Map<String, HomepagePlaylist> unique = new java.util.LinkedHashMap<>();
+        for (HomepagePlaylist playlist : playlists) unique.putIfAbsent(playlist.id(), playlist);
+        return List.copyOf(unique.values());
+    }
 
-        JsonNode collectedRoot = get(uriBuilder -> uriBuilder
-            .path("/user/getUserCollectedSongLists")
-            .queryParam("uin", accountId)
-            .queryParam("page", 1)
-            .queryParam("limit", 100)
-            .build(), credential);
-        appendAccountPlaylists(playlists, collectedRoot, false, accountId, credential);
-        return List.copyOf(playlists);
+    private void loadAccountPlaylistPages(List<HomepagePlaylist> playlists, boolean created, String accountId, String credential) {
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (int page = 0; page < 100; page++) {
+            final int index = page;
+            JsonNode root = get(uriBuilder -> uriBuilder
+                .path(created ? "/user/getUserPlaylists" : "/user/getUserCollectedSongLists")
+                .queryParam("uin", accountId)
+                .queryParam(created ? "offset" : "page", created ? index * 100 : index + 1)
+                .queryParam("limit", 100)
+                .build(), credential);
+            ensureSuccess(root);
+            JsonNode items = firstArray(root, "response/data/playlists", "response/data/list", "response/data/cdlist",
+                "data/playlists", "data/list", "data/cdlist", "playlists", "list");
+            if (items == null || items.isEmpty()) return;
+            int previousSize = seen.size();
+            for (JsonNode item : items) {
+                String id = firstText(item.path("dissid"), item.path("id"), item.path("tid"));
+                if (!id.isBlank()) seen.add(id);
+            }
+            appendAccountPlaylists(playlists, root, created, accountId, credential);
+            if (items.size() < 100) return;
+            if (seen.size() == previousSize) throw new IllegalStateException("QQ 音乐歌单分页未返回新内容，请刷新重试");
+        }
+        throw new IllegalStateException("QQ 音乐歌单分页超出安全上限，请稍后重试");
     }
 
     private void appendAccountPlaylists(List<HomepagePlaylist> playlists, JsonNode root, boolean createdByAccount, String accountId, String credential) {
@@ -803,6 +818,41 @@ public class QqMusicProvider implements MusicProvider {
             "id", rawId(playlistId),
             "trackIds", trackIds.stream().map(QqMusicProvider::rawId).toList()
         ), credential));
+    }
+
+    @Override
+    public PlaylistTrackBatchResult removeAccountPlaylistTracks(String accountId, String playlistId, List<String> trackIds, String credential) {
+        requireCredential(accountId, credential);
+        if (playlistId == null || !playlistId.matches("qq:[1-9][0-9]*") || trackIds == null || trackIds.isEmpty()
+            || trackIds.size() > 100 || trackIds.stream().anyMatch(id -> id == null || !id.matches("qq:[a-zA-Z0-9]{1,64}"))) {
+            throw new IllegalArgumentException("无效的 QQ 歌单或歌曲 ID");
+        }
+        HomepagePlaylist playlist = loadAccountPlaylists(accountId, credential).stream()
+            .filter(item -> playlistId.equals(item.id())).findFirst()
+            .orElseThrow(() -> new IllegalArgumentException("找不到 QQ 歌单"));
+        if (!playlist.createdByAccount() || !playlist.deletable() || playlist.favorite()) {
+            throw new IllegalArgumentException("只能编辑当前账号创建的普通歌单");
+        }
+        List<String> succeeded = new ArrayList<>(), failed = new ArrayList<>();
+        Map<String, String> errors = new java.util.LinkedHashMap<>();
+        for (String id : trackIds.stream().distinct().toList()) {
+            try {
+                // The existing gateway verifies each removal before reporting success.
+                JsonNode root = post("/user/removePlaylistTrack", Map.of("id", rawId(playlistId), "songId", rawId(id)), credential);
+                ensureMusicuSuccess(root);
+                JsonNode response = root.path("response"), request = response.path("req_1"), data = request.path("data");
+                if (!response.path("code").isIntegralNumber() || response.path("code").intValue() != 0
+                    || !request.path("code").isIntegralNumber() || request.path("code").intValue() != 0
+                    || !data.path("retCode").isIntegralNumber() || data.path("retCode").intValue() != 0) {
+                    throw new IllegalStateException("QQ 音乐尚未确认歌曲已移出歌单");
+                }
+                succeeded.add(id);
+            } catch (RuntimeException error) {
+                failed.add(id);
+                errors.put(id, PlaylistWriteFailure.reason(error));
+            }
+        }
+        return new PlaylistTrackBatchResult(succeeded, failed, errors);
     }
 
     @Override

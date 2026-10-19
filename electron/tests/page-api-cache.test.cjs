@@ -11,11 +11,26 @@ registerHooks({
     }
     if (specifier.endsWith("/backendRoutes")) return nextResolve(`${specifier}.ts`, context);
     if (specifier.endsWith("/diagnostics")) return nextResolve(`${specifier}.ts`, context);
+    if (specifier.endsWith("/requestLifecycle")) return nextResolve(`${specifier}.ts`, context);
     return nextResolve(specifier, context);
   }
 });
 
 const moduleUrl = pathToFileURL(path.resolve(__dirname, "../src/renderer/src/services/api.ts"));
+
+test("explicit playlist refresh reads newly created targets instead of the cached list", async () => {
+  const api = await import(moduleUrl);
+  const originalFetch = global.fetch;
+  let calls = 0;
+  api.invalidatePageDataCache();
+  api.setPageDataCacheAccountScope("netease", "new-target-account");
+  global.fetch = async () => new Response(JSON.stringify([{ id: `netease:${++calls}` }]), { status: 200 });
+  try {
+    assert.deepEqual(await api.loadAccountPlaylists("netease"), [{ id: "netease:1" }]);
+    assert.deepEqual(await api.loadAccountPlaylists("netease", true), [{ id: "netease:2" }]);
+    assert.equal(calls, 2);
+  } finally { global.fetch = originalFetch; api.invalidatePageDataCache(); }
+});
 
 test("QQ cloud report updates captured recent cache without evicting favorites or crossing accounts", async () => {
   const api = await import(moduleUrl);

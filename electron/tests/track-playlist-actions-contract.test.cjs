@@ -8,13 +8,13 @@ const aggregateService = fs.readFileSync(path.join(root, "src/renderer/src/servi
 
 assert.match(app, /添加到歌单/, "歌曲右键菜单应有普通歌单入口");
 assert.match(app, /添加到聚合歌单/, "歌曲右键菜单应有聚合歌单入口");
-assert.match(app, /openTrackPlaylistPicker\(localTrackContextMenu\.track, 'regular'\)/, "普通歌单入口应打开普通目标选择器");
-assert.match(app, /openTrackPlaylistPicker\(localTrackContextMenu\.track, 'aggregate'\)/, "聚合歌单入口应打开聚合目标选择器");
+assert.match(app, /openTracksPlaylistPicker\(localTrackContextMenu\.tracks, 'regular', localTrackContextMenu\.complete\)/, "普通歌单入口应传递右键选中的所有歌曲及完成回调");
+assert.match(app, /openTracksPlaylistPicker\(localTrackContextMenu\.tracks, 'aggregate', localTrackContextMenu\.complete\)/, "聚合歌单入口应传递右键选中的所有歌曲及完成回调");
 assert.match(app, /class="track-playlist-picker-dialog"/, "加入歌曲时应显示目标歌单选择弹窗");
 assert.match(app, /addTrackToRegularPlaylist/, "普通歌单应有独立写入逻辑");
-assert.match(app, /localPlaylistTrackMap\.value\s*=\s*\{[\s\S]{0,500}persistLocalPlaylists\(\)/, "加入普通歌单后应更新并持久化普通歌单数据");
+assert.match(app, /async function addTrackToRegularPlaylist[\s\S]*?const next = \{[\s\S]*?persistLocalPlaylists\(next\);[\s\S]*?localPlaylistTrackMap\.value = next;/, "加入普通歌单应先保存候选快照再更新可见歌曲");
 assert.match(app, /addTrackToSelectedAggregatePlaylist/, "聚合歌单应有独立写入逻辑");
-assert.match(app, /writeAggregatePlaylists\(aggregatePlaylists\.value\)/, "加入聚合歌单后应持久化聚合歌单数据");
+assert.match(app, /function addTrackToSelectedAggregatePlaylist[\s\S]*?writeAggregatePlaylists\(next\);\s*aggregatePlaylists\.value = next;/, "加入聚合歌单应先保存候选快照再更新可见集合");
 assert.doesNotMatch(app, /markAggregatePlaylistTodo/, "聚合歌单入口不应继续使用占位提示");
 
 assert.match(aggregateService, /function addTrackToAggregatePlaylist/, "聚合歌单服务应提供添加音源逻辑");

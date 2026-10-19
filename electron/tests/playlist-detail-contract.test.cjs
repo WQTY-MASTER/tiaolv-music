@@ -47,7 +47,8 @@ assert.match(app, /v-model="playlistFilter\.source"/, "筛选器应有来源下�
 assert.doesNotMatch(app, /v-model="playlistFilter\.(sort|order)"|resetPlaylistFilter/, "筛选器应移除排序、升降序和重置逻辑");
 assert.doesNotMatch(app, /class="playlist-filter-panel"[\s\S]{0,1200}(DSD|位深|采样率|无损)/, "歌单详情筛选器不应保留音质类筛选项");
 assert.match(app, /filteredPlaylistTracks/, "歌单详情歌曲列表应按当前歌单筛选条件实时计算");
-assert.match(app, /class="playlist-track-card"[\s\S]*draggable="true"[\s\S]*@dragstart="startPlaylistTrackDrag\(track\)"[\s\S]*@drop(?:\.[a-z]+)*="dropPlaylistTrack\(track\)"/, "普通歌单歌曲行应默认支持拖拽排序");
+assert.match(app, /const localPlaylistBatchSelecting = ref\(false\)/, "普通歌单默认应允许拖动");
+assert.match(app, /class="playlist-track-card"[\s\S]*:draggable="!localPlaylistBatchSelecting && !localPlaylistBatchBusy"[\s\S]*@dragstart="startPlaylistTrackDrag\(track\)"[\s\S]*@drop(?:\.[a-z]+)*="dropPlaylistTrack\(track\)"/, "普通歌单默认支持拖拽，批量选择或提交时应禁用拖拽");
 assert.match(app, /PLAYLIST_TRACK_ORDER_STORAGE_KEY[\s\S]*persistPlaylistTrackOrder/, "普通歌单歌曲顺序应持久保存在当前设备");
 assert.match(app, /class="playlist-track-table-head"[\s\S]*#\s*<\/span>[\s\S]*标题[\s\S]*专辑[\s\S]*时长/, "歌单详情歌曲列表应有贴近页面背景的表头");
 assert.match(app, /\.playlist-track-container \{[^}]*background: var\(--app-card-background\);[^}]*box-shadow: var\(--app-card-shadow\);/, "歌单详情歌曲列表应使用白色卡片层级");
@@ -69,12 +70,14 @@ assert.doesNotMatch(app, /throw new Error\("创建成功，但未能读取新歌
 assert.match(app, /persistLocalPlaylists/, "歌单重命名、复制、封面应持久化");
 assert.match(app, /resolvePlaylistCover/, "普通歌单封面应通过统一的首曲封面规则派生");
 assert.match(app, /orderedPlaylistTracksForCover/, "普通歌单封面应读取手动排序后的歌曲列表");
-assert.match(app, /PLAYLIST_COVER_PATH_STORAGE_KEY[\s\S]*persistPlaylistCoverPaths/, "用户设置的歌单封面应独立持久化");
+const playlistPersistence = fs.readFileSync(path.join(root, "src/renderer/src/services/localPlaylistPersistence.ts"), "utf8");
+assert.match(playlistPersistence, /snapshot\.coverPaths !== undefined[\s\S]*key: PLAYLIST_COVER_PATH_STORAGE_KEY, value: snapshot\.coverPaths/, "用户设置的封面应保留独立存储键");
+assert.match(app, /async function choosePlaylistCover[\s\S]*saveLocalPlaylistSnapshot\(\{ playlists: next, tracks: localPlaylistTrackMap\.value, coverPaths: nextCoverPaths \}[\s\S]*playlistCoverPaths\.value = nextCoverPaths/, "本地歌单封面应在全部相关键保存成功后发布");
 assert.match(api, /export async function selectPlaylistCoverImage/, "渲染层应提供选择歌单封面的 API");
 assert.match(api, /document\.createElement\("input"\)[\s\S]*input\.type\s*=\s*"file"/, "非 Electron 环境应回退到图片文件选择器");
 assert.match(api, /return resolveStandaloneBackendResourceUrl\(path, previewBackendOrigin\(\)\)/, "封面地址应使用共享的本地与在线资源边界");
 const backendRoutes = fs.readFileSync(path.join(root, "src/shared/backendRoutes.ts"), "utf8");
-assert.match(backendRoutes, /\^\(\?:file:\|data:\|blob:\)/, "本地文件和内存封面地址应直接加载");
+assert.match(backendRoutes, /\^\(\?:file:\|data:\|blob:\|tiaolv-cover:\)/, "本地文件、内存与托管原图封面地址应直接加载");
 assert.match(main, /select-playlist-cover-image/, "主进程应提供图片文件选择 IPC");
 assert.match(preload, /selectCoverImage/, "预加载桥应暴露图片选择能力");
 assert.match(env, /selectCoverImage\(\): Promise<string \| null>/, "Window 类型应声明图片选择桥");

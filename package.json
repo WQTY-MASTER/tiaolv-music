@@ -17,6 +17,7 @@
     "verify:backend": "node scripts/verify.cjs backend",
     "verify:typecheck": "node scripts/verify.cjs typecheck",
     "verify:e2e": "node scripts/verify.cjs e2e",
+    "verify:e2e:isolated": "node scripts/verify.cjs e2e-isolated",
     "runtime:stage": "node scripts/stage-runtime.cjs",
     "runtime:smoke": "node scripts/runtime-smoke.cjs",
     "services": "node scripts/start-services.cjs",

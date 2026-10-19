@@ -4,7 +4,7 @@ import {
   AlertCircle, Check, Code2, Copy, Download, ExternalLink,
   FileArchive, Info, RefreshCw, Scale, ShieldCheck
 } from "lucide-vue-next";
-import { getDiagnosticContext } from "../services/diagnostics";
+import { getDiagnosticContext, reportRendererError } from "../services/diagnostics";
 import {
   formatDiagnosticReport,
   type AboutSnapshot,
@@ -152,11 +152,21 @@ async function exportDiagnostics() {
   diagnosticNotice.value = "";
   pageError.value = "";
   try {
-    const result = await window.listenMusic?.exportDiagnostics({ backend: backend.value, appearance: getDiagnosticContext() });
+    // Electron cannot clone Vue proxies; snapshot only the health fields we export.
+    const health = backend.value;
+    const result = await window.listenMusic?.exportDiagnostics({
+      backend: health ? {
+        ok: health.ok, backendVersion: health.backendVersion,
+        springBootVersion: health.springBootVersion, javaVersion: health.javaVersion,
+        database: { product: health.database.product, version: health.database.version }
+      } : null,
+      appearance: getDiagnosticContext()
+    });
     if (result?.status === "saved") diagnosticNotice.value = "诊断包已导出。";
     else if (result?.status === "cancelled") diagnosticNotice.value = "已取消导出。";
     else pageError.value = result?.message || "诊断包导出失败，请稍后重试。";
-  } catch {
+  } catch (error) {
+    reportRendererError(error, "diagnostics-export");
     pageError.value = "诊断包导出失败，请稍后重试。";
   } finally {
     exportingDiagnostics.value = false;

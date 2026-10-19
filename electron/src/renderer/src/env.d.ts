@@ -2,6 +2,7 @@ import type { ShortcutAction, ShortcutPatch, ShortcutSnapshot } from "../../shar
 import type { AboutSnapshot, BackendHealth, UpdateCheckResult } from "../../shared/about";
 import type { DiagnosticAppearance, DiagnosticExportResult, RendererDiagnostic } from "../../shared/diagnostics";
 import type { CloseBehavior, MainWindowCommand } from "../../shared/desktopIntegration";
+import type { PlaylistCoverReferences, PlaylistCoverStorageStatistics, PlaylistCoverCleanupResult } from "../../shared/playlistCoverStorage";
 import type { MiniPlayerPreferences } from "./services/appearanceSettings";
 import type { MiniPlayerAction, MiniPlayerSnapshot, MiniResizeEdge, MiniWindowCommand, MiniWindowSnapshot } from "../../shared/miniPlayer";
 import type {
@@ -60,7 +61,10 @@ interface ListenMusicBridge {
   selectCoverImage(): Promise<string | null>;
   readAppearanceBackground(imagePath: string): Promise<string>;
   readCoverDataUrl(coverUrl: string): Promise<string | null>;
+  resolvePlaylistCoverImage(imagePath: string): Promise<string | null>;
   getBackgroundCacheStatistics(): Promise<{ directory: string; bytes: number; entries: number }>;
+  getPlaylistCoverStorageStatistics(references: PlaylistCoverReferences): Promise<PlaylistCoverStorageStatistics>;
+  prunePlaylistCoverStorage(references: PlaylistCoverReferences): Promise<PlaylistCoverCleanupResult>;
   clearBackgroundCache(): Promise<{ directory: string; bytes: number; entries: number }>;
   getLegacyAggregatePlaylists(): Promise<unknown[]>;
   uploadCloudAudio(): Promise<unknown[]>;

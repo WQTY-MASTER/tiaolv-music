@@ -61,6 +61,7 @@ const emit = defineEmits<{
   (event: "open-playlist", playlist: LibraryPlaylist): void;
   (event: "create-playlist"): void;
   (event: "delete-playlist", playlist: LibraryPlaylist): void;
+  (event: "unsubscribe-playlist", playlist: LibraryPlaylist): void;
   (event: "login"): void;
 }>();
 
@@ -77,7 +78,12 @@ function deleteMenuPlaylist() {
   playlistMenu.value = null;
   if (playlist?.createdByAccount && playlist.deletable) emit('delete-playlist', playlist);
 }
-watch(() => props.provider, () => { playlistMenu.value = null; });
+function unsubscribeMenuPlaylist() {
+  const playlist = playlistMenu.value?.playlist;
+  playlistMenu.value = null;
+  if (playlist && !playlist.createdByAccount) emit('unsubscribe-playlist', playlist);
+}
+watch(() => `${props.provider}:${props.account?.userId || ''}`, () => { playlistMenu.value = null; playlistTab.value = 'all'; });
 const playlistTab = ref<PlaylistTab>("all");
 const playlistOrder = ref<string[]>([]);
 const draggedPlaylistId = ref<string | null>(null);
@@ -378,8 +384,9 @@ function requestCreatePlaylist() {
   <Teleport to="body">
     <div v-if="playlistMenu" class="playlist-context-backdrop" @click="playlistMenu = null" @contextmenu.prevent="playlistMenu = null" @keydown.esc="playlistMenu = null">
       <div ref="playlistMenuElement" class="playlist-context-menu" role="menu" tabindex="-1" :style="{ left: `${playlistMenu.x}px`, top: `${playlistMenu.y}px` }" @click.stop>
-        <button type="button" role="menuitem" :disabled="!playlistMenu.playlist.createdByAccount || !playlistMenu.playlist.deletable" @click="deleteMenuPlaylist">
-          {{ playlistMenu.playlist.deletable ? '删除歌单' : playlistMenu.playlist.createdByAccount ? '系统歌单不可删除' : '收藏歌单不可删除' }}
+        <button v-if="!playlistMenu.playlist.createdByAccount" type="button" role="menuitem" @click="unsubscribeMenuPlaylist">取消收藏</button>
+        <button v-else type="button" role="menuitem" :disabled="!playlistMenu.playlist.deletable" @click="deleteMenuPlaylist">
+          {{ playlistMenu.playlist.deletable ? '删除歌单' : '系统歌单不可删除' }}
         </button>
       </div>
     </div>

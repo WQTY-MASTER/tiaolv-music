@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
+import PlaylistBatchControls from "./PlaylistBatchControls.vue";
 import { resolveBackendUrl } from "../services/api";
 import {
+  aggregatePlaylistCoverUrl,
   mergeAggregateTracks,
   type AggregatePlaylist,
   type AggregateTrackGroup,
   type AggregateTrackSource
 } from "../services/aggregatePlaylists";
 import { reorderVisibleKeys } from "../services/playlistOrder";
+import type { TrackBatchResult } from "../services/streamingTrackManagement";
 
 const props = withDefaults(defineProps<{
   playlists: AggregatePlaylist[];
@@ -17,10 +20,11 @@ const props = withDefaults(defineProps<{
 });
 
 const emit = defineEmits<{
-  create: [name: string];
+  create: [name: string, complete: (error?: string) => void];
   play: [source: AggregateTrackSource];
   playList: [sources: AggregateTrackSource[], shuffle: boolean];
   removeGroup: [playlist: AggregatePlaylist, groupId: string, title: string];
+  removeGroups: [playlist: AggregatePlaylist, groupIds: string[], complete: (result: TrackBatchResult) => void];
   reorder: [playlist: AggregatePlaylist, orderedGroupIds: string[]];
   setCover: [playlist: AggregatePlaylist];
 }>();
@@ -35,6 +39,10 @@ const failedCoverUrls = ref(new Set<string>());
 const aggregateFolderFilter = ref("全部");
 const aggregateSourceFilter = ref("全部");
 const draggedGroupId = ref<string | null>(null);
+const batchSelecting = ref(false);
+const selectedGroupIds = ref<string[]>([]);
+const batchBusy = ref(false);
+const batchMessage = ref("");
 
 const selectedPlaylist = computed(() => (
   props.playlists.find((playlist) => playlist.id === selectedPlaylistId.value) ?? null
@@ -62,6 +70,52 @@ const filteredGroupedTracks = computed(() => groupedTracks.value.filter((group) 
     && (aggregateSourceFilter.value === "全部" || normalizedSource(source.source) === aggregateSourceFilter.value)
   ))
 )));
+const selectedVisibleGroups = computed(() => {
+  const selected = new Set(selectedGroupIds.value);
+  return filteredGroupedTracks.value.filter(group => selected.has(group.id));
+});
+const allVisibleSelected = computed(() => filteredGroupedTracks.value.length > 0
+  && selectedVisibleGroups.value.length === filteredGroupedTracks.value.length);
+watch(selectedPlaylistId, () => {
+  batchSelecting.value = false;
+  selectedGroupIds.value = [];
+  batchMessage.value = "";
+});
+watch(filteredGroupedTracks, groups => {
+  const visible = new Set(groups.map(group => group.id));
+  selectedGroupIds.value = selectedGroupIds.value.filter(id => visible.has(id));
+});
+
+function toggleBatch() {
+  if (batchBusy.value) return;
+  batchSelecting.value = !batchSelecting.value;
+  selectedGroupIds.value = [];
+  batchMessage.value = "";
+  finishGroupDrag();
+}
+
+function toggleGroup(groupId: string) {
+  if (batchBusy.value) return;
+  selectedGroupIds.value = selectedGroupIds.value.includes(groupId)
+    ? selectedGroupIds.value.filter(id => id !== groupId) : [...selectedGroupIds.value, groupId];
+}
+
+function removeSelectedGroups() {
+  const playlist = selectedPlaylist.value;
+  const ids = selectedVisibleGroups.value.map(group => group.id);
+  if (!playlist || !ids.length || batchBusy.value) return;
+  batchBusy.value = true;
+  emit("removeGroups", playlist, ids, result => {
+    batchBusy.value = false;
+    if (selectedPlaylistId.value !== playlist.id) return;
+    const succeeded = new Set(result.succeeded);
+    selectedGroupIds.value = selectedGroupIds.value.filter(id => !succeeded.has(id));
+    selectedSources.value = Object.fromEntries(Object.entries(selectedSources.value).filter(([id]) => !succeeded.has(id)));
+    batchMessage.value = result.message || (result.failed.length
+      ? `成功 ${result.succeeded.length} 首，失败 ${result.failed.length} 首，可重试。`
+      : `已移出 ${result.succeeded.length} 首歌曲及其全部音源。`);
+  });
+}
 
 watch(() => props.playlists, (playlists) => {
   if (selectedPlaylistId.value && !playlists.some((playlist) => playlist.id === selectedPlaylistId.value)) {
@@ -87,8 +141,10 @@ function createPlaylist() {
     playlistNameError.value = "歌单名称不能为空";
     return;
   }
-  emit("create", name);
-  closeCreateDialog();
+  emit("create", name, error => {
+    if (error) playlistNameError.value = error;
+    else closeCreateDialog();
+  });
 }
 
 function openPlaylist(playlist: AggregatePlaylist) {
@@ -143,6 +199,8 @@ function selectedSource(group: AggregateTrackGroup) {
 }
 
 function playGroup(group: AggregateTrackGroup) {
+  if (batchBusy.value) return;
+  if (batchSelecting.value) { toggleGroup(group.id); return; }
   const source = selectedSource(group);
   if (source) {
     emit("play", source);
@@ -157,6 +215,7 @@ function playAll(shuffle: boolean) {
 }
 
 function startGroupDrag(groupId: string) {
+  if (batchSelecting.value || batchBusy.value) return;
   draggedGroupId.value = groupId;
 }
 
@@ -183,7 +242,7 @@ function dropGroup(targetGroupId: string) {
 
 function removeGroup(group: AggregateTrackGroup) {
   const playlist = selectedPlaylist.value;
-  if (!playlist) {
+  if (!playlist || batchBusy.value) {
     return;
   }
   emit("removeGroup", playlist, group.id, group.title);
@@ -225,8 +284,7 @@ function resolvedCoverUrl(url: string | undefined) {
 }
 
 function aggregatePlaylistCover(playlist: AggregatePlaylist) {
-  const firstTrackCover = mergeAggregateTracks(playlist.tracks)[0]?.coverUrl;
-  return resolvedCoverUrl(playlist.coverUrl || firstTrackCover);
+  return resolvedCoverUrl(aggregatePlaylistCoverUrl(playlist));
 }
 
 function groupCover(group: AggregateTrackGroup) {
@@ -317,17 +375,22 @@ function formatDuration(duration: number) {
     <div v-if="groupedTracks.length" class="aggregate-filter-bar" aria-label="筛选聚合歌单歌曲">
       <label>
         <span>文件夹</span>
-        <select v-model="aggregateFolderFilter">
+        <select v-model="aggregateFolderFilter" aria-label="文件夹" :disabled="batchBusy">
           <option v-for="folder in aggregateFolderOptions" :key="folder" :value="folder">{{ folder }}</option>
         </select>
       </label>
       <label>
         <span>来源</span>
-        <select v-model="aggregateSourceFilter">
+        <select v-model="aggregateSourceFilter" aria-label="来源" :disabled="batchBusy">
           <option v-for="source in aggregateSourceOptions" :key="source" :value="source">{{ source === '全部' ? source : sourceFilterLabel(source) }}</option>
         </select>
       </label>
     </div>
+
+    <PlaylistBatchControls :enabled="batchSelecting" :count="selectedVisibleGroups.length" :total="filteredGroupedTracks.length"
+      :all-selected="allVisibleSelected" :busy="batchBusy" :message="batchMessage" :playlist-name="selectedPlaylist.name" aggregate
+      @toggle="toggleBatch" @select-all="selectedGroupIds = $event ? filteredGroupedTracks.map(group => group.id) : []"
+      @remove="removeSelectedGroups" />
 
     <div v-if="filteredGroupedTracks.length" class="aggregate-track-list">
       <div class="aggregate-track-head" aria-hidden="true">
@@ -341,19 +404,21 @@ function formatDuration(duration: number) {
         v-for="(group, index) in filteredGroupedTracks"
         :key="group.id"
         class="aggregate-track-row"
-        :class="{ 'is-dragging': draggedGroupId === group.id }"
+        :class="{ selected: batchSelecting && selectedGroupIds.includes(group.id), 'is-dragging': draggedGroupId === group.id }"
         role="button"
         tabindex="0"
-        draggable="true"
+        :draggable="!batchSelecting && !batchBusy"
         @click="playGroup(group)"
-        @keydown.enter="playGroup(group)"
-        @keydown.space.prevent="playGroup(group)"
+        @keydown.enter.self="playGroup(group)"
+        @keydown.space.self.prevent="playGroup(group)"
         @dragstart="startGroupDrag(group.id)"
         @dragover.prevent
         @drop.prevent.stop="dropGroup(group.id)"
         @dragend="finishGroupDrag"
       >
-        <span class="aggregate-track-index">{{ String(index + 1).padStart(2, "0") }}</span>
+        <span class="aggregate-track-index"><input v-if="batchSelecting" type="checkbox" :aria-label="`选择 ${group.title}`"
+          :checked="selectedGroupIds.includes(group.id)" :disabled="batchBusy" @click.stop @change="toggleGroup(group.id)" />
+          <template v-else>{{ String(index + 1).padStart(2, "0") }}</template></span>
         <div class="aggregate-track-copy">
           <img v-if="groupCover(group)" :src="groupCover(group)" :alt="`${group.title}封面`" @error="handleCoverError(groupCover(group))" />
           <span v-else class="aggregate-track-fallback" aria-hidden="true">{{ group.title.slice(0, 1) }}</span>
@@ -382,8 +447,10 @@ function formatDuration(duration: number) {
         </div>
         <span class="aggregate-track-duration">{{ formatDuration(group.duration) }}</span>
         <button
+          v-if="!batchSelecting"
           class="aggregate-remove-group"
           type="button"
+          :disabled="batchBusy"
           title="从聚合歌单移除（含这首歌的全部音源）"
           :aria-label="`从聚合歌单移除 ${group.title}，含这首歌的全部音源`"
           @click.stop="removeGroup(group)"
@@ -616,6 +683,9 @@ function formatDuration(duration: number) {
 .aggregate-track-head span:nth-child(4) { color: #66635f; }
 .aggregate-track-row { min-height: 66px; padding: 8px 14px; border-bottom: 1px solid #edf0f3; cursor: pointer; outline: none; transition: background 150ms ease, opacity 150ms ease; }
 .aggregate-track-row:hover,.aggregate-track-row:focus-visible { background: rgba(233, 239, 247, .62); }
+.aggregate-track-row.selected { background: #eaf0ff; }
+:global(.app-shell.theme-dark) .aggregate-track-row.selected { background: #2b3d56; }
+.aggregate-track-index input { width: 14px; height: 14px; accent-color: #315fbd; }
 .aggregate-track-row.is-dragging { opacity: .45; }
 .aggregate-track-index { color: #7b899e; font-size: 11px; }
 .aggregate-track-duration { color: #5f5d59; font-size: 13px; font-weight: 500; }

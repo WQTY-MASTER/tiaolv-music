@@ -67,8 +67,8 @@ const emit = defineEmits<{
   queueTrackPlay: [track: MiniQueueTrack];
   queueTrackLike: [track: MiniQueueTrack];
   queueTrackRemove: [queueKey: string];
-  queueTrackAddPlaylist: [track: MiniQueueTrack, playlistId: string];
-  queueTrackCreatePlaylist: [track: MiniQueueTrack, name: string];
+  queueTrackAddPlaylist: [track: MiniQueueTrack, playlistId: string, complete: (error?: string) => void];
+  queueTrackCreatePlaylist: [track: MiniQueueTrack, name: string, complete: (error?: string) => void];
   queueTrackCopy: [track: MiniQueueTrack];
   close: [];
   customize: [];
@@ -90,6 +90,8 @@ const position = ref({ x: EDGE_GAP, y: EDGE_GAP });
 const activeMenuKey = ref<string | null>(null);
 const playlistPickerKey = ref<string | null>(null);
 const newPlaylistName = ref("");
+const playlistMutationPending = ref(false);
+const playlistMutationError = ref("");
 const actionNotice = ref("");
 const queueScrolling = ref(false);
 const volumeOpen = ref(false);
@@ -218,6 +220,7 @@ function closeMenus() {
   activeMenuKey.value = null;
   playlistPickerKey.value = null;
   newPlaylistName.value = "";
+  playlistMutationError.value = "";
   volumeOpen.value = false;
 }
 
@@ -233,17 +236,34 @@ function openPlaylistPicker(track: MiniQueueTrack, index: number) {
 }
 
 function addToPlaylist(track: MiniQueueTrack, playlistId: string) {
-  emit("queueTrackAddPlaylist", track, playlistId);
-  showNotice("已加入歌单");
-  closeMenus();
+  if (playlistMutationPending.value) return;
+  playlistMutationError.value = "";
+  actionNotice.value = "";
+  playlistMutationPending.value = true;
+  emit("queueTrackAddPlaylist", track, playlistId, error => {
+    playlistMutationPending.value = false;
+    if (error) playlistMutationError.value = error;
+    else {
+      showNotice("已加入歌单");
+      closeMenus();
+    }
+  });
 }
 
 function createPlaylist(track: MiniQueueTrack) {
   const name = newPlaylistName.value.trim();
-  if (!name) return;
-  emit("queueTrackCreatePlaylist", track, name);
-  showNotice(`已新建「${name}」并加入歌曲`);
-  closeMenus();
+  if (!name || playlistMutationPending.value) return;
+  playlistMutationError.value = "";
+  actionNotice.value = "";
+  playlistMutationPending.value = true;
+  emit("queueTrackCreatePlaylist", track, name, error => {
+    playlistMutationPending.value = false;
+    if (error) playlistMutationError.value = error;
+    else {
+      showNotice(`已新建「${name}」并加入歌曲`);
+      closeMenus();
+    }
+  });
 }
 
 function removeTrack(track: MiniQueueTrack, index: number) {
@@ -441,7 +461,7 @@ onBeforeUnmount(() => {
               </button>
             </div>
 
-            <div v-if="activeMenuKey === queueTrackKey(track, index)" class="mini-queue-more-menu" @click.stop>
+            <div v-if="activeMenuKey === queueTrackKey(track, index)" class="mini-queue-more-menu" :class="{ 'is-playlist-picker': playlistPickerKey === queueTrackKey(track, index) }" @click.stop>
               <template v-if="playlistPickerKey !== queueTrackKey(track, index)">
                 <button type="button" @click="removeTrack(track, index)">从播放列表移除</button>
                 <button type="button" @click="openPlaylistPicker(track, index)">添加到歌单</button>
@@ -453,20 +473,22 @@ onBeforeUnmount(() => {
                   <strong>添加到歌单</strong>
                 </div>
                 <div class="mini-playlist-targets">
-                  <button v-for="playlist in props.playlists" :key="playlist.id" type="button" @click="addToPlaylist(track, playlist.id)">
+                  <button v-for="playlist in props.playlists" :key="playlist.id" type="button" :disabled="playlistMutationPending" @click="addToPlaylist(track, playlist.id)">
                     <span>{{ playlist.title }}</span><small>{{ playlist.count }} 首</small>
                   </button>
                 </div>
                 <form class="mini-playlist-create" @submit.prevent="createPlaylist(track)">
-                  <input v-model="newPlaylistName" type="text" maxlength="40" placeholder="新歌单名称" aria-label="新歌单名称" />
-                  <button type="submit" :disabled="!newPlaylistName.trim()">新建歌单</button>
+                  <input v-model="newPlaylistName" type="text" maxlength="40" placeholder="新歌单名称" aria-label="新歌单名称" :disabled="playlistMutationPending" />
+                  <button type="submit" :disabled="!newPlaylistName.trim() || playlistMutationPending">新建歌单</button>
                 </form>
+                <p v-if="playlistMutationError" class="mini-playlist-error" role="status">{{ playlistMutationError }}</p>
               </template>
             </div>
           </article>
         </div>
         <div v-else class="mini-queue-empty">播放列表是空的</div>
-        <p v-if="actionNotice" class="mini-action-notice" role="status">{{ actionNotice }}</p>
+        <p v-if="playlistMutationError && !props.queue.some((track, index) => queueTrackKey(track, index) === activeMenuKey)" class="mini-action-notice" role="status">{{ playlistMutationError }}</p>
+        <p v-else-if="actionNotice" class="mini-action-notice" role="status">{{ actionNotice }}</p>
       </section>
     </Transition>
   </aside>
@@ -576,18 +598,21 @@ onBeforeUnmount(() => {
 .mini-queue-like { color: #252b2d; }
 .mini-queue-like.liked { color: #ff6674; }
 .mini-queue-like:hover { color: #ff6674; }
+.mini-queue-track:has(.mini-queue-more-menu.is-playlist-picker) { position: static; }
 .mini-queue-more-menu { position: absolute; top: 40px; right: 7px; z-index: 8; display: grid; width: 168px; overflow: hidden; border: 1px solid #e1e6e4; border-radius: 10px; padding: 5px; background: #fff; box-shadow: 0 13px 30px rgba(35,47,50,.18); }
+.mini-queue-more-menu.is-playlist-picker { top: 6px; display: flex; flex-direction: column; width: min(260px,calc(100% - 14px)); max-height: calc(100% - 12px); border-radius: 8px; }
 .mini-queue-more-menu>button { border: 0; border-radius: 7px; padding: 8px 9px; background: transparent; color: #30393d; cursor: pointer; font-size: 11px; text-align: left; }
 .mini-queue-more-menu>button:hover { background: #f0f5f2; color: #16895d; }
-.mini-playlist-picker-title { display: grid; grid-template-columns: 25px 1fr 25px; align-items: center; padding: 2px 2px 5px; }
+.mini-playlist-picker-title { display: grid; flex: 0 0 auto; grid-template-columns: 25px 1fr 25px; align-items: center; padding: 2px 2px 5px; }
 .mini-playlist-picker-title button { display: grid; width: 25px; height: 25px; place-items: center; border: 0; border-radius: 6px; background: transparent; color: #697478; cursor: pointer; font-size: 20px; }
 .mini-playlist-picker-title strong { font-size: 11px; text-align: center; }
-.mini-playlist-targets { display: grid; max-height: 122px; gap: 2px; overflow-y: auto; }
+.mini-playlist-targets { display: grid; flex: 1 1 auto; min-height: 0; max-height: 122px; gap: 2px; overflow-y: auto; }
 .mini-playlist-targets button { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 0; border-radius: 7px; padding: 7px 8px; background: transparent; color: #30393d; cursor: pointer; text-align: left; }
 .mini-playlist-targets button:hover { background: #f0f5f2; color: #16895d; }
 .mini-playlist-targets span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .mini-playlist-targets small { flex: 0 0 auto; color: #98a19f; font-size: 9px; }
-.mini-playlist-create { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 5px; margin-top: 5px; border-top: 1px solid #edf0ef; padding-top: 6px; }
+.mini-playlist-create { display: grid; flex: 0 0 auto; grid-template-columns: minmax(0,1fr) auto; gap: 5px; margin-top: 5px; border-top: 1px solid #edf0ef; padding-top: 6px; }
+.mini-playlist-error { flex: 0 0 auto; max-height: 48px; overflow-y: auto; margin: 6px 0 0; color: #a02d43; font-size: 11px; line-height: 16px; overflow-wrap: anywhere; }
 .mini-playlist-create input { width: 100%; min-width: 0; height: 28px; border: 1px solid #dce3e1; border-radius: 7px; padding: 0 7px; color: #263033; font-size: 10px; outline: none; }
 .mini-playlist-create input:focus { border-color: #54b68c; }
 .mini-playlist-create button { border: 0; border-radius: 7px; padding: 0 8px; background: #1b9b6a; color: #fff; cursor: pointer; font-size: 10px; }

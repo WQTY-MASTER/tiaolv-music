@@ -1,5 +1,7 @@
 import { createPageDataCache } from "./pageDataCache";
 import { reportRequestFailure } from "./diagnostics";
+import { requestJson, REQUEST_TIMEOUT_MS } from "../../../shared/requestLifecycle";
+export { ApiRequestError } from "../../../shared/requestLifecycle";
 import type { QqRecentPlayReportPayload } from "./qqListeningSession";
 import {
   LOCAL_BACKEND_ORIGIN,
@@ -308,18 +310,7 @@ export interface ListeningStatsSummaryPayload {
   rangeListenedSeconds: number;
 }
 
-export class ApiRequestError extends Error {
-  public readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiRequestError";
-    this.status = status;
-  }
-}
-
 const jsonHeaders = { "Content-Type": "application/json" };
-const REQUEST_TIMEOUT_MS = 12_000;
 const pageDataCache = createPageDataCache({ ttlMs: 300_000, maxEntries: 100 });
 const pageDataCacheAccountScopes = new Map<string, string>();
 
@@ -412,49 +403,10 @@ export function resolveBackendUrl(path: string | null | undefined) {
   return resolveStandaloneBackendResourceUrl(path, previewBackendOrigin());
 }
 
-async function performRequest<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
-  const started = performance.now();
-  const controller = new AbortController();
-  let timedOut = false;
-  const abortFromCaller = () => controller.abort();
-  if (init?.signal?.aborted) {
-    controller.abort();
-  } else {
-    init?.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  }
-  const timeoutId = globalThis.setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, timeoutMs);
-  let response: Response;
-  try {
-    response = await fetch(backendRequestUrl(path), { ...init, signal: controller.signal });
-  } catch (error) {
-    if (timedOut || !init?.signal?.aborted) reportRequestFailure(path, (init?.method || "GET").toUpperCase(), 0,
-      performance.now() - started, timedOut ? "Request timed out" : error instanceof Error ? error.message : "Network request failed");
-    if (timedOut) {
-      throw new Error("请求超时，请稍后重试。");
-    }
-    throw error;
-  } finally {
-    globalThis.clearTimeout(timeoutId);
-    init?.signal?.removeEventListener("abort", abortFromCaller);
-  }
-  if (!response.ok) {
-    let message = "";
-    try {
-      const detail = await response.json() as { message?: unknown; code?: unknown };
-      message = typeof detail.message === "string"
-        ? detail.message
-        : typeof detail.code === "string" ? detail.code : "";
-    } catch {
-      // Keep the HTTP status when the server did not return JSON.
-    }
-    const error = new ApiRequestError(message || `Request failed: ${response.status}`, response.status);
-    reportRequestFailure(path, (init?.method || "GET").toUpperCase(), response.status, performance.now() - started, error.message);
-    throw error;
-  }
-  return response.json() as Promise<T>;
+function performRequest<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS, emptyStatuses?: readonly number[]): Promise<T> {
+  return requestJson<T>(backendRequestUrl(path), init, { timeoutMs, emptyStatuses,
+    onFailure: failure => reportRequestFailure(path, (init?.method || "GET").toUpperCase(),
+      failure.status, failure.elapsedMs, failure.message) });
 }
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
@@ -656,8 +608,8 @@ export function reportListeningScrobble(provider: string, payload: ListeningScro
   });
 }
 
-export function loadAccountPlaylists(provider = "netease") {
-  return request<AccountPlaylistView[]>(`/account/${encodeURIComponent(provider)}/playlists`);
+export function loadAccountPlaylists(provider = "netease", refresh = false) {
+  return request<AccountPlaylistView[]>(`/account/${encodeURIComponent(provider)}/playlists${refresh ? "?refresh=true" : ""}`);
 }
 
 export function deleteAccountPlaylist(id: string, provider: string) {
@@ -668,10 +620,18 @@ export function removeAccountPlaylistTrack(id: string, trackId: string, provider
   return request<{ ok: boolean }>(`/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}/tracks/${encodeURIComponent(trackId)}`, { method: "DELETE" });
 }
 
-export function addAccountPlaylistTracks(id: string, trackIds: string[], provider: string) {
+export function removeAccountPlaylistTracks(id: string, trackIds: string[], provider: string, expectedAccountId: string) {
+  return request<{ succeeded: string[]; failed: string[]; errors: Record<string, string> }>(
+    `/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}/tracks/remove-batch`, {
+      method: "POST", headers: jsonHeaders, body: JSON.stringify({ trackIds, expectedAccountId })
+    }, provider === "qq" ? 240_000 : 120_000
+  );
+}
+
+export function addAccountPlaylistTracks(id: string, trackIds: string[], provider: string, expectedAccountId?: string) {
   return request<{ ok: boolean }>(`/account/${encodeURIComponent(provider)}/playlists/${encodeURIComponent(id)}/tracks`, {
-    method: "POST", headers: jsonHeaders, body: JSON.stringify({ trackIds })
-  });
+    method: "POST", headers: jsonHeaders, body: JSON.stringify({ trackIds, expectedAccountId })
+  }, 120_000);
 }
 
 export function reorderAccountPlaylistTracks(id: string, trackIds: string[], previousTrackIds: string[], provider: string) {
@@ -1040,15 +1000,15 @@ export async function selectPlaylistCoverImage() {
   return selectPlaylistCoverImageFromBrowser();
 }
 
+export async function storePlaylistCoverImage(imagePath: string) {
+  if (!window.listenMusic || /^(data:|blob:|https?:)/i.test(imagePath)) return imagePath;
+  const stored = await window.listenMusic.resolvePlaylistCoverImage(imagePath);
+  if (!stored) throw new Error("封面保存失败，请重新选择图片。");
+  return stored;
+}
+
 export async function loadCurrentAccount(): Promise<AccountView | null> {
-  const response = await fetch(backendRequestUrl("/auth/current"));
-  if (response.status === 204 || response.status === 404) {
-    return null;
-  }
-  if (!response.ok) {
-    throw new Error(`Request failed: ${response.status}`);
-  }
-  return response.json() as Promise<AccountView>;
+  return performRequest<AccountView | null>("/auth/current", undefined, REQUEST_TIMEOUT_MS, [204, 404]);
 }
 
 export function loadCurrentAccounts() {

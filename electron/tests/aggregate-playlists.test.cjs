@@ -6,8 +6,10 @@ async function main() {
   const moduleUrl = pathToFileURL(path.resolve(__dirname, "../src/renderer/src/services/aggregatePlaylists.ts")).href;
   const {
     AGGREGATE_PLAYLIST_STORAGE_KEY,
+    aggregatePlaylistCoverUrl,
     LEGACY_AGGREGATE_PLAYLIST_STORAGE_KEY,
     addTrackToAggregatePlaylist,
+    addTracksToAggregatePlaylist,
     mergeAggregatePlaylistCollections,
     mergeAggregateTracks,
     readAggregatePlaylists,
@@ -72,12 +74,24 @@ async function main() {
   );
 
   const groups = mergeAggregateTracks(playlist.tracks);
+  assert.equal(aggregatePlaylistCoverUrl(playlist), local.coverUrl, "自动封面使用首个合并曲目的封面");
+  const fixedCoverPlaylist = { ...playlist, coverUrl: "https://example.test/original.png?quality=original" };
+  assert.equal(aggregatePlaylistCoverUrl(fixedCoverPlaylist), fixedCoverPlaylist.coverUrl, "自定义封面优先且保留原图参数");
+  assert.equal(aggregatePlaylistCoverUrl({ ...fixedCoverPlaylist, tracks: [] }), fixedCoverPlaylist.coverUrl, "移出全部歌曲后自定义封面不变");
+  assert.equal(aggregatePlaylistCoverUrl({ ...fixedCoverPlaylist, tracks: [other, local] }), fixedCoverPlaylist.coverUrl, "排序不会更改自定义封面");
   assert.equal(groups.length, 2, "歌名和歌手一致时应合并为一行");
   assert.equal(groups[0].sources.length, 2, "合并行应保留本地和网易云两个音源");
   assert.equal(groups[0].coverUrl, local.coverUrl, "合并行应使用第一个可用歌曲封面");
 
   const duplicate = addTrackToAggregatePlaylist(playlist, { ...local });
   assert.equal(duplicate.added, false, "同平台同曲目不应重复加入");
+
+  assert.equal(typeof addTracksToAggregatePlaylist, "function", "批量加入应处理全部音源");
+  const batch = addTracksToAggregatePlaylist(playlist, [local, { ...other, id: 'new-1' }, { ...other, id: 'new-2' }]);
+  assert.equal(batch.added, 2);
+  assert.equal(batch.skipped, 1);
+  assert.equal(batch.playlist.tracks.length, 5);
+  assert.equal(playlist.tracks.length, 3, "批量加入不应修改原对象");
 
   const addedNewTrack = addTrackToAggregatePlaylist(playlist, {
     ...other,

@@ -6,20 +6,26 @@ const { spawnSync } = require('node:child_process');
 const ROOT = path.resolve(__dirname, '..');
 const ELECTRON = path.join(ROOT, 'electron');
 const E2E_FILES = ['qq-playlist-recommendations.smoke.cjs', 'lyrics-qrc.smoke.cjs', 'lyrics-layout.smoke.cjs', 'qq-recent-report.smoke.cjs'];
+const ISOLATED_E2E_FILES = ['account-playlist-actions.smoke.cjs', 'account-playlist-batches.smoke.cjs', 'playlist-batch-removal.smoke.cjs', 'playlist-persistence.smoke.cjs'];
 
 function discoverFrontendTests(packageJson) {
   const found = new Map();
   for (const [name, command] of Object.entries(packageJson.scripts || {})) {
-    if ((name !== 'test' && !name.startsWith('test:')) || name === 'test:e2e') continue;
+    if ((name !== 'test' && !name.startsWith('test:')) || /^test:e2e(?:$|:)/.test(name)) continue;
     for (const segment of command.split(/\s*&&\s*/)) {
       const tokens = segment.trim().split(/\s+/);
-      const file = tokens.at(-1);
-      if (tokens[0] !== 'node' || !/^tests\/[\w./-]+\.test\.cjs$/.test(file)
-        || tokens.slice(1, -1).some(flag => !['--test', '--experimental-transform-types'].includes(flag))) {
+      let firstFile = 1;
+      while (['--test', '--experimental-transform-types'].includes(tokens[firstFile])) firstFile++;
+      const files = tokens.slice(firstFile);
+      if (tokens[0] !== 'node' || !files.length || files.some(file =>
+        !/^tests\/(?:[\w.-]+\/)*[\w.-]+\.test\.cjs$/.test(file)
+        || file.split('/').some(segment => segment === '.' || segment === '..'))) {
         throw new Error(`Unsupported frontend test command in ${name}: ${segment}`);
       }
-      const flags = [...new Set([...(found.get(file)?.flags || []), ...tokens.slice(1, -1)])];
-      found.set(file, { file, flags });
+      for (const file of files) {
+        const flags = [...new Set([...(found.get(file)?.flags || []), ...tokens.slice(1, firstFile)])];
+        found.set(file, { file, flags });
+      }
     }
   }
   if (!found.size) throw new Error('No frontend tests configured');
@@ -87,11 +93,26 @@ function previewUrl(value = 'http://127.0.0.1:5173') {
   return url;
 }
 
-async function e2e() {
+function playwrightModule() {
   const localRequire = createRequire(path.join(ELECTRON, 'package.json'));
   let modulePath;
   try { modulePath = localRequire.resolve(process.env.PLAYWRIGHT_MODULE || 'playwright'); }
   catch { throw new Error('Playwright is required: install it or set PLAYWRIGHT_MODULE to its absolute module path'); }
+  return modulePath;
+}
+
+function isolatedE2e() {
+  const modulePath = playwrightModule();
+  const commands = ISOLATED_E2E_FILES.map(name => ({ file: `tests/${name}` }));
+  validateTestFiles(commands, ELECTRON);
+  for (const command of commands) {
+    console.log(`\n[e2e-isolated] ${command.file}`);
+    execute(process.execPath, [command.file], ELECTRON, { ...process.env, PLAYWRIGHT_MODULE: modulePath });
+  }
+}
+
+async function e2e() {
+  const modulePath = playwrightModule();
   const url = previewUrl(process.env.LYRICS_TEST_URL);
   let response;
   try { response = await fetch(url, { signal: AbortSignal.timeout(5000) }); }
@@ -108,12 +129,12 @@ async function e2e() {
 }
 
 async function main(mode = process.argv[2] || 'frontend') {
-  const modes = { frontend, typecheck, backend, e2e, offline: async () => { frontend(); typecheck(); backend(); },
+  const modes = { frontend, typecheck, backend, e2e, 'e2e-isolated': isolatedE2e, offline: async () => { frontend(); typecheck(); backend(); },
     all: async () => { frontend(); typecheck(); backend(); await e2e(); } };
-  if (!modes[mode]) throw new Error('Usage: node scripts/verify.cjs frontend|typecheck|backend|e2e|offline|all');
+  if (!modes[mode]) throw new Error('Usage: node scripts/verify.cjs frontend|typecheck|backend|e2e|e2e-isolated|offline|all');
   await modes[mode]();
   console.log(`\nVerification passed: ${mode}`);
 }
 
-module.exports = { discoverFrontendTests, validateTestFiles, E2E_FILES, previewUrl, main };
+module.exports = { discoverFrontendTests, validateTestFiles, E2E_FILES, ISOLATED_E2E_FILES, previewUrl, main };
 if (require.main === module) main().catch(error => { console.error(error.message); process.exitCode = 1; });

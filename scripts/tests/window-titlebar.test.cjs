@@ -155,7 +155,11 @@ function preloadBridge(mode = '') {
           removeListener: (name, handler) => { if (listeners.get(name) === handler) listeners.delete(name); }
         }
       };
-      if (name === '../shared/backendRoutes') return { standaloneBackendRequestUrl: value => value };
+      if (name.startsWith('../shared/')) {
+        const exports = {};
+        run(fs.readFileSync(path.join(root, `src/shared/${path.basename(name)}.ts`), 'utf8'), { exports, URL });
+        return exports;
+      }
       throw new Error(`Unexpected preload dependency: ${name}`);
     }
   });
